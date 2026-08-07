@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.0.1",
+	"FriendlyName": "DreamFX",
+	"Description": "Author Unreal Niagara effects with DreamFXLang .dfs/.dfe/.dfm source files that auto-generate standard UNiagaraSystem, UNiagaraEmitter and UNiagaraScript assets.",
+	"Category": "DreamPlugin",
+	"CreatedBy": "TypeDreamMoon",
+	"CreatedByURL": "https://github.com/TypeDreamMoon",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/TypeDreamMoon",
+	"Copyright": "Copyright (c) 2026 TypeDreamMoon. All rights reserved.",
+	"EnabledByDefault": false,
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": true,
+	"Installed": false,
+	"Modules": [],
+	"Plugins": [
+		{
+			"Name": "Niagara",
+			"Enabled": true
+		}
+	]
+}
