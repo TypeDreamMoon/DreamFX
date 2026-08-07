@@ -30,6 +30,12 @@ namespace UE::DreamFX::Editor
 		static FString DescribeType(const FNiagaraTypeDefinition& Type);
 
 		/**
+		 * The DSL spelling of a type -- the inverse of ResolveDeclaredType, for the decompiler.
+		 * "NiagaraFloat" is what the engine calls it; "float" is what an author writes.
+		 */
+		static FString DescribeDeclaredType(const FNiagaraTypeDefinition& Type);
+
+		/**
 		 * Resolves a `Properties = {}` / `Inputs = {}` type name to a Niagara type.
 		 * `DI<X>` and `Texture2D` resolve to data interface types; bOutIsDataInterface reports that,
 		 * because those can only be declared in v1, not given a value (plan 3.5).

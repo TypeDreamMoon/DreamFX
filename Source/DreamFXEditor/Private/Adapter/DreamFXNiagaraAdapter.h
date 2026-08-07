@@ -94,6 +94,13 @@ namespace UE::DreamFX::Editor
 
 		bool IsSet() const { return Mode != EInputValueMode::Unset; }
 
+		/**
+		 * Value equality, used by the decompiler to decide whether an input is worth printing.
+		 * R8: the API reports resolved values with no "was this explicitly set" flag, so comparing
+		 * against a pristine baseline is the only way to keep an export readable.
+		 */
+		bool Equals(const FInputValue& Other) const;
+
 		static FInputValue MakeLiteral(const UScriptStruct* Struct, const void* SourceMemory);
 		static FInputValue MakeEnum(UEnum* Enum, FName EntryName);
 		static FInputValue MakeLinked(const FNiagaraVariableBase& Variable);
@@ -299,6 +306,10 @@ namespace UE::DreamFX::Editor
 
 		/** Every attribute binding a renderer class exposes, in DSL spelling. For error messages. */
 		static void ListRendererBindings(const UClass* RendererClass, TArray<FString>& OutNames);
+
+		/** Reads a renderer's current bindings as {DSL name, bound parameter}. For the decompiler. */
+		static bool GetRendererBindings(const FStackAddress& RendererAddress,
+			TArray<TPair<FString, FName>>& OutBindings, TArray<FString>& OutErrors);
 		static bool SetEmitterProperties(const FStackAddress& EmitterAddress, const FString& PropertiesJson,
 			TArray<FString>& OutErrors);
 		static bool SetSystemProperties(UNiagaraSystem* System, const FString& PropertiesJson,
@@ -315,9 +326,15 @@ namespace UE::DreamFX::Editor
 		static bool GetModuleInputValues(const FStackAddress& ModuleAddress,
 			TArray<TTuple<FName, FInputValue>>& OutValues, TArray<FString>& OutErrors);
 
-		/** One level of a dynamic-input chain: the asset plus its own inputs, recursively addressable. */
-		static bool GetDynamicInputChildNames(const FStackAddress& InputAddress,
-			TArray<FName>& OutChildNames, TArray<FString>& OutErrors);
+		/**
+		 * One level of a dynamic-input chain: each direct input's name and whether it can be written.
+		 *
+		 * Editability matters to the decompiler as much as to the generator. An input whose
+		 * EditCondition is false is refused by SetStackInputData, so exporting it produces a file that
+		 * does not rebuild.
+		 */
+		static bool GetDynamicInputChildren(const FStackAddress& InputAddress,
+			TArray<TPair<FName, bool>>& OutChildren, TArray<FString>& OutErrors);
 
 		// --- schema --------------------------------------------------------------------------
 

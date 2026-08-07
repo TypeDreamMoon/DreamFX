@@ -229,6 +229,43 @@ namespace UE::DreamFX::Editor
 		return Accept(Matching[0]);
 	}
 
+	FString FModuleLibrary::GetUnambiguousName(UNiagaraScript* Script, bool bDynamicInput)
+	{
+		if (Script == nullptr)
+		{
+			return FString();
+		}
+
+		const FString PackageName = Script->GetOutermost()->GetName();
+
+		TArray<FString> Segments;
+		PackageName.ParseIntoArray(Segments, TEXT("/"), /*InCullEmpty=*/true);
+		if (Segments.Num() == 0)
+		{
+			return PackageName;
+		}
+
+		// Grow the candidate one leading segment at a time: "Name", then "Folder/Name", and so on.
+		for (int32 Take = 1; Take < Segments.Num(); ++Take)
+		{
+			TArray<FString> Tail;
+			for (int32 Index = Segments.Num() - Take; Index < Segments.Num(); ++Index)
+			{
+				Tail.Add(Segments[Index]);
+			}
+
+			const FString Candidate = FString::Join(Tail, TEXT("/"));
+			FString Error;
+			const UNiagaraScript* Resolved = bDynamicInput ? FindDynamicInput(Candidate, Error) : FindModule(Candidate, Error);
+			if (Resolved == Script)
+			{
+				return Candidate;
+			}
+		}
+
+		return PackageName;
+	}
+
 	void FModuleLibrary::ListAvailable(bool bDynamicInput, TArray<FString>& OutEntries)
 	{
 		BuildIndex();
@@ -391,6 +428,182 @@ namespace UE::DreamFX::Editor
 		}
 
 		return &StackSchemaCache.Add(Key, MoveTemp(Schema));
+	}
+
+	const TMap<FName, FInputValue>* FModuleLibrary::GetStackDefaults(UNiagaraScript* Module, EStackKind Stack, FString& OutError)
+	{
+		if (Module == nullptr)
+		{
+			OutError = TEXT("Cannot read the defaults of a null module.");
+			return nullptr;
+		}
+
+		const TPair<TWeakObjectPtr<const UNiagaraScript>, EStackKind> Key(Module, Stack);
+		if (const TMap<FName, FInputValue>* Cached = StackDefaultsCache.Find(Key))
+		{
+			return Cached;
+		}
+
+		if (!EnsureProbeSystem(OutError))
+		{
+			return nullptr;
+		}
+
+		FStackAddress Address(ProbeSystem);
+		if (!IsSystemScopeStack(Stack))
+		{
+			Address = Address.WithEmitter(TEXT("Probe"));
+		}
+		Address = Address.WithScript(FNiagaraAdapter::ScriptNameForStack(Stack));
+
+		TArray<FString> Errors;
+		FName AddedName;
+		if (!FNiagaraAdapter::AddModule(Address, Module, AddedName, Errors))
+		{
+			OutError = FString::Printf(TEXT("Could not probe module '%s' for defaults: %s"),
+				*Module->GetName(), *FString::Join(Errors, TEXT(" | ")));
+			return nullptr;
+		}
+
+		const FStackAddress ModuleAddress = Address.WithModule(AddedName);
+
+		TArray<TTuple<FName, FInputValue>> Values;
+		Errors.Reset();
+		const bool bRead = FNiagaraAdapter::GetModuleInputValues(ModuleAddress, Values, Errors);
+
+		TMap<FName, FInputValue> Defaults;
+		for (TTuple<FName, FInputValue>& Entry : Values)
+		{
+			Defaults.Add(Entry.Get<0>(), MoveTemp(Entry.Get<1>()));
+		}
+
+		Errors.Reset();
+		FNiagaraAdapter::RemoveModule(ModuleAddress, Errors);
+
+		if (!bRead)
+		{
+			OutError = FString::Printf(TEXT("Could not read default values for '%s'."), *Module->GetName());
+			return nullptr;
+		}
+
+		return &StackDefaultsCache.Add(Key, MoveTemp(Defaults));
+	}
+
+	const FString* FModuleLibrary::GetRendererDefaults(UClass* RendererClass, FString& OutError)
+	{
+		if (RendererClass == nullptr)
+		{
+			OutError = TEXT("Cannot read the defaults of a null renderer class.");
+			return nullptr;
+		}
+
+		if (const FString* Cached = RendererDefaultsCache.Find(RendererClass))
+		{
+			return Cached;
+		}
+
+		if (!EnsureProbeSystem(OutError))
+		{
+			return nullptr;
+		}
+
+		const FStackAddress EmitterAddress = FStackAddress(ProbeSystem).WithEmitter(TEXT("Probe"));
+
+		TArray<FString> Errors;
+		int32 Index = INDEX_NONE;
+		if (!FNiagaraAdapter::AddRenderer(EmitterAddress, RendererClass, Index, Errors))
+		{
+			OutError = FString::Printf(TEXT("Could not probe renderer '%s': %s"),
+				*RendererClass->GetName(), *FString::Join(Errors, TEXT(" | ")));
+			return nullptr;
+		}
+
+		FString Json;
+		Errors.Reset();
+		const bool bRead = FNiagaraAdapter::GetRendererProperties(EmitterAddress.WithRenderer(Index), Json, Errors);
+
+		Errors.Reset();
+		FNiagaraAdapter::RemoveRenderer(EmitterAddress.WithRenderer(Index), Errors);
+
+		if (!bRead)
+		{
+			OutError = FString::Printf(TEXT("Could not read default properties for '%s'."), *RendererClass->GetName());
+			return nullptr;
+		}
+
+		return &RendererDefaultsCache.Add(RendererClass, MoveTemp(Json));
+	}
+
+	bool FModuleLibrary::GetRendererBindingDefaults(UClass* RendererClass,
+		TArray<TPair<FString, FName>>& OutBindings, FString& OutError)
+	{
+		if (RendererClass == nullptr)
+		{
+			OutError = TEXT("Cannot read the bindings of a null renderer class.");
+			return false;
+		}
+
+		if (const TArray<TPair<FString, FName>>* Cached = RendererBindingDefaultsCache.Find(RendererClass))
+		{
+			OutBindings = *Cached;
+			return true;
+		}
+
+		if (!EnsureProbeSystem(OutError))
+		{
+			return false;
+		}
+
+		const FStackAddress EmitterAddress = FStackAddress(ProbeSystem).WithEmitter(TEXT("Probe"));
+
+		TArray<FString> Errors;
+		int32 Index = INDEX_NONE;
+		if (!FNiagaraAdapter::AddRenderer(EmitterAddress, RendererClass, Index, Errors))
+		{
+			OutError = FString::Join(Errors, TEXT(" | "));
+			return false;
+		}
+
+		TArray<TPair<FString, FName>> Bindings;
+		Errors.Reset();
+		const bool bRead = FNiagaraAdapter::GetRendererBindings(EmitterAddress.WithRenderer(Index), Bindings, Errors);
+
+		Errors.Reset();
+		FNiagaraAdapter::RemoveRenderer(EmitterAddress.WithRenderer(Index), Errors);
+
+		if (!bRead)
+		{
+			OutError = TEXT("Could not read default bindings.");
+			return false;
+		}
+
+		OutBindings = Bindings;
+		RendererBindingDefaultsCache.Add(RendererClass, MoveTemp(Bindings));
+		return true;
+	}
+
+	const FString* FModuleLibrary::GetEmitterDefaults(FString& OutError)
+	{
+		if (EmitterDefaults.IsSet())
+		{
+			return &EmitterDefaults.GetValue();
+		}
+
+		if (!EnsureProbeSystem(OutError))
+		{
+			return nullptr;
+		}
+
+		FString Json;
+		TArray<FString> Errors;
+		if (!FNiagaraAdapter::GetEmitterProperties(FStackAddress(ProbeSystem).WithEmitter(TEXT("Probe")), Json, Errors))
+		{
+			OutError = FString::Join(Errors, TEXT(" | "));
+			return nullptr;
+		}
+
+		EmitterDefaults = MoveTemp(Json);
+		return &EmitterDefaults.GetValue();
 	}
 
 	const FModuleSchema* FModuleLibrary::GetModuleSchema(const UNiagaraScript* Module, FString& OutError)

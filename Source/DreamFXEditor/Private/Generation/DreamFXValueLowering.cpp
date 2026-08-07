@@ -142,6 +142,30 @@ namespace UE::DreamFX::Editor
 		return Type.IsValid() ? Type.GetName() : TEXT("<invalid>");
 	}
 
+	FString FValueLowering::DescribeDeclaredType(const FNiagaraTypeDefinition& Type)
+	{
+		if (Type == FNiagaraTypeDefinition::GetFloatDef())    { return TEXT("float"); }
+		if (Type == FNiagaraTypeDefinition::GetIntDef())      { return TEXT("int"); }
+		if (Type == FNiagaraTypeDefinition::GetBoolDef())     { return TEXT("bool"); }
+		if (Type == FNiagaraTypeDefinition::GetVec2Def())     { return TEXT("Vector2"); }
+		if (Type == FNiagaraTypeDefinition::GetVec3Def())     { return TEXT("Vector"); }
+		if (Type == FNiagaraTypeDefinition::GetVec4Def())     { return TEXT("Vector4"); }
+		if (Type == FNiagaraTypeDefinition::GetColorDef())    { return TEXT("Color"); }
+		if (Type == FNiagaraTypeDefinition::GetPositionDef()) { return TEXT("Position"); }
+		if (Type == FNiagaraTypeDefinition::GetQuatDef())     { return TEXT("Quat"); }
+
+		if (Type.IsDataInterface())
+		{
+			FString Name = Type.GetClass() ? Type.GetClass()->GetName() : FString();
+			Name.RemoveFromStart(TEXT("NiagaraDataInterface"), ESearchCase::CaseSensitive);
+			return FString::Printf(TEXT("DI<%s>"), *Name);
+		}
+
+		// Enums have no DSL keyword of their own; a user parameter of enum type is out of scope for
+		// the Properties block, so the engine name is the honest thing to print.
+		return DescribeType(Type);
+	}
+
 	bool FValueLowering::ResolveDeclaredType(const FParameterDecl& Declaration, FDiagnosticSink& Diagnostics,
 		FNiagaraTypeDefinition& OutType, bool& bOutIsDataInterface)
 	{

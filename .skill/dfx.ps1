@@ -36,7 +36,7 @@ param(
     # schema — print one module's input signature
     # list   — print every module (or, with -DynamicInputs, every dynamic input) on the search paths
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('build', 'verify', 'schema', 'list')]
+    [ValidateSet('build', 'verify', 'lint', 'decompile', 'coverage', 'schema', 'list')]
     [string]$Command,
 
     # build/verify: path to a .dfs (absolute, or relative to the working directory).
@@ -55,6 +55,18 @@ param(
 
     # list: show dynamic inputs instead of modules.
     [switch]$DynamicInputs,
+
+    # decompile: write the source here instead of printing it.
+    [string]$Out,
+
+    # decompile: the Root="..." to stamp on the output. Defaults to Game.
+    [string]$Root,
+
+    # coverage: the content path to scan. Defaults to /Game.
+    [string]$Path,
+
+    # schema: which stack to probe the module in. Defaults to trying each in turn.
+    [string]$Stack,
 
     # The .uproject. Defaults to the nearest one at or above the target / working directory.
     [string]$Project,
@@ -161,9 +173,27 @@ switch ($Command) {
         }
         $arguments += '-Verify'
     }
+    'lint' {
+        if (-not $All) {
+            if (-not $Target) { throw "lint needs a source file, or -All." }
+            $arguments += "-File=$((Resolve-Path -LiteralPath $Target).Path)"
+        }
+        $arguments += '-Lint'
+    }
+    'decompile' {
+        if (-not $Target) { throw "decompile needs an asset path, e.g. /Game/FX/NS_Spark." }
+        $arguments += "-Decompile=$Target"
+        if ($Out) { $arguments += "-Out=$Out" }
+        if ($Root) { $arguments += "-Root=$Root" }
+    }
+    'coverage' {
+        $arguments += '-Coverage'
+        if ($Path) { $arguments += "-Path=$Path" }
+    }
     'schema' {
         if (-not $Target) { throw "schema needs a module name." }
         $arguments += "-Schema=$Target"
+        if ($Stack) { $arguments += "-Stack=$Stack" }
     }
     'list' {
         $arguments += if ($DynamicInputs) { '-ListDynamicInputs' } else { '-ListModules' }

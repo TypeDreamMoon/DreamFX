@@ -289,11 +289,40 @@ namespace UE::DreamFX::Editor
 		return Value;
 	}
 
+	bool FInputValue::Equals(const FInputValue& Other) const
+	{
+		if (Mode != Other.Mode)
+		{
+			return false;
+		}
+
+		switch (Mode)
+		{
+		case EInputValueMode::Literal:
+			return LiteralStruct == Other.LiteralStruct && LiteralBytes == Other.LiteralBytes;
+		case EInputValueMode::Enum:
+			return EnumType == Other.EnumType && EnumEntryName == Other.EnumEntryName;
+		case EInputValueMode::Linked:
+			return LinkedVariable == Other.LinkedVariable;
+		case EInputValueMode::Hlsl:
+			return HlslExpression == Other.HlslExpression;
+		case EInputValueMode::DynamicInput:
+			return DynamicInputAsset == Other.DynamicInputAsset;
+		case EInputValueMode::DataInterface:
+			return DataInterfaceJson == Other.DataInterfaceJson;
+		default:
+			return true;
+		}
+	}
+
 	FString NormalizeInputIdentifier(const FString& Name)
 	{
 		FString Result = Name;
 		Result.ReplaceInline(TEXT(" "), TEXT(""), ESearchCase::CaseSensitive);
 		Result.ReplaceInline(TEXT("_"), TEXT(""), ESearchCase::CaseSensitive);
+		// Hyphens come from enum display labels like "Non-Uniform"; a DSL identifier cannot hold one,
+		// so both sides drop it.
+		Result.ReplaceInline(TEXT("-"), TEXT(""), ESearchCase::CaseSensitive);
 		Result.ToLowerInline();
 		// Inline edit conditions come back namespace-qualified ("Module.WriteLifetime") while ordinary
 		// inputs do not ("Lifetime"). Inside a module call the namespace is implied, so it is dropped
@@ -887,6 +916,36 @@ namespace UE::DreamFX::Editor
 		OutNames.Sort();
 	}
 
+	bool FNiagaraAdapter::GetRendererBindings(const FStackAddress& RendererAddress,
+		TArray<TPair<FString, FName>>& OutBindings, TArray<FString>& OutErrors)
+	{
+		FNiagaraEmitterHandle* Handle = nullptr;
+		const UNiagaraRendererProperties* Renderer = ResolveRenderer(RendererAddress, Handle);
+		if (Renderer == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Could not resolve renderer %d on emitter '%s'."),
+				RendererAddress.RendererIndex, *RendererAddress.EmitterName.ToString()));
+			return false;
+		}
+
+		for (TFieldIterator<FStructProperty> It(Renderer->GetClass()); It; ++It)
+		{
+			if (It->Struct != FNiagaraVariableAttributeBinding::StaticStruct())
+			{
+				continue;
+			}
+
+			const FNiagaraVariableAttributeBinding* Binding =
+				It->ContainerPtrToValuePtr<FNiagaraVariableAttributeBinding>(Renderer);
+
+			FString Name = It->GetName();
+			Name.RemoveFromEnd(TEXT("Binding"), ESearchCase::CaseSensitive);
+			OutBindings.Emplace(Name, Binding->GetParamMapBindableVariable().GetName());
+		}
+
+		return true;
+	}
+
 	bool FNiagaraAdapter::SetRendererBinding(const FStackAddress& RendererAddress, const FString& BindingName,
 		FName TargetParameter, TArray<FString>& OutErrors)
 	{
@@ -1017,8 +1076,8 @@ namespace UE::DreamFX::Editor
 		return Drain(Context, OutErrors);
 	}
 
-	bool FNiagaraAdapter::GetDynamicInputChildNames(const FStackAddress& InputAddress,
-		TArray<FName>& OutChildNames, TArray<FString>& OutErrors)
+	bool FNiagaraAdapter::GetDynamicInputChildren(const FStackAddress& InputAddress,
+		TArray<TPair<FName, bool>>& OutChildren, TArray<FString>& OutErrors)
 	{
 		FNiagaraExternalEditContext Context(InputAddress.System);
 		FNiagaraExt_DynamicInputChainRef ChainRef;
@@ -1030,9 +1089,10 @@ namespace UE::DreamFX::Editor
 		}
 
 		const FNiagaraExt_DynamicInputChain& Chain = ChainRef.Get();
-		for (const FNiagaraExt_DynamicInputChainRef& Child : Chain.Inputs)
+		for (const FNiagaraExt_DynamicInputChainRef& ChildRef : Chain.Inputs)
 		{
-			OutChildNames.Add(Child.Get().Name);
+			const FNiagaraExt_DynamicInputChain& Child = ChildRef.Get();
+			OutChildren.Emplace(Child.Name, Child.bIsVisible && Child.bIsEditable);
 		}
 		return Drain(Context, OutErrors);
 	}
@@ -1261,9 +1321,25 @@ namespace UE::DreamFX::Editor
 			EStackKind::ParticleSpawn, EStackKind::ParticleUpdate,
 		};
 
+		// The API is not consistent about which spelling it uses: writes take the qualified name
+		// ("ENiagaraScriptUsage::EmitterUpdateScript") while GetEmitterTopology reports the short one
+		// ("EmitterUpdateScript"). Accepting both is the only way a read-then-write round trip works.
+		FString Short = ScriptName.ToString();
+		int32 ColonIndex;
+		if (Short.FindLastChar(TEXT(':'), ColonIndex))
+		{
+			Short = Short.RightChop(ColonIndex + 1);
+		}
+
 		for (EStackKind Kind : AllKinds)
 		{
-			if (ScriptNameForStack(Kind) == ScriptName)
+			FString Candidate = ScriptNameForStack(Kind).ToString();
+			int32 CandidateColon;
+			if (Candidate.FindLastChar(TEXT(':'), CandidateColon))
+			{
+				Candidate = Candidate.RightChop(CandidateColon + 1);
+			}
+			if (Candidate == Short)
 			{
 				OutKind = Kind;
 				return true;

@@ -3,13 +3,19 @@
 #include "DreamFXDiagnostics.h"
 #include "DreamFXModule.h"
 #include "DreamFXParser.h"
+#include "Decompiler/DreamFXDecompiler.h"
 #include "Generation/DreamFXGenerator.h"
 #include "Lint/DreamFXLint.h"
 #include "SourceFiles/DreamFXPaths.h"
 
+#include "AssetRegistry/ARFilter.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "NiagaraScript.h"
+#include "NiagaraSystem.h"
 #include "Schema/DreamFXModuleLibrary.h"
 
 using namespace UE::DreamFX;
@@ -114,6 +120,136 @@ namespace
 	}
 }
 
+namespace
+{
+	/** Exports one Niagara system back to source, to a file or to the log. */
+	int32 RunDecompile(const FString& AssetPath, const FString& OutputPath, const FString& RootToken)
+	{
+		FString PackagePath;
+		FString ResolveError;
+		if (!FDreamFXPaths::ResolveAssetPath(AssetPath, RootToken, PackagePath, ResolveError))
+		{
+			UE_LOG(LogDreamFX, Error, TEXT("%s"), *ResolveError);
+			return 1;
+		}
+
+		UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *FDreamFXPaths::ToObjectPath(PackagePath));
+		if (System == nullptr)
+		{
+			UE_LOG(LogDreamFX, Error, TEXT("No Niagara System at '%s'."), *PackagePath);
+			return 1;
+		}
+
+		FDiagnosticSink Diagnostics;
+		const FDecompileResult Result = FDecompiler::Decompile(System, RootToken, Diagnostics);
+
+		for (const FDiagnostic& Diagnostic : Diagnostics.GetDiagnostics())
+		{
+			UE_LOG(LogDreamFX, Warning, TEXT("%s"), *Diagnostic.Format());
+		}
+
+		if (!Result.bSucceeded)
+		{
+			return 1;
+		}
+
+		for (const FString& Feature : Result.UnsupportedFeatures)
+		{
+			UE_LOG(LogDreamFX, Warning, TEXT("Not represented in the export: %s"), *Feature);
+		}
+
+		if (OutputPath.IsEmpty())
+		{
+			UE_LOG(LogDreamFX, Display, TEXT("%s"), *Result.Source);
+			return 0;
+		}
+
+		if (!FFileHelper::SaveStringToFile(Result.Source, *OutputPath))
+		{
+			UE_LOG(LogDreamFX, Error, TEXT("Could not write '%s'."), *OutputPath);
+			return 1;
+		}
+
+		UE_LOG(LogDreamFX, Display, TEXT("Wrote %s"), *OutputPath);
+		return 0;
+	}
+
+	/**
+	 * Decompiles every Niagara system it can find and reports what fraction came back whole.
+	 *
+	 * Plan Phase 5 asks for this so v2's feature order is decided by what the project actually
+	 * contains, rather than by which gap is most annoying to think about.
+	 */
+	int32 RunCoverage(const FString& SearchRoot)
+	{
+		IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+			TEXT("AssetRegistry")).Get();
+
+		const FString Root = SearchRoot.IsEmpty() ? TEXT("/Game") : SearchRoot;
+		AssetRegistry.ScanPathsSynchronous({ Root }, /*bForceRescan=*/true, /*bIgnoreDenyListScanFilters=*/true);
+		AssetRegistry.WaitForCompletion();
+
+		FARFilter Filter;
+		Filter.ClassPaths.Add(UNiagaraSystem::StaticClass()->GetClassPathName());
+		Filter.PackagePaths.Add(FName(*Root));
+		Filter.bRecursivePaths = true;
+
+		TArray<FAssetData> Assets;
+		AssetRegistry.GetAssets(Filter, Assets);
+
+		UE_LOG(LogDreamFX, Display, TEXT("=== DreamFX coverage over %d Niagara system(s) under %s ==="),
+			Assets.Num(), *Root);
+
+		int32 Exported = 0;
+		int32 Failed = 0;
+		TMap<FString, int32> FeatureCounts;
+
+		for (const FAssetData& Asset : Assets)
+		{
+			UNiagaraSystem* System = Cast<UNiagaraSystem>(Asset.GetAsset());
+			if (System == nullptr)
+			{
+				++Failed;
+				continue;
+			}
+
+			FDiagnosticSink Diagnostics;
+			const FDecompileResult Result = FDecompiler::Decompile(System, TEXT("Game"), Diagnostics);
+			if (!Result.bSucceeded)
+			{
+				++Failed;
+				UE_LOG(LogDreamFX, Warning, TEXT("  FAILED  %s"), *Asset.PackageName.ToString());
+				continue;
+			}
+
+			++Exported;
+			for (const FString& Feature : Result.UnsupportedFeatures)
+			{
+				++FeatureCounts.FindOrAdd(Feature);
+			}
+			UE_LOG(LogDreamFX, Display, TEXT("  ok      %s%s"),
+				*Asset.PackageName.ToString(),
+				Result.UnsupportedFeatures.Num() > 0
+					? *FString::Printf(TEXT("  (%d gap(s))"), Result.UnsupportedFeatures.Num())
+					: TEXT(""));
+		}
+
+		UE_LOG(LogDreamFX, Display, TEXT("=== %d exported, %d failed ==="), Exported, Failed);
+
+		if (FeatureCounts.Num() > 0)
+		{
+			FeatureCounts.ValueSort([](int32 Left, int32 Right) { return Left > Right; });
+			UE_LOG(LogDreamFX, Display, TEXT("Gaps, most common first:"));
+			for (const TPair<FString, int32>& Entry : FeatureCounts)
+			{
+				UE_LOG(LogDreamFX, Display, TEXT("  %4d x  %s"), Entry.Value, *Entry.Key);
+			}
+		}
+
+		return Failed;
+	}
+}
+
 UDreamFXCommandlet::UDreamFXCommandlet()
 {
 	IsClient = false;
@@ -147,6 +283,24 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 			UE_LOG(LogDreamFX, Display, TEXT("  %s"), *Entry);
 		}
 		return 0;
+	}
+
+	FString RootToken;
+	FParse::Value(*Params, TEXT("Root="), RootToken);
+
+	FString DecompileTarget;
+	if (FParse::Value(*Params, TEXT("Decompile="), DecompileTarget))
+	{
+		FString OutputPath;
+		FParse::Value(*Params, TEXT("Out="), OutputPath);
+		return RunDecompile(DecompileTarget, OutputPath, RootToken.IsEmpty() ? TEXT("Game") : RootToken);
+	}
+
+	if (FParse::Param(*Params, TEXT("Coverage")))
+	{
+		FString SearchRoot;
+		FParse::Value(*Params, TEXT("Path="), SearchRoot);
+		return RunCoverage(SearchRoot);
 	}
 
 	const bool bLintOnly = FParse::Param(*Params, TEXT("Lint"));

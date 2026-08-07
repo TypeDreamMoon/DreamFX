@@ -52,6 +52,27 @@ namespace UE::DreamFX::Editor
 		 */
 		const FModuleSchema* GetStackSchema(UNiagaraScript* Module, EStackKind Stack, FString& OutError);
 
+		/**
+		 * The input values a freshly added module has, before anything overrides them.
+		 *
+		 * R8's answer. The read API reports resolved values with no "explicitly set" flag, and the
+		 * plan's proposed fix -- comparing against `GetStackInputSchema.DefaultValue` -- rests on a
+		 * field that does not exist. The probe already adds each module in isolation, so reading its
+		 * values at that moment gives the baseline directly. "Explicitly set to the default" is
+		 * indistinguishable from "not set" and is accepted as lost.
+		 */
+		const TMap<FName, FInputValue>* GetStackDefaults(UNiagaraScript* Module, EStackKind Stack, FString& OutError);
+
+		/** Property JSON a renderer class has when freshly added, for the same default-suppression job. */
+		const FString* GetRendererDefaults(UClass* RendererClass, FString& OutError);
+
+		/** Attribute bindings a renderer class has when freshly added, so defaults are not exported. */
+		bool GetRendererBindingDefaults(UClass* RendererClass, TArray<TPair<FString, FName>>& OutBindings,
+			FString& OutError);
+
+		/** Property JSON a freshly created emitter has. */
+		const FString* GetEmitterDefaults(FString& OutError);
+
 		/** Cached schema read from the module asset alone. Coarser than GetStackSchema; see above. */
 		const FModuleSchema* GetModuleSchema(const UNiagaraScript* Module, FString& OutError);
 
@@ -60,6 +81,15 @@ namespace UE::DreamFX::Editor
 
 		/** Every search path currently in effect, for error messages. */
 		const TArray<FString>& GetSearchPaths() const { return SearchPaths; }
+
+		/**
+		 * The shortest name that resolves back to this exact asset.
+		 *
+		 * The decompiler cannot just print the short name: `InitializeParticle` exists twice and a
+		 * re-import of that export fails as ambiguous. Suffixes are added a segment at a time until
+		 * the lookup lands on the same asset, falling back to the full path.
+		 */
+		FString GetUnambiguousName(UNiagaraScript* Script, bool bDynamicInput);
 
 		/**
 		 * Every module (or dynamic input) the search paths expose, as "Name -> /Package/Path".
@@ -95,5 +125,9 @@ namespace UE::DreamFX::Editor
 		TObjectPtr<UNiagaraSystem> ProbeSystem;
 		bool bProbeSystemFailed = false;
 		TMap<TPair<TWeakObjectPtr<const UNiagaraScript>, EStackKind>, FModuleSchema> StackSchemaCache;
+		TMap<TPair<TWeakObjectPtr<const UNiagaraScript>, EStackKind>, TMap<FName, FInputValue>> StackDefaultsCache;
+		TMap<TWeakObjectPtr<const UClass>, FString> RendererDefaultsCache;
+		TMap<TWeakObjectPtr<const UClass>, TArray<TPair<FString, FName>>> RendererBindingDefaultsCache;
+		TOptional<FString> EmitterDefaults;
 	};
 }

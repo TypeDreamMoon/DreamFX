@@ -1,0 +1,75 @@
+// Decompiled from /DreamFX/Samples/NS_ToonHitSpark.NS_ToonHitSpark by DreamFX.
+// Inline arithmetic is not recovered: expressions come back as equivalent hlsl { } blocks.
+System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime = 0;
+    }
+
+    Properties = {
+        Vector HitNormal [ Description="Impact normal fed from blueprint; defaults to straight up" ];
+        int SparkCount;
+        float SparkSpeed;
+        Color TintA;
+        Color TintB;
+    }
+
+    Emitter Sparks
+    {
+        Settings = {
+            Determinism = true;
+            RandomSeed = 1337;
+            AllocationMode = Fixed;
+            PreAllocationCount = 64;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.15);
+            SpawnBurst_Instantaneous(SpawnCount = User.SparkCount);
+        }
+
+        ParticleSpawn = {
+            Initialization/InitializeParticle(
+                Lifetime = 0.4,
+                Color = User.TintA,
+                WriteSpriteSize = true,
+                SpriteSize = (6.0, 6.0)
+            );
+            SystemLocation();
+            AddVelocityInCone(
+                VelocityStrength = RandomRangeFloat(Minimum = hlsl { (User.SparkSpeed * 0.6) }, Maximum = User.SparkSpeed),
+                ConeAngle = 55.0,
+                ConeAxis = User.HitNormal
+            );
+            Particles.Moon.SparkSeed = 0.5;
+            Color Particles.Moon.SparkTint = User.TintB;
+        }
+
+        ParticleUpdate = {
+            GravityForce(Gravity = (0.0, 0.0, -680.0));
+            DragForce(Drag = 1.4);
+            SolveForcesAndVelocity();
+            ScaleSpriteSize(
+                ScaleSpriteSizeMode = Uniform,
+                UniformScaleFactor = FloatFromCurve(
+        FloatCurve = curve {
+            0.0 -> 1.0 [ Interp=Cubic ];
+            0.7 -> 0.85 [ Interp=Cubic; Arrive=-0.4; Leave=-1.2 ];
+            1.0 -> 0.0 [ Interp=Linear ];
+        },
+        CurveIndex = Particles.NormalizedAge,
+        ScaleCurve = 1.0
+    )
+            );
+            Color Particles.Color = hlsl { float4(Particles.Color.rgb, saturate(1.0 - Particles.NormalizedAge) * (0.6 + 0.4 * frac(Particles.Moon.SparkSeed * 37.0 + Engine.Time * 24.0))) };
+        }
+
+        SpriteRenderer
+        {
+            Alignment = Unaligned;
+            FacingMode = FaceCamera;
+            SortMode = ViewDepth;
+        }
+    }
+
+}
