@@ -1671,6 +1671,30 @@ namespace UE::DreamFX::Editor
 						}
 					}
 
+					// A renderer with no material draws nothing and reports nothing, so this cannot be
+					// left to chance -- see EnsureRendererMaterial.
+					{
+						Errors.Reset();
+						FString AppliedMaterial;
+						bool bStillMissing = false;
+						if (!FNiagaraAdapter::EnsureRendererMaterial(RendererAddress, AppliedMaterial, bStillMissing, Errors))
+						{
+							ReportAdapterErrors(Errors, TEXT("DFX5028"), Renderer.Location, Diagnostics);
+							return false;
+						}
+						if (!AppliedMaterial.IsEmpty())
+						{
+							Diagnostics.Info(TEXT("DFX5004"), Renderer.Location,
+								FString::Printf(TEXT("No Material was set, so the engine default was applied: %s. Write 'Material = \"...\";' to choose your own."),
+									*AppliedMaterial));
+						}
+						else if (bStillMissing)
+						{
+							Diagnostics.Warning(TEXT("DFX7104"), Renderer.Location,
+								TEXT("This renderer has no Material and DreamFX knows no default for its type, so it will not draw. Set 'Material = \"...\";'."));
+						}
+					}
+
 					// Bindings come after the property blob: SourceMode is a plain property, and it
 					// decides how a binding resolves.
 					for (const FPlannedBinding& Binding : Renderer.Bindings)

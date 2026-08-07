@@ -942,6 +942,78 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	bool FNiagaraAdapter::EnsureRendererMaterial(const FStackAddress& RendererAddress,
+		FString& OutAppliedMaterial, bool& bOutStillMissing, TArray<FString>& OutErrors)
+	{
+		OutAppliedMaterial.Reset();
+		bOutStillMissing = false;
+
+		FNiagaraEmitterHandle* Handle = nullptr;
+		UNiagaraRendererProperties* Renderer = ResolveRenderer(RendererAddress, Handle);
+		if (Renderer == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Could not resolve renderer %d on emitter '%s'."),
+				RendererAddress.RendererIndex, *RendererAddress.EmitterName.ToString()));
+			return false;
+		}
+
+		FObjectProperty* MaterialProperty = FindFProperty<FObjectProperty>(Renderer->GetClass(), TEXT("Material"));
+		if (MaterialProperty == nullptr)
+		{
+			// Mesh renderers take their materials from the mesh; light and component renderers have
+			// none at all. Nothing to do, and nothing wrong.
+			return true;
+		}
+
+		if (MaterialProperty->GetObjectPropertyValue_InContainer(Renderer) != nullptr)
+		{
+			return true;
+		}
+
+		// Mirrors the paths the engine itself assigns. Kept as a table rather than derived, because
+		// the engine derives nothing either -- these are literals in NiagaraSystemViewModel.
+		struct FDefaultMaterial
+		{
+			const TCHAR* ClassName;
+			const TCHAR* AssetPath;
+		};
+		static const FDefaultMaterial Defaults[] =
+		{
+			{ TEXT("NiagaraSpriteRendererProperties"), TEXT("/Niagara/DefaultAssets/DefaultSpriteMaterial.DefaultSpriteMaterial") },
+			{ TEXT("NiagaraRibbonRendererProperties"), TEXT("/Niagara/DefaultAssets/DefaultRIbbonMaterial.DefaultRIbbonMaterial") },
+			{ TEXT("NiagaraDecalRendererProperties"),  TEXT("/Niagara/DefaultAssets/DefaultDecalMaterial.DefaultDecalMaterial") },
+		};
+
+		const FString ClassName = Renderer->GetClass()->GetName();
+		for (const FDefaultMaterial& Default : Defaults)
+		{
+			if (ClassName != Default.ClassName)
+			{
+				continue;
+			}
+
+			UObject* Material = LoadObject<UObject>(nullptr, Default.AssetPath);
+			if (Material == nullptr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Could not load the default material '%s'."), Default.AssetPath));
+				bOutStillMissing = true;
+				return false;
+			}
+
+			Renderer->Modify();
+			MaterialProperty->SetObjectPropertyValue_InContainer(Renderer, Material);
+
+			FPropertyChangedEvent PropertyChangedEvent(MaterialProperty, EPropertyChangeType::ValueSet);
+			Renderer->PostEditChangeProperty(PropertyChangedEvent);
+
+			OutAppliedMaterial = Default.AssetPath;
+			return true;
+		}
+
+		bOutStillMissing = true;
+		return true;
+	}
+
 	void FNiagaraAdapter::ListRendererBindings(const UClass* RendererClass, TArray<FString>& OutNames)
 	{
 		if (RendererClass == nullptr)

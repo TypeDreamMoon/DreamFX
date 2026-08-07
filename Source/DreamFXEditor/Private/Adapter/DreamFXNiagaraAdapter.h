@@ -317,6 +317,21 @@ namespace UE::DreamFX::Editor
 		static bool SetRendererBinding(const FStackAddress& RendererAddress, const FString& BindingName,
 			FName TargetParameter, TArray<FString>& OutErrors);
 
+		/**
+		 * Gives a renderer the engine's stock material when it has none.
+		 *
+		 * `UNiagaraSpriteRendererProperties`'s CDO has a null Material, and AddRenderer builds from the
+		 * CDO -- so a generated sprite renderer draws absolutely nothing, with no error anywhere. The
+		 * Niagara editor does not hit this because it assigns the default itself when the user adds a
+		 * renderer (NiagaraSystemViewModel.cpp:646 hardcodes the same path). DreamFX matches that
+		 * behaviour rather than leaving an invisible effect behind.
+		 *
+		 * Reports what it applied through OutAppliedMaterial so the build can say so out loud; an
+		 * empty result with a Material property still null means nothing was known to apply.
+		 */
+		static bool EnsureRendererMaterial(const FStackAddress& RendererAddress, FString& OutAppliedMaterial,
+			bool& bOutStillMissing, TArray<FString>& OutErrors);
+
 		/** Every attribute binding a renderer class exposes, in DSL spelling. For error messages. */
 		static void ListRendererBindings(const UClass* RendererClass, TArray<FString>& OutNames);
 
