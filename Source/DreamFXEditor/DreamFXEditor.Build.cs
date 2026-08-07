@@ -6,6 +6,10 @@ public class DreamFXEditor : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// Private/ is on the include path so the layered folders (Adapter, Schema, Generation, ...)
+		// can include each other by their folder-qualified path.
+		PrivateIncludePaths.Add(ModuleDirectory + "/Private");
+
 		PrivateDependencyModuleNames.AddRange(
 			new[]
 			{
@@ -15,9 +19,13 @@ public class DreamFXEditor : ModuleRules
 				"CoreUObject",
 				"DreamFX",
 				"Engine",
+				"Json",
+				"JsonUtilities",
 				"Niagara",
 				"NiagaraEditor",
 				"Projects",
+				"Slate",
+				"SlateCore",
 				"UnrealEd"
 			});
 	}

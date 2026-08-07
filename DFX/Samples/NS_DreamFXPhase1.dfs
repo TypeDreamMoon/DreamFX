@@ -1,0 +1,44 @@
+// Phase 1 vertical slice: module calls with literal inputs, plus one sprite renderer.
+//
+// Everything here is deliberately inside the Phase 1 feature set -- no linked parameters, no enums,
+// no dynamic inputs, no user parameters. Those arrive in later phases and this file grows with them.
+//
+// Build it with:
+//   UnrealEditor-Cmd.exe DevTest.uproject -run=DreamFX -unattended -nopause -nosplash
+System(Name="Samples/NS_DreamFXPhase1", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        EmitterUpdate = {
+            // EmitterState's "Loop Duration" is gated behind the Loop Behavior static switch, which
+            // needs enum values -- Phase 2. Left at its defaults here, which loop infinitely.
+            EmitterState();
+            SpawnBurst_Instantaneous(SpawnCount = 24, SpawnTime = 0.0);
+        }
+
+        ParticleSpawn = {
+            #Region "Initial state"
+            // Written as the DSL identifier "WriteLifetime"; the real Niagara input is "Write Lifetime".
+            Spawn/Initialization/InitializeParticle(
+                WriteLifetime   = true,
+                Lifetime        = 0.75,
+                WriteColor      = true,
+                Color           = (1.0, 0.72, 0.25, 1.0),
+                WriteSpriteSize = true,
+                SpriteSize      = (6.0, 6.0)
+            );
+            #EndRegion
+
+            SystemLocation(Offset = (0, 0, 0));
+        }
+
+        ParticleUpdate = {
+            GravityForce(Gravity = (0, 0, -680));
+            SolveForcesAndVelocity();
+        }
+
+        SpriteRenderer Core
+        {
+        }
+    }
+}
