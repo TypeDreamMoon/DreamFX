@@ -271,6 +271,19 @@ namespace UE::DreamFX::Editor
 		static bool AddEmitter(UNiagaraSystem* System, FName EmitterName, TArray<FString>& OutErrors);
 		static bool RemoveEmitter(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors);
 
+		/**
+		 * Renames an emitter in place, keeping its handle.
+		 *
+		 * R4: an emitter's name is a stable key, not a display name -- Niagara stores literal module
+		 * inputs under an emitter-prefixed rapid-iteration alias. Renaming in source and rebuilding
+		 * would drop the old emitter and add a new one, taking its handle GUID with it. Renaming the
+		 * asset *first* means the following rebuild matches by the new name and reuses the handle.
+		 *
+		 * FNiagaraEmitterHandle::SetName does the alias rewrite itself, which is why this is a
+		 * two-line function and not the rapid-iteration surgery plan 2.5 anticipated.
+		 */
+		static bool RenameEmitter(UNiagaraSystem* System, FName OldName, FName NewName, TArray<FString>& OutErrors);
+
 		static bool AddModule(const FStackAddress& StackAddress, UNiagaraScript* ModuleAsset,
 			FName& OutModuleName, TArray<FString>& OutErrors);
 		static bool RemoveModule(const FStackAddress& ModuleAddress, TArray<FString>& OutErrors);

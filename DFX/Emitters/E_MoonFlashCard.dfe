@@ -1,0 +1,44 @@
+// A reusable emitter, referenced with `Emitter <name> from "..."`.
+//
+// v1 semantics are copy, not inheritance (R3): the host takes a snapshot and lays its own block over
+// it, and nothing links the two afterwards. That is also why a decompiled system always comes back
+// self-contained -- once copied, "which parts were overrides" is not recoverable.
+//
+// A .dfe may read User.* parameters; the host system has to declare them, and it is checked at the
+// `from` line rather than here.
+Emitter(Name="Emitters/E_MoonFlashCard", Root="Plugin.DreamFX")
+{
+    Settings = {
+        SimTarget      = CPU;
+        LocalSpace     = true;
+        Determinism    = true;
+        RandomSeed     = 7;
+        AllocationMode = Fixed;
+        PreAllocationCount = 2;
+    }
+
+    EmitterUpdate = {
+        EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.12);
+        SpawnBurst_Instantaneous(SpawnCount = 1);
+    }
+
+    ParticleSpawn = {
+        Spawn/Initialization/InitializeParticle(
+            WriteLifetime   = true,
+            Lifetime        = 0.12,
+            WriteSpriteSize = true,
+            SpriteSize      = (48.0, 48.0)
+        );
+        SystemLocation();
+    }
+
+    ParticleUpdate = {
+        ScaleSpriteSize(ScaleSpriteSizeMode = Uniform, UniformScaleFactor = 1.5);
+    }
+
+    SpriteRenderer Card
+    {
+        Alignment  = Unaligned;
+        FacingMode = FaceCamera;
+    }
+}

@@ -693,6 +693,51 @@ namespace UE::DreamFX::Editor
 		return Drain(Context, OutErrors);
 	}
 
+	bool FNiagaraAdapter::RenameEmitter(UNiagaraSystem* System, FName OldName, FName NewName, TArray<FString>& OutErrors)
+	{
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot rename an emitter on a null system."));
+			return false;
+		}
+
+		TArray<FString> Existing;
+		FNiagaraEmitterHandle* Target = nullptr;
+		for (FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+		{
+			Existing.Add(Handle.GetName().ToString());
+			if (Handle.GetName() == OldName)
+			{
+				Target = &Handle;
+			}
+			else if (Handle.GetName() == NewName)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("'%s' already has an emitter named '%s'. Emitter names are stable keys and must be unique."),
+					*System->GetName(), *NewName.ToString()));
+				return false;
+			}
+		}
+
+		if (Target == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("'%s' has no emitter named '%s'. It has: %s"),
+				*System->GetName(), *OldName.ToString(), *FString::Join(Existing, TEXT(", "))));
+			return false;
+		}
+
+		System->Modify();
+		Target->SetName(NewName, *System);
+
+		if (Target->GetName() != NewName)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Rename produced '%s' instead of '%s'."),
+				*Target->GetName().ToString(), *NewName.ToString()));
+			return false;
+		}
+		return true;
+	}
+
 	bool FNiagaraAdapter::AddModule(const FStackAddress& StackAddress, UNiagaraScript* ModuleAsset,
 		FName& OutModuleName, TArray<FString>& OutErrors)
 	{

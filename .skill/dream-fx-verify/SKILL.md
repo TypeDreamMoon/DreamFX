@@ -47,8 +47,40 @@ built. Batch edits rather than looping per file.
 | :-- | :-- |
 | `build` | generate assets from source |
 | `verify` | check assets against source, writing nothing — the drift gate |
-| `schema <Module>` | print a module's real input signature |
+| `lint` | static checks only; no asset access, so it is the fastest failure |
+| `decompile <asset>` | export an existing system back to source — see [`dream-fx-decompile`](../dream-fx-decompile/SKILL.md) |
+| `coverage` | how much of a project's VFX DreamFX can represent |
+| `graph` | what each source file depends on |
+| `rename <asset>:<old>:<new>` | rename an emitter safely — see below |
+| `schema <Module>` | print a module's real input signature; `-Stack` picks the stack |
 | `list` | every module the search paths expose; `-DynamicInputs` for dynamic inputs |
+
+## The CI gate
+
+```bash
+pwsh -File Plugins/DreamFX/.skill/ci.ps1
+```
+
+Runs lint, then build, then verify, and stops at the first failure with that step's exit code.
+`-SkipBuild` checks without writing; `-CleanNew` removes assets the build newly created.
+
+The verify step is the one worth having. It catches the case nobody notices: someone edited a `.dfs`,
+did not rebuild, and committed both. Build alone passes, because build fixes it.
+
+## Renaming an emitter
+
+An emitter name is a **stable key, not a display name** — Niagara stores literal module inputs under
+an emitter-prefixed alias. Renaming in source and rebuilding would drop the old emitter and add a new
+one, taking its handle GUID with it, which breaks anything referencing the emitter by id.
+
+Rename the asset first, then the source:
+
+```bash
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 rename /Game/FX/NS_Spark:Sparks:Embers
+```
+
+Then change the name in the `.dfs` and rebuild. The rebuild matches by the new name and reuses the
+existing handle.
 
 ## What you get back
 

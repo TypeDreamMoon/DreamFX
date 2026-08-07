@@ -214,6 +214,56 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	bool FDreamFXPaths::ResolveSourceReference(const FString& Reference, const FString& ReferencingFile,
+		const TCHAR* Extension, FString& OutFullPath, FString& OutError)
+	{
+		FString Relative = Reference.TrimStartAndEnd();
+		if (Relative.IsEmpty())
+		{
+			OutError = TEXT("Empty source reference.");
+			return false;
+		}
+
+		if (!FPaths::GetExtension(Relative).Equals(FString(Extension).RightChop(1), ESearchCase::IgnoreCase))
+		{
+			Relative += Extension;
+		}
+
+		TArray<FString> Candidates;
+
+		// Relative to the referencing file first: that is what a reader assumes a bare path means.
+		if (!ReferencingFile.IsEmpty())
+		{
+			Candidates.Add(FPaths::ConvertRelativePathToFull(FPaths::GetPath(ReferencingFile), Relative));
+		}
+
+		for (const FSourceRoot& Root : GetSourceRoots())
+		{
+			Candidates.Add(FPaths::ConvertRelativePathToFull(Root.Directory / Relative));
+
+			// `DFX/Emitters/E_Flash` names the root directory explicitly; accept that spelling too,
+			// because it is how the plan document writes it.
+			FString WithoutDfxPrefix = Relative;
+			if (WithoutDfxPrefix.RemoveFromStart(TEXT("DFX/"), ESearchCase::IgnoreCase))
+			{
+				Candidates.Add(FPaths::ConvertRelativePathToFull(Root.Directory / WithoutDfxPrefix));
+			}
+		}
+
+		for (const FString& Candidate : Candidates)
+		{
+			if (FPaths::FileExists(Candidate))
+			{
+				OutFullPath = Candidate;
+				return true;
+			}
+		}
+
+		OutError = FString::Printf(TEXT("Could not find '%s'. Looked in: %s"),
+			*Relative, *FString::Join(Candidates, TEXT(", ")));
+		return false;
+	}
+
 	FString FDreamFXPaths::ToObjectPath(const FString& PackagePath)
 	{
 		FString Package;

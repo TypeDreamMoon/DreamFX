@@ -8,6 +8,7 @@
 #include "Lint/DreamFXLint.h"
 #include "SourceFiles/DreamFXPaths.h"
 
+#include "Adapter/DreamFXNiagaraAdapter.h"
 #include "AssetRegistry/ARFilter.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -248,6 +249,140 @@ namespace
 
 		return Failed;
 	}
+
+	/**
+	 * R4's safe rename. `-Rename=<asset>:<old>:<new>` renames the emitter on the asset, keeping its
+	 * handle, so the source edit plus a rebuild reuses it instead of building a new one.
+	 */
+	int32 RunRename(const FString& Spec)
+	{
+		TArray<FString> Parts;
+		Spec.ParseIntoArray(Parts, TEXT(":"), /*InCullEmpty=*/false);
+
+		// The asset path itself may contain a root prefix with a colon, so the last two fields are
+		// the names and everything before them is the path.
+		if (Parts.Num() < 3)
+		{
+			UE_LOG(LogDreamFX, Error,
+				TEXT("-Rename needs <asset>:<oldName>:<newName>, e.g. -Rename=/Game/FX/NS_Spark:Sparks:Embers"));
+			return 1;
+		}
+
+		const FString NewName = Parts.Pop();
+		const FString OldName = Parts.Pop();
+		const FString AssetPath = FString::Join(Parts, TEXT(":"));
+
+		FString PackagePath;
+		FString ResolveError;
+		if (!FDreamFXPaths::ResolveAssetPath(AssetPath, TEXT("Game"), PackagePath, ResolveError))
+		{
+			UE_LOG(LogDreamFX, Error, TEXT("%s"), *ResolveError);
+			return 1;
+		}
+
+		UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *FDreamFXPaths::ToObjectPath(PackagePath));
+		if (System == nullptr)
+		{
+			UE_LOG(LogDreamFX, Error, TEXT("No Niagara System at '%s'."), *PackagePath);
+			return 1;
+		}
+
+		TArray<FString> Errors;
+		if (!FNiagaraAdapter::RenameEmitter(System, FName(*OldName), FName(*NewName), Errors))
+		{
+			for (const FString& Error : Errors)
+			{
+				UE_LOG(LogDreamFX, Error, TEXT("%s"), *Error);
+			}
+			return 1;
+		}
+
+		Errors.Reset();
+		if (!FNiagaraAdapter::SaveSystem(System, Errors))
+		{
+			for (const FString& Error : Errors)
+			{
+				UE_LOG(LogDreamFX, Error, TEXT("%s"), *Error);
+			}
+			return 1;
+		}
+
+		UE_LOG(LogDreamFX, Display,
+			TEXT("Renamed '%s' to '%s' on %s. Now change the name in the .dfs and rebuild -- the rebuild will reuse this emitter's handle."),
+			*OldName, *NewName, *PackagePath);
+		return 0;
+	}
+
+	/** Lists what each source file depends on, so a module change's blast radius is visible. */
+	int32 RunGraph()
+	{
+		TArray<FString> SourceFiles;
+		FDreamFXPaths::FindSourceFiles(SourceFiles);
+
+		UE_LOG(LogDreamFX, Display, TEXT("=== DreamFX dependencies: %d source file(s) ==="), SourceFiles.Num());
+
+		int32 Errors = 0;
+		for (const FString& SourceFile : SourceFiles)
+		{
+			FDiagnosticSink Diagnostics;
+			FDocument Document;
+			if (!FParser::ParseFile(SourceFile, Document, Diagnostics))
+			{
+				UE_LOG(LogDreamFX, Error, TEXT("%s: parse failed"), *SourceFile);
+				++Errors;
+				continue;
+			}
+
+			TArray<FString> Modules;
+			TArray<FString> References;
+
+			auto GatherStack = [&Modules](const FStack& Stack)
+			{
+				for (const FStatement& Statement : Stack.Statements)
+				{
+					if (Statement.Kind == EStatementKind::ModuleCall)
+					{
+						Modules.AddUnique(Statement.Name);
+					}
+				}
+			};
+
+			for (const FStack& Stack : Document.Stacks)
+			{
+				GatherStack(Stack);
+			}
+			for (const FEmitter& Emitter : Document.Emitters)
+			{
+				if (!Emitter.FromPath.IsEmpty())
+				{
+					References.AddUnique(Emitter.FromPath);
+				}
+				for (const FStack& Stack : Emitter.Stacks)
+				{
+					GatherStack(Stack);
+				}
+			}
+			for (const FStack& Stack : Document.EmitterDefinition.Stacks)
+			{
+				GatherStack(Stack);
+			}
+
+			Modules.Sort();
+			References.Sort();
+
+			UE_LOG(LogDreamFX, Display, TEXT("%s"), *FPaths::GetCleanFilename(SourceFile));
+			for (const FString& Reference : References)
+			{
+				UE_LOG(LogDreamFX, Display, TEXT("    from  %s"), *Reference);
+			}
+			for (const FString& Module : Modules)
+			{
+				UE_LOG(LogDreamFX, Display, TEXT("    uses  %s"), *Module);
+			}
+		}
+
+		return Errors;
+	}
 }
 
 UDreamFXCommandlet::UDreamFXCommandlet()
@@ -301,6 +436,17 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 		FString SearchRoot;
 		FParse::Value(*Params, TEXT("Path="), SearchRoot);
 		return RunCoverage(SearchRoot);
+	}
+
+	FString RenameSpec;
+	if (FParse::Value(*Params, TEXT("Rename="), RenameSpec))
+	{
+		return RunRename(RenameSpec);
+	}
+
+	if (FParse::Param(*Params, TEXT("Graph")))
+	{
+		return RunGraph();
 	}
 
 	const bool bLintOnly = FParse::Param(*Params, TEXT("Lint"));

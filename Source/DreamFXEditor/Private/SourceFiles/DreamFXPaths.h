@@ -57,5 +57,15 @@ namespace UE::DreamFX::Editor
 
 		/** "/Game/FX/NS_Spark" -> "/Game/FX/NS_Spark.NS_Spark", the form LoadObject wants. */
 		static FString ToObjectPath(const FString& PackagePath);
+
+		/**
+		 * Resolves a `from "..."` reference to a source file on disk.
+		 *
+		 * Tried relative to the referencing file first, then against every DFX root, so both
+		 * `from "../Emitters/E_Flash"` and `from "DFX/Emitters/E_Flash"` work. The extension is
+		 * optional.
+		 */
+		static bool ResolveSourceReference(const FString& Reference, const FString& ReferencingFile,
+			const TCHAR* Extension, FString& OutFullPath, FString& OutError);
 	};
 }

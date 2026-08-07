@@ -933,6 +933,124 @@ namespace UE::DreamFX::Editor
 			return bOk;
 		}
 
+		/**
+		 * Copies a referenced emitter and lays the inline block over it.
+		 *
+		 * Merge granularity is deliberately coarse: a declared stack replaces the base's whole stack
+		 * rather than merging module by module. Per-module merging needs a stable module identity the
+		 * language does not have -- two calls to the same module in one stack are indistinguishable --
+		 * and guessing would silently reorder someone's effect. Settings merge per key because those
+		 * are unambiguously named.
+		 */
+		bool MergeEmitter(const FEmitter& Base, const FEmitter& Override, FEmitter& OutMerged,
+			FDiagnosticSink& Diagnostics)
+		{
+			OutMerged = Base;
+			OutMerged.Name = Override.Name;
+			OutMerged.Location = Override.Location;
+
+			for (const FProperty& Setting : Override.Settings)
+			{
+				FProperty* Existing = OutMerged.Settings.FindByPredicate([&Setting](const FProperty& Candidate)
+				{
+					return Candidate.Name.Equals(Setting.Name, ESearchCase::IgnoreCase);
+				});
+				if (Existing != nullptr)
+				{
+					*Existing = Setting;
+				}
+				else
+				{
+					OutMerged.Settings.Add(Setting);
+				}
+			}
+
+			for (const FStack& Stack : Override.Stacks)
+			{
+				const int32 Index = OutMerged.Stacks.IndexOfByPredicate(
+					[&Stack](const FStack& Candidate) { return Candidate.Kind == Stack.Kind; });
+				if (Index != INDEX_NONE)
+				{
+					OutMerged.Stacks[Index] = Stack;
+				}
+				else
+				{
+					OutMerged.Stacks.Add(Stack);
+				}
+			}
+
+			// All or nothing for renderers: they are addressed by declaration order, so overriding one
+			// of several would mean silently reindexing the rest.
+			if (Override.Renderers.Num() > 0)
+			{
+				OutMerged.Renderers = Override.Renderers;
+			}
+
+			(void)Diagnostics;
+			return true;
+		}
+
+		/** 3.4: every User.* a referenced emitter reads must be declared by the host system. */
+		bool CheckReferencedUserParameters(const FEmitter& Referenced,
+			const TMap<FName, FNiagaraTypeDefinition>& UserVariableTypes,
+			const FSourceLocation& FromLocation, const FString& ReferencedFile, FDiagnosticSink& Diagnostics)
+		{
+			TSet<FName> Missing;
+
+			TFunction<void(const FValue&)> Visit = [&Visit, &UserVariableTypes, &Missing](const FValue& Value)
+			{
+				if (Value.Kind == EValueKind::Name && Value.Text.StartsWith(TEXT("User."), ESearchCase::CaseSensitive))
+				{
+					const FName Name(*Value.Text);
+					if (!UserVariableTypes.Contains(Name))
+					{
+						Missing.Add(Name);
+					}
+				}
+				for (const FValuePtr& Element : Value.Elements)
+				{
+					if (Element.IsValid()) { Visit(*Element); }
+				}
+				for (const FNamedArgument& Argument : Value.Arguments)
+				{
+					if (Argument.Value.IsValid()) { Visit(*Argument.Value); }
+				}
+				if (Value.Left.IsValid())  { Visit(*Value.Left); }
+				if (Value.Right.IsValid()) { Visit(*Value.Right); }
+			};
+
+			for (const FStack& Stack : Referenced.Stacks)
+			{
+				for (const FStatement& Statement : Stack.Statements)
+				{
+					for (const FNamedArgument& Argument : Statement.Arguments)
+					{
+						if (Argument.Value.IsValid()) { Visit(*Argument.Value); }
+					}
+					if (Statement.Value.IsValid()) { Visit(*Statement.Value); }
+				}
+			}
+
+			if (Missing.Num() == 0)
+			{
+				return true;
+			}
+
+			TArray<FString> Names;
+			for (FName Name : Missing)
+			{
+				FString Bare = Name.ToString();
+				Bare.RemoveFromStart(TEXT("User."), ESearchCase::CaseSensitive);
+				Names.Add(Bare);
+			}
+			Names.Sort();
+
+			Diagnostics.Error(TEXT("DFX3043"), FromLocation,
+				FString::Printf(TEXT("'%s' reads user parameters this system does not declare: %s. Add them to the Properties block."),
+					*FPaths::GetCleanFilename(ReferencedFile), *FString::Join(Names, TEXT(", "))));
+			return false;
+		}
+
 		bool BuildPlan(const FDocument& Document, FModuleLibrary& Modules,
 			FDiagnosticSink& Diagnostics, FPlan& OutPlan)
 		{
@@ -1070,19 +1188,70 @@ namespace UE::DreamFX::Editor
 				}
 				EmitterNames.Add(EmitterName);
 
+				// `from "..."` is copy, not inheritance (R3). The referenced .dfe supplies a base and
+				// the inline block overrides it; nothing links the two afterwards, which is why the
+				// decompiler always emits self-contained emitters.
+				FEmitter Merged;
+				const FEmitter* Source = &Emitter;
 				if (!Emitter.FromPath.IsEmpty())
 				{
-					Diagnostics.Error(TEXT("DFX5096"), Emitter.FromLocation,
-						TEXT("External emitter references ('from \"...\"') are not available yet (planned for Phase 6)."));
-					bOk = false;
-					continue;
+					FString ReferencedFile;
+					FString ReferenceError;
+					if (!FDreamFXPaths::ResolveSourceReference(Emitter.FromPath, Document.SourceFilePath,
+						TEXT(".dfe"), ReferencedFile, ReferenceError))
+					{
+						Diagnostics.Error(TEXT("DFX3040"), Emitter.FromLocation, ReferenceError);
+						bOk = false;
+						continue;
+					}
+
+					FDocument Referenced;
+					FDiagnosticSink ReferencedDiagnostics;
+					if (!FParser::ParseFile(ReferencedFile, Referenced, ReferencedDiagnostics))
+					{
+						// The referenced file's own diagnostics keep their own file attribution, so the
+						// author is pointed at the line in the .dfe rather than at the `from`.
+						Diagnostics.Append(ReferencedDiagnostics);
+						Diagnostics.SetFile(Document.SourceFilePath);
+						Diagnostics.Error(TEXT("DFX3041"), Emitter.FromLocation,
+							FString::Printf(TEXT("'%s' could not be parsed; see the errors above."), *ReferencedFile));
+						bOk = false;
+						continue;
+					}
+					Diagnostics.Append(ReferencedDiagnostics);
+					Diagnostics.SetFile(Document.SourceFilePath);
+
+					if (Referenced.Kind != EDocumentKind::Emitter)
+					{
+						Diagnostics.Error(TEXT("DFX3042"), Emitter.FromLocation,
+							FString::Printf(TEXT("'%s' declares a %s, but 'from' needs an Emitter document."),
+								*ReferencedFile, LexDocumentKind(Referenced.Kind)));
+						bOk = false;
+						continue;
+					}
+
+					if (!MergeEmitter(Referenced.EmitterDefinition, Emitter, Merged, Diagnostics))
+					{
+						bOk = false;
+						continue;
+					}
+					Source = &Merged;
+
+					// 3.4: a .dfe may read User.*, and only the host declares those. Checking here means
+					// the error points at the `from` line, which is where the fix belongs.
+					if (!CheckReferencedUserParameters(Referenced.EmitterDefinition, UserVariableTypes,
+						Emitter.FromLocation, ReferencedFile, Diagnostics))
+					{
+						bOk = false;
+						continue;
+					}
 				}
 
 				FPlannedEmitter Planned;
 				Planned.Name = EmitterName;
 				Planned.Location = Emitter.Location;
 
-				if (!PlanSettings(Emitter.Settings, EmitterSettings, Document.Root, TEXT("emitter"),
+				if (!PlanSettings(Source->Settings, EmitterSettings, Document.Root, TEXT("emitter"),
 					Diagnostics, Planned.PropertiesJson))
 				{
 					bOk = false;
@@ -1094,7 +1263,7 @@ namespace UE::DreamFX::Editor
 				FStackContext EmitterContext = StackContext;
 				EmitterContext.DeclaredAttributes = &EmitterAttributes;
 
-				for (const FStack& Stack : Emitter.Stacks)
+				for (const FStack& Stack : Source->Stacks)
 				{
 					if (Stack.Kind == EStackKind::SimulationStage || Stack.Kind == EStackKind::EventHandler)
 					{
@@ -1109,7 +1278,7 @@ namespace UE::DreamFX::Editor
 					Planned.Stacks.Add(MoveTemp(PlannedStack));
 				}
 
-				for (const FRenderer& Renderer : Emitter.Renderers)
+				for (const FRenderer& Renderer : Source->Renderers)
 				{
 					FPlannedRenderer PlannedRenderer;
 					if (!PlanRenderer(Renderer, Document.Root, Diagnostics, PlannedRenderer))

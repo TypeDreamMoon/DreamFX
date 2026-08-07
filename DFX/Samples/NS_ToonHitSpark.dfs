@@ -120,4 +120,14 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
             Bind Color      -> Particles.Color;
         }
     }
+
+    // Copied from the .dfe, with only the loop duration changed. Copy, not inheritance (R3):
+    // editing the .dfe later does not reach back into this system until it is rebuilt.
+    Emitter Flash from "../Emitters/E_MoonFlashCard"
+    {
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.08);
+            SpawnBurst_Instantaneous(SpawnCount = 1);
+        }
+    }
 }

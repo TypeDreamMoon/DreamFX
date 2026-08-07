@@ -36,7 +36,7 @@ param(
     # schema — print one module's input signature
     # list   — print every module (or, with -DynamicInputs, every dynamic input) on the search paths
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('build', 'verify', 'lint', 'decompile', 'coverage', 'schema', 'list')]
+    [ValidateSet('build', 'verify', 'lint', 'decompile', 'coverage', 'rename', 'graph', 'schema', 'list')]
     [string]$Command,
 
     # build/verify: path to a .dfs (absolute, or relative to the working directory).
@@ -190,6 +190,13 @@ switch ($Command) {
         $arguments += '-Coverage'
         if ($Path) { $arguments += "-Path=$Path" }
     }
+    'rename' {
+        if (-not $Target) { throw "rename needs <asset>:<oldName>:<newName>, e.g. /Game/FX/NS_Spark:Sparks:Embers" }
+        $arguments += "-Rename=$Target"
+    }
+    'graph' {
+        $arguments += '-Graph'
+    }
     'schema' {
         if (-not $Target) { throw "schema needs a module name." }
         $arguments += "-Schema=$Target"
@@ -227,13 +234,17 @@ if ($Raw) {
     $output | ForEach-Object { $_ }
 }
 else {
-    # Every DreamFX line is emitted twice: once raw and once re-wrapped through LogInit.
-    $seen = [System.Collections.Generic.HashSet[string]]::new()
+    # Every DreamFX line is emitted twice: once raw and once re-wrapped through LogInit, always
+    # adjacent. Collapsing only *consecutive* duplicates is what makes this safe -- a global
+    # seen-set also eats lines that legitimately repeat, such as the same module appearing in the
+    # dependency listing of two different source files.
+    $previous = $null
     foreach ($line in $output) {
         $text = "$line"
         if ($text -notmatch 'LogDreamFX') { continue }
         $stripped = ($text -replace '^\[[^\]]*\]\[\s*\d+\]', '') -replace '^LogInit: Display: ', ''
-        if (-not $seen.Add($stripped)) { continue }
+        if ($stripped -eq $previous) { continue }
+        $previous = $stripped
 
         $colour = if ($stripped -match ': Error:| error DFX') { 'Red' }
                   elseif ($stripped -match ': Warning:| warning DFX') { 'Yellow' }
