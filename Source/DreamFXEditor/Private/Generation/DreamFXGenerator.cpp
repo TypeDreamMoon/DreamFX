@@ -1626,6 +1626,28 @@ namespace UE::DreamFX::Editor
 		FGenerateResult Result;
 		Diagnostics.SetFile(Document.SourceFilePath);
 
+		if (Document.Kind == EDocumentKind::Module || Document.Kind == EDocumentKind::DynamicInput)
+		{
+			// Verified against this engine, not assumed. A .dfm lowers to a UNiagaraScript holding one
+			// UNiagaraNodeCustomHlsl, and nothing in NiagaraEditor's public surface can put HLSL text
+			// on that node: the class is UCLASS(MinimalAPI), SetCustomHlsl and
+			// InitAsCustomHlslDynamicInput carry no export macro, the CustomHlsl field is private, and
+			// a grep of every NIAGARAEDITOR_API declaration turns up no other entry point that takes
+			// HLSL source.
+			//
+			// The two ways round it are both worse than waiting. Writing a private field by reflection
+			// gives up every compile-time guarantee this adapter layer exists to provide, and patching
+			// the engine forfeits the ability to run on a prebuilt one -- which design principle 4
+			// names as the reason the principle exists.
+			//
+			// So .dfm files are parsed, validated and CI-gated, and generation says exactly why it
+			// stops. The language surface is settled; only the write path is missing.
+			Diagnostics.Error(TEXT("DFX5100"), Document.HeaderLocation,
+				FString::Printf(TEXT("'%s' is a %s. DreamFX cannot generate one on a stock engine: setting HLSL on a Niagara custom node needs UNiagaraNodeCustomHlsl::SetCustomHlsl, which the NiagaraEditor module does not export, and the field behind it is private. The file is still parsed and validated. Use an existing dynamic input asset, or an inline hlsl { } expression, until the engine exports a way in."),
+					*FPaths::GetCleanFilename(Document.SourceFilePath), LexDocumentKind(Document.Kind)));
+			return Result;
+		}
+
 		if (Document.Kind != EDocumentKind::System)
 		{
 			Diagnostics.Error(TEXT("DFX5097"), Document.HeaderLocation,

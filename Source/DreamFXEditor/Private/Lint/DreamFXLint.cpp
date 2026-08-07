@@ -159,20 +159,101 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	namespace
+	{
+		/**
+		 * Checks a .dfm's declarations for internal consistency.
+		 *
+		 * Worth doing even though generation is blocked (see FModuleDocument in the generator): the
+		 * language surface is settled, and a .dfm that is wrong should say so now rather than when the
+		 * export gap closes.
+		 */
+		void LintModuleDocument(const FDocument& Document, FDiagnosticSink& Diagnostics)
+		{
+			const FProperty* Usage = Document.FindSetting(TEXT("Usage"));
+			if (Usage == nullptr)
+			{
+				Diagnostics.Error(TEXT("DFX3030"), Document.HeaderLocation,
+					TEXT("A Module or DynamicInput must declare Settings.Usage -- it decides which stacks the module can be placed in."));
+			}
+
+			if (Document.Kind == EDocumentKind::DynamicInput)
+			{
+				if (Document.FindSetting(TEXT("Output")) == nullptr)
+				{
+					Diagnostics.Error(TEXT("DFX3031"), Document.HeaderLocation,
+						TEXT("A DynamicInput must declare Settings.Output -- its return type cannot be inferred from the body."));
+				}
+				if (Usage != nullptr && Usage->Value.IsValid()
+					&& !Usage->Value->Text.Equals(TEXT("DynamicInput"), ESearchCase::IgnoreCase))
+				{
+					Diagnostics.Error(TEXT("DFX3032"), Usage->Location,
+						FString::Printf(TEXT("A DynamicInput's Usage must be DynamicInput, not '%s'."),
+							*Usage->Value->Text));
+				}
+			}
+
+			TSet<FString> SeenInputs;
+			for (const FParameterDecl& Input : Document.Parameters)
+			{
+				if (SeenInputs.Contains(Input.Name))
+				{
+					Diagnostics.Error(TEXT("DFX3033"), Input.Location,
+						FString::Printf(TEXT("Input '%s' is declared more than once."), *Input.Name));
+				}
+				SeenInputs.Add(Input.Name);
+
+				// R5: a static switch is resolved at compile time, so its value has to be a compile-time
+				// constant and its type has to be something a switch can branch on.
+				if (Input.HasAttribute(TEXT("StaticSwitch")))
+				{
+					const bool bSwitchable =
+						Input.TypeName.Equals(TEXT("bool"), ESearchCase::IgnoreCase)
+						|| Input.TypeName.Equals(TEXT("int"), ESearchCase::IgnoreCase)
+						|| Input.TypeName.Equals(TEXT("int32"), ESearchCase::IgnoreCase);
+					if (!bSwitchable)
+					{
+						Diagnostics.Error(TEXT("DFX3034"), Input.Location,
+							FString::Printf(TEXT("Input '%s' is marked [StaticSwitch] but is a %s. A static switch must be a bool, an int or an enum."),
+								*Input.Name, *Input.TypeName));
+					}
+					if (Input.DefaultValue.IsValid() && !Input.DefaultValue->IsLiteral())
+					{
+						Diagnostics.Error(TEXT("DFX3035"), Input.Location,
+							FString::Printf(TEXT("Input '%s' is a [StaticSwitch], so its default must be a compile-time constant."),
+								*Input.Name));
+					}
+				}
+			}
+
+			if (Document.Body.TrimStartAndEnd().IsEmpty())
+			{
+				Diagnostics.Error(TEXT("DFX3036"), Document.BodyLocation, TEXT("The Body block is empty."));
+			}
+		}
+	}
+
 	void FLint::Run(const FDocument& Document, FDiagnosticSink& Diagnostics)
 	{
 		Diagnostics.SetFile(Document.SourceFilePath);
 
-		if (Document.Kind == EDocumentKind::System)
+		switch (Document.Kind)
 		{
+		case EDocumentKind::System:
 			for (const FEmitter& Emitter : Document.Emitters)
 			{
 				LintEmitter(Emitter, Diagnostics);
 			}
-		}
-		else if (Document.Kind == EDocumentKind::Emitter)
-		{
+			break;
+
+		case EDocumentKind::Emitter:
 			LintEmitter(Document.EmitterDefinition, Diagnostics);
+			break;
+
+		case EDocumentKind::Module:
+		case EDocumentKind::DynamicInput:
+			LintModuleDocument(Document, Diagnostics);
+			break;
 		}
 	}
 }
