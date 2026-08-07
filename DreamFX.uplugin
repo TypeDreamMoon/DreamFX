@@ -11,12 +11,23 @@
 	"MarketplaceURL": "",
 	"SupportURL": "https://github.com/TypeDreamMoon",
 	"Copyright": "Copyright (c) 2026 TypeDreamMoon. All rights reserved.",
-	"EnabledByDefault": false,
+	"EnabledByDefault": true,
 	"CanContainContent": true,
 	"IsBetaVersion": false,
 	"IsExperimentalVersion": true,
 	"Installed": false,
-	"Modules": [],
+	"Modules": [
+		{
+			"Name": "DreamFX",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "DreamFXEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	],
 	"Plugins": [
 		{
 			"Name": "Niagara",
