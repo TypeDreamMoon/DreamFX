@@ -23,11 +23,12 @@ Emitter(Name="Emitters/E_MoonFlashCard", Root="Plugin.DreamFX")
     }
 
     ParticleSpawn = {
-        Spawn/Initialization/InitializeParticle(
-            WriteLifetime   = true,
-            Lifetime        = 0.12,
-            WriteSpriteSize = true,
-            SpriteSize      = (48.0, 48.0)
+        // V2: the plain Spawn/Initialization/InitializeParticle is deprecated.
+        Spawn/Initialization/V2/InitializeParticle(
+            LifetimeMode       = DirectSet,
+            Lifetime           = 0.12,
+            SpriteSizeMode     = Uniform,
+            UniformSpriteSize  = 48.0
         );
         SystemLocation();
     }

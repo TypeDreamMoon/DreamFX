@@ -18,18 +18,12 @@ System(Name="Samples/NS_DreamFXPhase1", Root="Plugin.DreamFX")
 
         ParticleSpawn = {
             #Region "Initial state"
-            // Written as the DSL identifier "WriteLifetime"; the real Niagara input is "Write Lifetime".
-            Spawn/Initialization/InitializeParticle(
-                WriteLifetime   = true,
-                Lifetime        = 0.75,
-                WriteColor      = true,
-                Color           = (1.0, 0.72, 0.25, 1.0),
-                WriteSpriteSize = true,
-                SpriteSize      = (6.0, 6.0)
-            );
-            #EndRegion
-
+            // No InitializeParticle here on purpose: the current V2 module gates its value inputs
+            // behind mode enums, and this file is deliberately restricted to the Phase 1 feature
+            // set -- module calls with literal inputs and nothing else. NS_ToonHitSpark.dfs shows
+            // the full form.
             SystemLocation(Offset = (0, 0, 0));
+            #EndRegion
         }
 
         ParticleUpdate = {

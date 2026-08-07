@@ -53,13 +53,19 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
 
         ParticleSpawn = {
             #Region "Initial state"
-            Spawn/Initialization/InitializeParticle(
-                WriteLifetime   = true,
-                Lifetime        = 0.4,
-                WriteColor      = true,
-                Color           = User.TintA,
-                WriteSpriteSize = true,
-                SpriteSize      = (6.0, 6.0)
+            // V2, not the older sibling: the plain Spawn/Initialization/InitializeParticle is
+            // deprecated, which the editor reports as a DFX6004 stack issue. The partial path is
+            // anchored at the end, so it selects V2 and nothing else.
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode   = Random,
+                LifetimeMin    = 0.25,
+                LifetimeMax    = 0.55,
+                ColorMode      = RandomRange,
+                ColorMinimum   = User.TintB,
+                ColorMaximum   = User.TintA,
+                SpriteSizeMode = RandomUniform,
+                UniformSpriteSizeMin = 3.0,
+                UniformSpriteSizeMax = 9.0
             );
             #EndRegion
 

@@ -12,6 +12,7 @@
 
 #include "Dom/JsonObject.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "Serialization/JsonSerializer.h"
@@ -666,6 +667,15 @@ namespace UE::DreamFX::Editor
 		{
 			FModuleLibrary& Modules = *Context.Modules;
 			const FString& DefaultRoot = Context.DefaultRoot;
+
+			// A merged emitter's stacks can come from a different file than the document being built,
+			// and a line number reported against the wrong path is worse than no line number.
+			const FString PreviousFile = Diagnostics.GetFile();
+			if (!Stack.SourceFile.IsEmpty() && Stack.SourceFile != PreviousFile)
+			{
+				Diagnostics.SetFile(Stack.SourceFile);
+			}
+			ON_SCOPE_EXIT { Diagnostics.SetFile(PreviousFile); };
 			OutStack.Kind = Stack.Kind;
 			OutStack.Location = Stack.Location;
 			OutStack.ScriptName = FNiagaraAdapter::ScriptNameForStack(Stack.Kind);

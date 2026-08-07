@@ -1426,7 +1426,26 @@ namespace UE::DreamFX
 		}
 
 		FParserImpl Impl(SourceText, Diagnostics);
-		return Impl.ParseDocument(OutDocument) && !Diagnostics.HasErrors();
+		const bool bParsed = Impl.ParseDocument(OutDocument);
+
+		// Stamped here rather than threaded through every ParseStackBlock call: the parser has no
+		// business knowing about paths, and a merged emitter needs this to report the right file.
+		auto StampStacks = [&OutDocument](TArray<FStack>& Stacks)
+		{
+			for (FStack& Stack : Stacks)
+			{
+				Stack.SourceFile = OutDocument.SourceFilePath;
+			}
+		};
+
+		StampStacks(OutDocument.Stacks);
+		StampStacks(OutDocument.EmitterDefinition.Stacks);
+		for (FEmitter& Emitter : OutDocument.Emitters)
+		{
+			StampStacks(Emitter.Stacks);
+		}
+
+		return bParsed && !Diagnostics.HasErrors();
 	}
 
 	bool FParser::ParseFile(const FString& FilePath, FDocument& OutDocument, FDiagnosticSink& Diagnostics)

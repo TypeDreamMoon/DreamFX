@@ -237,6 +237,15 @@ namespace UE::DreamFX
 		FString Name;
 		TArray<FStatement> Statements;
 		FSourceLocation Location;
+
+		/**
+		 * The file these statements were parsed from.
+		 *
+		 * Carried per stack because a `from "..."` emitter merges stacks out of two files, and a
+		 * diagnostic reporting a .dfe's line number against the .dfs's path sends the reader to the
+		 * wrong place entirely.
+		 */
+		FString SourceFile;
 	};
 
 	struct FEmitter
