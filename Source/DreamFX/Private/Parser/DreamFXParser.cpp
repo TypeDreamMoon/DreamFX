@@ -774,6 +774,19 @@ namespace UE::DreamFX
 			Statement.Location = Token.Location;
 			Statement.Region = RegionStack.Num() > 0 ? RegionStack.Last() : FString();
 
+			// `float Particles.X = ...` -- a type followed by a name. Unambiguous inside a stack: a
+			// module call is followed by '(' and a bare assignment by '.' or '=', never by another
+			// identifier. `DI<X> Name` is picked up by the '<' too.
+			if (Token.Kind == ETokenKind::Identifier
+				&& (Lexer.Peek(1).Kind == ETokenKind::Identifier || Lexer.Peek(1).IsSymbol(TEXT("<"))))
+			{
+				if (!ParseTypeName(Statement.TypeName, Statement.InnerTypeName))
+				{
+					SkipToStatementEnd();
+					return false;
+				}
+			}
+
 			FSourceLocation NameLocation;
 			if (!ParseQualifiedName(Statement.Name, NameLocation))
 			{
@@ -831,6 +844,14 @@ namespace UE::DreamFX
 				ErrorAtCurrent(TEXT("DFX2009"),
 					FString::Printf(TEXT("Expected '(' to call module '%s' or '=' to assign to it."), *Statement.Name));
 				SkipToStatementEnd();
+				return false;
+			}
+
+			if (!Statement.TypeName.IsEmpty() && Statement.Kind != EStatementKind::Assignment)
+			{
+				Diagnostics.Error(TEXT("DFX2023"), Statement.Location,
+					FString::Printf(TEXT("'%s' is a module call, so it cannot be given a type. Types are written only on assignments."),
+						*Statement.Name));
 				return false;
 			}
 

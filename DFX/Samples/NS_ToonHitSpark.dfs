@@ -1,13 +1,17 @@
-// The plan document's section 3.1 example, minus the two features it does not yet have:
-// dynamic input calls and `hlsl { }` blocks. Those arrive in Phase 3 and this file grows to match.
+// The plan document's section 3.1 example, in full: dynamic inputs, nested chains, inline
+// expressions, `hlsl { }` and a `curve { }` literal with tangents.
 //
-// Deliberate departures from the plan text, both of which the compiler now catches:
+// Deliberate departures from the plan text, each one something the compiler now catches:
 //
 //   * SparkCount is declared `int`, not `float`. It drives SpawnBurst's SpawnCount, which is an
 //     int32, and a link binds a parameter directly with no conversion step -- a float parameter on
 //     an int input is the narrowing L7 exists to refuse. DFX4027 reports it.
 //   * The static switch that gates an input is written before the input it gates. Source order is
 //     write order, so `LoopBehavior = Once` has to precede `LoopDuration`.
+//   * The Particles.Color.a block is a single expression. A stack input's custom HLSL lowers to a
+//     node with one typed output pin and no body to hold statements in, so the plan's
+//     `float Flicker = ...; return ...;` form cannot compile. Multi-statement logic belongs in a
+//     .dfm DynamicInput; DFX4030 says so at the point of use.
 System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
 {
     Settings = {
@@ -64,7 +68,10 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
             AddVelocityInCone(
                 ConeAxis         = User.HitNormal,
                 ConeAngle        = 55.0,
-                VelocityStrength = User.SparkSpeed
+                // A dynamic input whose own inputs are inline expressions -- the whole chain is one
+                // nested write path, resolved before anything is mutated.
+                VelocityStrength = RandomRangeFloat(Minimum = User.SparkSpeed * 0.6,
+                                                    Maximum = User.SparkSpeed)
             );
 
             // Consecutive assignments fold into a single Set Parameters module (L2). A new
@@ -77,6 +84,30 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
             GravityForce(Gravity = (0, 0, -680));
             DragForce(Drag = 1.4);
             SolveForcesAndVelocity();
+
+            ScaleSpriteSize(
+                // Selects which of the module's scale inputs exist at all; must precede the one used.
+                ScaleSpriteSizeMode = Uniform,
+                // A curve literal fills the curve data interface the dynamic input reads from.
+                // Tangents are written out per key, so a hand-tuned shape survives a round trip.
+                UniformScaleFactor = FloatFromCurve(
+                    FloatCurve = curve {
+                        0.0 -> 1.0;
+                        0.7 -> 0.85 [ Interp=Cubic; Arrive=-0.4; Leave=-1.2 ];
+                        1.0 -> 0.0  [ Interp=Linear ];
+                    },
+                    CurveIndex = Particles.NormalizedAge
+                )
+            );
+
+            // The HLSL escape hatch: a single rvalue, reading parameters by their namespaced names.
+            // The type is written out because an hlsl block carries none of its own -- inference
+            // works for literals and nothing else.
+            Color Particles.Color = hlsl {
+                float4(Particles.Color.rgb,
+                       saturate(1.0 - Particles.NormalizedAge)
+                           * (0.6 + 0.4 * frac(Particles.Moon.SparkSeed * 37.0 + Engine.Time * 24.0)))
+            };
         }
 
         SpriteRenderer Core

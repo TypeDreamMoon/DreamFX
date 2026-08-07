@@ -1,6 +1,7 @@
 #include "DreamFXGenerator.h"
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
+#include "DreamFXExpressions.h"
 #include "DreamFXModule.h"
 #include "DreamFXParser.h"
 #include "DreamFXProvenance.h"
@@ -20,10 +21,17 @@ namespace UE::DreamFX::Editor
 {
 	namespace
 	{
-		/** A module call resolved against its schema, with every input already lowered. */
+		/**
+		 * One resolved write, addressed by its input-name path relative to the owning module.
+		 *
+		 * A path rather than a name because a dynamic input chain is just a deeper address:
+		 * `SpriteSizeMin = ToonPulse(Frequency = RandomRangeFloat(Min = 1))` becomes three writes at
+		 * [SpriteSizeMin], [SpriteSizeMin, Frequency] and [SpriteSizeMin, Frequency, Min]. Written in
+		 * that order, each level exists before the next one addresses through it.
+		 */
 		struct FPlannedInput
 		{
-			FName Name;
+			TArray<FName> Path;
 			FInputValue Value;
 			FSourceLocation Location;
 		};
@@ -35,6 +43,9 @@ namespace UE::DreamFX::Editor
 			FNiagaraTypeDefinition Type;
 			FInputValue Value;
 			FSourceLocation Location;
+
+			/** Writes below the entry itself: the dynamic input chain hanging off it, if any. */
+			TArray<FPlannedInput> NestedInputs;
 		};
 
 		struct FPlannedModule
@@ -507,6 +518,149 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
+		/**
+		 * Resolves one value into the flat list of writes it needs, recursing through dynamic input
+		 * chains. Nothing is written here -- this is still the plan phase.
+		 */
+		bool PlanInputValue(const FValue& Value, const FNiagaraTypeDefinition& TargetType,
+			const TArray<FName>& Path, const FString& DisplayName, const FStackContext& Context,
+			FDiagnosticSink& Diagnostics, TArray<FPlannedInput>& OutInputs, TArray<FString>& OutDependencies)
+		{
+			auto Emit = [&OutInputs, &Path, &Value](FInputValue&& InputValue)
+			{
+				FPlannedInput Planned;
+				Planned.Path = Path;
+				Planned.Value = MoveTemp(InputValue);
+				Planned.Location = Value.Location;
+				OutInputs.Add(MoveTemp(Planned));
+			};
+
+			if (Value.Kind == EValueKind::Hlsl)
+			{
+				FString Hlsl;
+				if (!FExpressions::PrepareRawBlock(Value, DisplayName, Diagnostics, Hlsl))
+				{
+					return false;
+				}
+				Emit(FInputValue::MakeHlsl(Hlsl));
+				return true;
+			}
+
+			if (Value.Kind == EValueKind::Curve)
+			{
+				FString Json;
+				if (!FExpressions::RenderCurve(Value, TargetType, DisplayName, Diagnostics, Json))
+				{
+					return false;
+				}
+				Emit(FInputValue::MakeDataInterface(TargetType.GetClass(), Json));
+				return true;
+			}
+
+			// L6: arithmetic and builtin calls collapse into one HLSL expression rather than growing an
+			// operator-node backend.
+			if (FExpressions::RequiresHlslLowering(Value))
+			{
+				FString Hlsl;
+				if (!FExpressions::Render(Value, TargetType, DisplayName, Diagnostics, Hlsl))
+				{
+					return false;
+				}
+				Emit(FInputValue::MakeHlsl(Hlsl));
+				return true;
+			}
+
+			if (Value.Kind == EValueKind::Call)
+			{
+				FString Error;
+				UNiagaraScript* DynamicInput = Context.Modules->FindDynamicInput(Value.Text, Error);
+				if (DynamicInput == nullptr)
+				{
+					Diagnostics.Error(TEXT("DFX3006"), Value.Location,
+						FString::Printf(TEXT("'%s' is neither an allowed inline function (%s) nor a dynamic input: %s"),
+							*Value.Text, *FExpressions::ListBuiltins(), *Error));
+					return false;
+				}
+				OutDependencies.AddUnique(DynamicInput->GetPathName());
+
+				const FModuleSchema* Schema = Context.Modules->GetDynamicInputSchema(DynamicInput, Error);
+				if (Schema == nullptr)
+				{
+					Diagnostics.Error(TEXT("DFX3007"), Value.Location,
+						FString::Printf(TEXT("Could not read the input schema of dynamic input '%s': %s"),
+							*Value.Text, *Error));
+					return false;
+				}
+
+				if (Value.Elements.Num() > 0)
+				{
+					Diagnostics.Error(TEXT("DFX2008"), Value.Elements[0]->Location,
+						FString::Printf(TEXT("Dynamic input '%s' was given a positional argument. Its inputs must be written as 'Name = Value'."),
+							*Value.Text));
+					return false;
+				}
+
+				// The chain node itself is written before its children, because addressing a child
+				// means addressing *through* the node that owns it.
+				Emit(FInputValue::MakeDynamicInput(DynamicInput));
+
+				bool bOk = true;
+				TSet<FName> Seen;
+				for (const FNamedArgument& Argument : Value.Arguments)
+				{
+					const FInputSchema* InputSchema = Schema->FindInputByIdentifier(Argument.Name);
+					if (InputSchema == nullptr)
+					{
+						TArray<FString> Available;
+						for (const FInputSchema& Candidate : Schema->Inputs)
+						{
+							Available.Add(ToInputIdentifier(Candidate.Name));
+						}
+						Diagnostics.Error(TEXT("DFX3008"), Argument.Location,
+							FString::Printf(TEXT("Dynamic input '%s' has no input named '%s'. Available inputs: %s"),
+								*Value.Text, *Argument.Name,
+								Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(none)")));
+						bOk = false;
+						continue;
+					}
+
+					if (Seen.Contains(InputSchema->Name))
+					{
+						Diagnostics.Error(TEXT("DFX4010"), Argument.Location,
+							FString::Printf(TEXT("Input '%s' is set more than once on dynamic input '%s'."),
+								*Argument.Name, *Value.Text));
+						bOk = false;
+						continue;
+					}
+					Seen.Add(InputSchema->Name);
+
+					TArray<FName> ChildPath = Path;
+					ChildPath.Add(InputSchema->Name);
+
+					if (!Argument.Value.IsValid()
+						|| !PlanInputValue(*Argument.Value, InputSchema->Type, ChildPath,
+							FString::Printf(TEXT("%s.%s"), *Value.Text, *Argument.Name),
+							Context, Diagnostics, OutInputs, OutDependencies))
+					{
+						bOk = false;
+					}
+				}
+				return bOk;
+			}
+
+			FInputValue Lowered;
+			if (!FValueLowering::Lower(Value, TargetType, DisplayName, Diagnostics, Lowered))
+			{
+				return false;
+			}
+			if (!ValidateLinkedType(Lowered, TargetType, Context, DisplayName, Value.Location, Diagnostics))
+			{
+				return false;
+			}
+			Emit(MoveTemp(Lowered));
+			return true;
+		}
+
 		bool PlanStack(const FStack& Stack, const FStackContext& Context,
 			FDiagnosticSink& Diagnostics, FPlannedStack& OutStack, TArray<FString>& OutDependencies)
 		{
@@ -552,7 +706,24 @@ namespace UE::DreamFX::Editor
 					}
 
 					FNiagaraTypeDefinition TargetType;
-					if (const FNiagaraTypeDefinition* Existing = Context.DeclaredAttributes
+					if (!Statement.TypeName.IsEmpty())
+					{
+						// An explicit type wins over both the running declaration map and inference:
+						// writing it is the author saying what this attribute is.
+						FParameterDecl AsDeclaration;
+						AsDeclaration.TypeName = Statement.TypeName;
+						AsDeclaration.InnerTypeName = Statement.InnerTypeName;
+						AsDeclaration.Name = Statement.Name;
+						AsDeclaration.Location = Statement.Location;
+
+						bool bIsDataInterface = false;
+						if (!FValueLowering::ResolveDeclaredType(AsDeclaration, Diagnostics, TargetType, bIsDataInterface))
+						{
+							bOk = false;
+							continue;
+						}
+					}
+					else if (const FNiagaraTypeDefinition* Existing = Context.DeclaredAttributes
 						? Context.DeclaredAttributes->Find(TargetName) : nullptr)
 					{
 						TargetType = *Existing;
@@ -567,10 +738,26 @@ namespace UE::DreamFX::Editor
 					Parameter.Name = TargetName;
 					Parameter.Type = TargetType;
 					Parameter.Location = Statement.Location;
-					if (!FValueLowering::Lower(*Statement.Value, TargetType, Statement.Name, Diagnostics, Parameter.Value))
+
+					// Planned as writes addressed from the Set Parameters module: the entry itself at
+					// [Name], and anything a dynamic input chain hangs below it at deeper paths.
+					TArray<FPlannedInput> Writes;
+					if (!PlanInputValue(*Statement.Value, TargetType, { TargetName }, Statement.Name,
+						Context, Diagnostics, Writes, OutDependencies))
 					{
 						bOk = false;
 						continue;
+					}
+
+					// The first write is the entry's own value; it may be able to ride along on the
+					// module create call. Everything deeper always has to be written afterwards.
+					if (Writes.Num() > 0)
+					{
+						Parameter.Value = Writes[0].Value;
+						for (int32 Index = 1; Index < Writes.Num(); ++Index)
+						{
+							Parameter.NestedInputs.Add(Writes[Index]);
+						}
 					}
 
 					if (Context.DeclaredAttributes != nullptr)
@@ -672,25 +859,12 @@ namespace UE::DreamFX::Editor
 						continue;
 					}
 
-					FPlannedInput PlannedInput;
-					PlannedInput.Name = InputSchema->Name;
-					PlannedInput.Location = Argument.Location;
-					const FString DisplayName = DescribeInput(Statement.Name, Argument.Name);
-					if (!FValueLowering::Lower(*Argument.Value, InputSchema->Type,
-						DisplayName, Diagnostics, PlannedInput.Value))
+					if (!PlanInputValue(*Argument.Value, InputSchema->Type, { InputSchema->Name },
+						DescribeInput(Statement.Name, Argument.Name), Context, Diagnostics,
+						Planned.Inputs, OutDependencies))
 					{
 						bOk = false;
-						continue;
 					}
-
-					if (!ValidateLinkedType(PlannedInput.Value, InputSchema->Type, Context,
-						DisplayName, Argument.Location, Diagnostics))
-					{
-						bOk = false;
-						continue;
-					}
-
-					Planned.Inputs.Add(MoveTemp(PlannedInput));
 				}
 
 				OutStack.Modules.Add(MoveTemp(Planned));
@@ -1072,15 +1246,25 @@ namespace UE::DreamFX::Editor
 					const FStackAddress ModuleAddress = OwnerAddress.WithScript(Stack.ScriptName).WithModule(AddedName);
 					for (const FPlannedSetParameter& Parameter : Module.Parameters)
 					{
-						if (Parameter.Value.Mode == EInputValueMode::Literal || Parameter.Value.Mode == EInputValueMode::Enum)
+						if (Parameter.Value.Mode != EInputValueMode::Literal && Parameter.Value.Mode != EInputValueMode::Enum)
 						{
-							continue;
+							Errors.Reset();
+							if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Parameter.Name), Parameter.Value, Errors))
+							{
+								ReportAdapterErrors(Errors, TEXT("DFX5025"), Parameter.Location, Diagnostics);
+								bOk = false;
+								continue;
+							}
 						}
-						Errors.Reset();
-						if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Parameter.Name), Parameter.Value, Errors))
+
+						for (const FPlannedInput& Nested : Parameter.NestedInputs)
 						{
-							ReportAdapterErrors(Errors, TEXT("DFX5025"), Parameter.Location, Diagnostics);
-							bOk = false;
+							Errors.Reset();
+							if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInputPath(Nested.Path), Nested.Value, Errors))
+							{
+								ReportAdapterErrors(Errors, TEXT("DFX5025"), Nested.Location, Diagnostics);
+								bOk = false;
+							}
 						}
 					}
 					continue;
@@ -1099,7 +1283,7 @@ namespace UE::DreamFX::Editor
 				for (const FPlannedInput& Input : Module.Inputs)
 				{
 					Errors.Reset();
-					if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Input.Name), Input.Value, Errors))
+					if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInputPath(Input.Path), Input.Value, Errors))
 					{
 						ReportAdapterErrors(Errors, TEXT("DFX5021"), Input.Location, Diagnostics);
 						bOk = false;

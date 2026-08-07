@@ -17,6 +17,7 @@ public class DreamFXEditor : ModuleRules
 				"AssetTools",
 				"Core",
 				"CoreUObject",
+				"DirectoryWatcher",
 				"DreamFX",
 				"Engine",
 				"Json",

@@ -185,6 +185,17 @@ namespace UE::DreamFX
 		/** Module name or path for ModuleCall; fully qualified assignment target otherwise. */
 		FString Name;
 
+		/**
+		 * Optional type on an assignment: `float Particles.Moon.Flicker = hlsl { ... }`.
+		 *
+		 * L2 types a new attribute from its right-hand side, which works for literals and stops
+		 * working the moment the value is an expression, an hlsl block or a dynamic input -- none of
+		 * which carry a type of their own. Writing the type is how an author says what they meant,
+		 * instead of the compiler guessing.
+		 */
+		FString TypeName;
+		FString InnerTypeName;
+
 		/** R7 `ModuleName@Version` pin. Empty when unpinned. */
 		FString VersionPin;
 
