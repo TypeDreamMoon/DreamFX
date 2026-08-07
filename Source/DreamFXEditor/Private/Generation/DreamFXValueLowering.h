@@ -28,5 +28,24 @@ namespace UE::DreamFX::Editor
 
 		/** Human-readable type name for diagnostics. */
 		static FString DescribeType(const FNiagaraTypeDefinition& Type);
+
+		/**
+		 * Resolves a `Properties = {}` / `Inputs = {}` type name to a Niagara type.
+		 * `DI<X>` and `Texture2D` resolve to data interface types; bOutIsDataInterface reports that,
+		 * because those can only be declared in v1, not given a value (plan 3.5).
+		 */
+		static bool ResolveDeclaredType(const FParameterDecl& Declaration, FDiagnosticSink& Diagnostics,
+			FNiagaraTypeDefinition& OutType, bool& bOutIsDataInterface);
+
+		/**
+		 * Infers the Niagara type of an assignment's right-hand side, for L2's "first write declares"
+		 * rule. Fails (with a diagnostic) when the value carries no type of its own -- a bare linked
+		 * reference, for instance, whose type lives on the thing it points at.
+		 */
+		static bool InferType(const FValue& Value, const FString& TargetName, FDiagnosticSink& Diagnostics,
+			FNiagaraTypeDefinition& OutType);
+
+		/** True when the first segment of a dotted name is a Niagara parameter namespace. */
+		static bool IsNamespacedName(const FString& Name);
 	};
 }

@@ -283,6 +283,22 @@ namespace UE::DreamFX::Editor
 		static bool SetInput(const FStackAddress& InputAddress, const FInputValue& Value, TArray<FString>& OutErrors);
 		static bool SetRendererProperties(const FStackAddress& RendererAddress, const FString& PropertiesJson,
 			TArray<FString>& OutErrors);
+
+		/**
+		 * Points a renderer's attribute binding at a parameter: `Bind SpriteSize -> Particles.SpriteSize`.
+		 *
+		 * Not routed through SetRendererProperties because FNiagaraVariableAttributeBinding is a
+		 * derived struct -- writing its serialised fields as JSON would leave the cached display name,
+		 * data-set name and source-mode flags inconsistent. Its own SetValue() recomputes all of them,
+		 * so the property is found by reflection and that function is called instead.
+		 *
+		 * @param BindingName  the DSL-facing name, e.g. "SpriteSize"; the "Binding" suffix is optional
+		 */
+		static bool SetRendererBinding(const FStackAddress& RendererAddress, const FString& BindingName,
+			FName TargetParameter, TArray<FString>& OutErrors);
+
+		/** Every attribute binding a renderer class exposes, in DSL spelling. For error messages. */
+		static void ListRendererBindings(const UClass* RendererClass, TArray<FString>& OutNames);
 		static bool SetEmitterProperties(const FStackAddress& EmitterAddress, const FString& PropertiesJson,
 			TArray<FString>& OutErrors);
 		static bool SetSystemProperties(UNiagaraSystem* System, const FString& PropertiesJson,

@@ -5,6 +5,7 @@
 #include "NiagaraCommon.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraEmitter.h"
+#include "NiagaraEmitterHandle.h"
 #include "NiagaraEmitterFactoryNew.h"
 #include "NiagaraExternalSystemEditorUtilities.h"
 #include "NiagaraRendererProperties.h"
@@ -812,6 +813,116 @@ namespace UE::DreamFX::Editor
 		Data.PropertyValues = PropertiesJson;
 		UNiagaraExternalEditUtilities::SetRendererData(ToReference(RendererAddress), Data, Context);
 		return Drain(Context, OutErrors);
+	}
+
+	namespace
+	{
+		/** The renderer at RendererIndex on the addressed emitter, or null. */
+		UNiagaraRendererProperties* ResolveRenderer(const FStackAddress& Address, FNiagaraEmitterHandle*& OutHandle)
+		{
+			OutHandle = nullptr;
+			if (Address.System == nullptr)
+			{
+				return nullptr;
+			}
+
+			for (FNiagaraEmitterHandle& Handle : Address.System->GetEmitterHandles())
+			{
+				if (Handle.GetName() != Address.EmitterName)
+				{
+					continue;
+				}
+				OutHandle = &Handle;
+				FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+				if (Data == nullptr)
+				{
+					return nullptr;
+				}
+				const TArray<UNiagaraRendererProperties*>& Renderers = Data->GetRenderers();
+				return Renderers.IsValidIndex(Address.RendererIndex) ? Renderers[Address.RendererIndex] : nullptr;
+			}
+			return nullptr;
+		}
+
+		/** Finds the FNiagaraVariableAttributeBinding property a DSL binding name refers to. */
+		FStructProperty* FindBindingProperty(const UClass* RendererClass, const FString& BindingName)
+		{
+			const FString WithSuffix = BindingName.EndsWith(TEXT("Binding"), ESearchCase::IgnoreCase)
+				? BindingName
+				: BindingName + TEXT("Binding");
+
+			for (TFieldIterator<FStructProperty> It(RendererClass); It; ++It)
+			{
+				if (It->Struct != FNiagaraVariableAttributeBinding::StaticStruct())
+				{
+					continue;
+				}
+				const FString PropertyName = It->GetName();
+				if (PropertyName.Equals(WithSuffix, ESearchCase::IgnoreCase)
+					|| PropertyName.Equals(BindingName, ESearchCase::IgnoreCase))
+				{
+					return *It;
+				}
+			}
+			return nullptr;
+		}
+	}
+
+	void FNiagaraAdapter::ListRendererBindings(const UClass* RendererClass, TArray<FString>& OutNames)
+	{
+		if (RendererClass == nullptr)
+		{
+			return;
+		}
+		for (TFieldIterator<FStructProperty> It(RendererClass); It; ++It)
+		{
+			if (It->Struct != FNiagaraVariableAttributeBinding::StaticStruct())
+			{
+				continue;
+			}
+			FString Name = It->GetName();
+			Name.RemoveFromEnd(TEXT("Binding"), ESearchCase::CaseSensitive);
+			OutNames.Add(Name);
+		}
+		OutNames.Sort();
+	}
+
+	bool FNiagaraAdapter::SetRendererBinding(const FStackAddress& RendererAddress, const FString& BindingName,
+		FName TargetParameter, TArray<FString>& OutErrors)
+	{
+		FNiagaraEmitterHandle* Handle = nullptr;
+		UNiagaraRendererProperties* Renderer = ResolveRenderer(RendererAddress, Handle);
+		if (Renderer == nullptr || Handle == nullptr)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Could not resolve renderer %d on emitter '%s'."),
+				RendererAddress.RendererIndex, *RendererAddress.EmitterName.ToString()));
+			return false;
+		}
+
+		FStructProperty* BindingProperty = FindBindingProperty(Renderer->GetClass(), BindingName);
+		if (BindingProperty == nullptr)
+		{
+			TArray<FString> Available;
+			ListRendererBindings(Renderer->GetClass(), Available);
+			OutErrors.Add(FString::Printf(
+				TEXT("%s has no attribute binding named '%s'. Available bindings: %s"),
+				*Renderer->GetClass()->GetName(), *BindingName,
+				Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(none)")));
+			return false;
+		}
+
+		Renderer->Modify();
+
+		FNiagaraVariableAttributeBinding* Binding =
+			BindingProperty->ContainerPtrToValuePtr<FNiagaraVariableAttributeBinding>(Renderer);
+		Binding->SetValue(TargetParameter, Handle->GetInstance(), Renderer->GetCurrentSourceMode());
+
+		// The renderer caches derived state off its bindings; without this the change is invisible to
+		// the compiled system until something else happens to trigger a refresh.
+		FPropertyChangedEvent PropertyChangedEvent(BindingProperty, EPropertyChangeType::ValueSet);
+		Renderer->PostEditChangeProperty(PropertyChangedEvent);
+		return true;
 	}
 
 	bool FNiagaraAdapter::SetEmitterProperties(const FStackAddress& EmitterAddress, const FString& PropertiesJson,

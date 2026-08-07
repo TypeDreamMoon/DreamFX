@@ -1,0 +1,25 @@
+// Lint corpus: every rule in the first batch should fire exactly once on this file.
+//
+// Expected:
+//   DFX7101  GPU emitter with no FixedBounds
+//   DFX7102  rate-based spawning with no allocation cap
+//   DFX7103  randomness with no Determinism
+System(Name="Corpus/NS_LintWarnings", Root="Plugin.DreamFX")
+{
+    Emitter Smoke
+    {
+        Settings = {
+            SimTarget = GPU;
+        }
+
+        EmitterUpdate = {
+            EmitterState();
+            SpawnRate(SpawnRate = 50.0);
+        }
+
+        ParticleSpawn = {
+            AddVelocityFromPoint(VelocityStrength = 100.0);
+            RandomVectorRange();
+        }
+    }
+}

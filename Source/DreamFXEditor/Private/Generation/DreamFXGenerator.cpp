@@ -5,6 +5,7 @@
 #include "DreamFXParser.h"
 #include "DreamFXProvenance.h"
 #include "DreamFXValueLowering.h"
+#include "Lint/DreamFXLint.h"
 #include "Schema/DreamFXModuleLibrary.h"
 #include "SourceFiles/DreamFXPaths.h"
 
@@ -27,12 +28,25 @@ namespace UE::DreamFX::Editor
 			FSourceLocation Location;
 		};
 
+		/** One entry of a folded Set Parameters module (L2). */
+		struct FPlannedSetParameter
+		{
+			FName Name;
+			FNiagaraTypeDefinition Type;
+			FInputValue Value;
+			FSourceLocation Location;
+		};
+
 		struct FPlannedModule
 		{
 			FString SourceName;
 			UNiagaraScript* Asset = nullptr;
 			TArray<FPlannedInput> Inputs;
 			FSourceLocation Location;
+
+			/** When true this is a Set Parameters module and Parameters holds its entries. */
+			bool bIsSetParameters = false;
+			TArray<FPlannedSetParameter> Parameters;
 		};
 
 		struct FPlannedStack
@@ -43,10 +57,18 @@ namespace UE::DreamFX::Editor
 			FSourceLocation Location;
 		};
 
+		struct FPlannedBinding
+		{
+			FString PropertyName;
+			FName Target;
+			FSourceLocation Location;
+		};
+
 		struct FPlannedRenderer
 		{
 			UClass* Class = nullptr;
 			FString PropertiesJson;
+			TArray<FPlannedBinding> Bindings;
 			FSourceLocation Location;
 		};
 
@@ -55,6 +77,16 @@ namespace UE::DreamFX::Editor
 			FName Name;
 			TArray<FPlannedStack> Stacks;
 			TArray<FPlannedRenderer> Renderers;
+			FString PropertiesJson;
+			FSourceLocation Location;
+		};
+
+		struct FPlannedUserVariable
+		{
+			FName Name;
+			FNiagaraTypeDefinition Type;
+			FString Description;
+			FInputValue DefaultValue;
 			FSourceLocation Location;
 		};
 
@@ -63,6 +95,8 @@ namespace UE::DreamFX::Editor
 			FString PackagePath;
 			FString AssetName;
 			FString FullAssetPath;
+			FString SystemPropertiesJson;
+			TArray<FPlannedUserVariable> UserVariables;
 			TArray<FPlannedStack> SystemStacks;
 			TArray<FPlannedEmitter> Emitters;
 			TArray<FString> ModuleDependencies;
@@ -165,12 +199,184 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
+		/**
+		 * One `Settings` key, and the asset property it drives.
+		 *
+		 * The DSL name is not always the property name: `LocalSpace` reads better than `bLocalSpace`,
+		 * and `SimTarget = CPU` reads better than `SimTarget = CPUSim`. Rather than exposing the C++
+		 * spelling, the mapping is explicit and the value aliases travel with it.
+		 */
+		struct FSettingMapping
+		{
+			const TCHAR* SourceName;
+			const TCHAR* PropertyName;
+			/** Pairs of {written, actual}, terminated by a null. Empty when no aliasing is needed. */
+			const TCHAR* const* ValueAliases;
+		};
+
+		const TCHAR* const SimTargetAliases[] = { TEXT("CPU"), TEXT("CPUSim"), TEXT("GPU"), TEXT("GPUComputeSim"), nullptr };
+		const TCHAR* const AllocationAliases[] = { TEXT("Fixed"), TEXT("FixedCount"), TEXT("Automatic"), TEXT("AutomaticEstimate"), TEXT("Manual"), TEXT("ManualEstimate"), nullptr };
+
+		const FSettingMapping SystemSettings[] =
+		{
+			{ TEXT("EffectType"),  TEXT("EffectType"),  nullptr },
+			{ TEXT("WarmupTime"),  TEXT("WarmupTime"),  nullptr },
+			{ TEXT("FixedBounds"), TEXT("FixedBounds"), nullptr },
+		};
+
+		const FSettingMapping EmitterSettings[] =
+		{
+			{ TEXT("SimTarget"),            TEXT("SimTarget"),            SimTargetAliases },
+			{ TEXT("LocalSpace"),           TEXT("bLocalSpace"),          nullptr },
+			{ TEXT("Determinism"),          TEXT("bDeterminism"),         nullptr },
+			{ TEXT("RandomSeed"),           TEXT("RandomSeed"),           nullptr },
+			{ TEXT("AllocationMode"),       TEXT("AllocationMode"),       AllocationAliases },
+			{ TEXT("PreAllocationCount"),   TEXT("PreAllocationCount"),   nullptr },
+			{ TEXT("InterpolatedSpawning"), TEXT("InterpolatedSpawnMode"), nullptr },
+			{ TEXT("CalculateBoundsMode"),  TEXT("CalculateBoundsMode"),  nullptr },
+			{ TEXT("FixedBounds"),          TEXT("FixedBounds"),          nullptr },
+			{ TEXT("Enabled"),              TEXT("bIsEnabled"),           nullptr },
+		};
+
+		/** `ModulePaths` configures DreamFX itself and never reaches the asset. */
+		bool IsGeneratorOnlySetting(const FString& Name)
+		{
+			return Name.Equals(TEXT("ModulePaths"), ESearchCase::IgnoreCase);
+		}
+
+		FString ApplyValueAlias(const TCHAR* const* Aliases, const FString& Written)
+		{
+			if (Aliases == nullptr)
+			{
+				return Written;
+			}
+			for (int32 Index = 0; Aliases[Index] != nullptr; Index += 2)
+			{
+				if (Written.Equals(Aliases[Index], ESearchCase::IgnoreCase))
+				{
+					return Aliases[Index + 1];
+				}
+			}
+			return Written;
+		}
+
+		/** `box(minX, minY, minZ, maxX, maxY, maxZ)` -> the JSON shape FBox serialises to. */
+		bool BoxCallToJson(const FValue& Value, const FString& PropertyName, FDiagnosticSink& Diagnostics,
+			TSharedPtr<FJsonValue>& OutJson)
+		{
+			if (Value.Elements.Num() != 6)
+			{
+				Diagnostics.Error(TEXT("DFX4023"), Value.Location,
+					FString::Printf(TEXT("Property '%s': box() takes 6 numbers -- minX, minY, minZ, maxX, maxY, maxZ."),
+						*PropertyName));
+				return false;
+			}
+
+			double Components[6] = {};
+			for (int32 Index = 0; Index < 6; ++Index)
+			{
+				const FValuePtr& Element = Value.Elements[Index];
+				if (!Element.IsValid() || Element->Kind != EValueKind::Number)
+				{
+					Diagnostics.Error(TEXT("DFX4023"), Value.Location,
+						FString::Printf(TEXT("Property '%s': box() argument %d is not a number."), *PropertyName, Index));
+					return false;
+				}
+				Components[Index] = Element->Number;
+			}
+
+			auto MakePoint = [](double X, double Y, double Z)
+			{
+				TSharedRef<FJsonObject> Point = MakeShared<FJsonObject>();
+				Point->SetNumberField(TEXT("X"), X);
+				Point->SetNumberField(TEXT("Y"), Y);
+				Point->SetNumberField(TEXT("Z"), Z);
+				return Point;
+			};
+
+			TSharedRef<FJsonObject> Box = MakeShared<FJsonObject>();
+			Box->SetObjectField(TEXT("Min"), MakePoint(Components[0], Components[1], Components[2]));
+			Box->SetObjectField(TEXT("Max"), MakePoint(Components[3], Components[4], Components[5]));
+			// FBox is ignored entirely unless IsValid is set; a box that reads as invalid silently does
+			// nothing, which is the worst possible failure mode for a bounds setting.
+			Box->SetNumberField(TEXT("IsValid"), 1);
+			OutJson = MakeShared<FJsonValueObject>(Box);
+			return true;
+		}
+
 		FString SerializeJsonObject(const TSharedRef<FJsonObject>& Object)
 		{
 			FString Result;
 			const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Result);
 			FJsonSerializer::Serialize(Object, Writer);
 			return Result;
+		}
+
+		/** Translates a `Settings = { }` block into the JSON blob the property writers take. */
+		bool PlanSettings(const TArray<FProperty>& Settings, TArrayView<const FSettingMapping> Mappings,
+			const FString& DefaultRoot, const TCHAR* ScopeLabel, FDiagnosticSink& Diagnostics, FString& OutJson)
+		{
+			bool bOk = true;
+			TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
+
+			for (const FProperty& Setting : Settings)
+			{
+				if (IsGeneratorOnlySetting(Setting.Name))
+				{
+					continue;
+				}
+
+				const FSettingMapping* Mapping = Mappings.FindByPredicate([&Setting](const FSettingMapping& Candidate)
+				{
+					return Setting.Name.Equals(Candidate.SourceName, ESearchCase::IgnoreCase);
+				});
+
+				if (Mapping == nullptr)
+				{
+					TArray<FString> Available;
+					for (const FSettingMapping& Candidate : Mappings)
+					{
+						Available.Add(Candidate.SourceName);
+					}
+					Diagnostics.Error(TEXT("DFX3020"), Setting.Location,
+						FString::Printf(TEXT("Unknown %s setting '%s'. Available settings: %s"),
+							ScopeLabel, *Setting.Name, *FString::Join(Available, TEXT(", "))));
+					bOk = false;
+					continue;
+				}
+
+				if (!Setting.Value.IsValid())
+				{
+					continue;
+				}
+
+				TSharedPtr<FJsonValue> Json;
+				if (Setting.Value->Kind == EValueKind::Call && Setting.Value->Text.Equals(TEXT("box"), ESearchCase::IgnoreCase))
+				{
+					if (!BoxCallToJson(*Setting.Value, Setting.Name, Diagnostics, Json))
+					{
+						bOk = false;
+						continue;
+					}
+				}
+				else if (!ValueToJson(*Setting.Value, DefaultRoot, Setting.Name, Diagnostics, Json))
+				{
+					bOk = false;
+					continue;
+				}
+
+				// Enum-shaped settings are written as friendly words; map them to the enumerator name
+				// the JSON reader expects.
+				if (Mapping->ValueAliases != nullptr && Json.IsValid() && Json->Type == EJson::String)
+				{
+					Json = MakeShared<FJsonValueString>(ApplyValueAlias(Mapping->ValueAliases, Json->AsString()));
+				}
+
+				Properties->SetField(Mapping->PropertyName, Json);
+			}
+
+			OutJson = Properties->Values.Num() > 0 ? SerializeJsonObject(Properties) : FString();
+			return bOk;
 		}
 
 		/** Builds "ModuleName.InputName" for diagnostics. */
@@ -209,9 +415,103 @@ namespace UE::DreamFX::Editor
 			return Best;
 		}
 
-		bool PlanStack(const FStack& Stack, FModuleLibrary& Modules, const FString& DefaultRoot,
+		/** Everything a stack needs from outside itself to be planned. */
+		struct FStackContext
+		{
+			FModuleLibrary* Modules = nullptr;
+			FString DefaultRoot;
+			/** Declared user parameters, so `= User.Foo` can be typed without loading the asset. */
+			const TMap<FName, FNiagaraTypeDefinition>* UserVariableTypes = nullptr;
+			/** Custom attributes already declared by an earlier assignment (L2 "first write declares"). */
+			TMap<FName, FNiagaraTypeDefinition>* DeclaredAttributes = nullptr;
+		};
+
+		/**
+		 * Types an assignment's right-hand side.
+		 *
+		 * A linked reference carries no type of its own, so it has to be looked up: user parameters
+		 * come from the Properties block, and attributes this file already assigned come from the
+		 * running declaration map. Anything else is refused rather than guessed -- a wrong guess here
+		 * produces an effect that compiles and misbehaves.
+		 */
+		bool ResolveAssignmentType(const FValue& Value, const FString& TargetName, const FStackContext& Context,
+			FDiagnosticSink& Diagnostics, FNiagaraTypeDefinition& OutType)
+		{
+			if (Value.Kind == EValueKind::Name && FValueLowering::IsNamespacedName(Value.Text))
+			{
+				const FName SourceName(*Value.Text);
+
+				if (Context.UserVariableTypes != nullptr)
+				{
+					if (const FNiagaraTypeDefinition* Found = Context.UserVariableTypes->Find(SourceName))
+					{
+						OutType = *Found;
+						return true;
+					}
+				}
+				if (Context.DeclaredAttributes != nullptr)
+				{
+					if (const FNiagaraTypeDefinition* Found = Context.DeclaredAttributes->Find(SourceName))
+					{
+						OutType = *Found;
+						return true;
+					}
+				}
+
+				Diagnostics.Error(TEXT("DFX4024"), Value.Location,
+					FString::Printf(TEXT("Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Properties, or assign a literal first so the type is explicit."),
+						*TargetName, *Value.Text, *Value.Text));
+				return false;
+			}
+
+			return FValueLowering::InferType(Value, TargetName, Diagnostics, OutType);
+		}
+
+		/**
+		 * Checks a linked parameter against the input it drives.
+		 *
+		 * A link binds a parameter straight to an input -- there is no conversion step, so the two
+		 * types must actually match. Only links whose source type DreamFX already knows (a declared
+		 * user parameter, or an attribute this file assigned) can be checked; engine attributes like
+		 * Particles.Velocity are taken on trust and Niagara's own compile catches those.
+		 */
+		bool ValidateLinkedType(const FInputValue& Value, const FNiagaraTypeDefinition& TargetType,
+			const FStackContext& Context, const FString& DisplayName, const FSourceLocation& Location,
+			FDiagnosticSink& Diagnostics)
+		{
+			if (Value.Mode != EInputValueMode::Linked)
+			{
+				return true;
+			}
+
+			const FName SourceName = Value.LinkedVariable.GetName();
+			const FNiagaraTypeDefinition* SourceType = nullptr;
+			if (Context.UserVariableTypes != nullptr)
+			{
+				SourceType = Context.UserVariableTypes->Find(SourceName);
+			}
+			if (SourceType == nullptr && Context.DeclaredAttributes != nullptr)
+			{
+				SourceType = Context.DeclaredAttributes->Find(SourceName);
+			}
+			if (SourceType == nullptr || *SourceType == TargetType)
+			{
+				return true;
+			}
+
+			Diagnostics.Error(TEXT("DFX4027"), Location,
+				FString::Printf(TEXT("'%s' is %s, but '%s' is %s. Linking binds a parameter directly -- there is no conversion. Declare '%s' as %s, or drive the input another way."),
+					*SourceName.ToString(), *FValueLowering::DescribeType(*SourceType),
+					*DisplayName, *FValueLowering::DescribeType(TargetType),
+					*SourceName.ToString(), *FValueLowering::DescribeType(TargetType)));
+			return false;
+		}
+
+		bool PlanStack(const FStack& Stack, const FStackContext& Context,
 			FDiagnosticSink& Diagnostics, FPlannedStack& OutStack, TArray<FString>& OutDependencies)
 		{
+			FModuleLibrary& Modules = *Context.Modules;
+			const FString& DefaultRoot = Context.DefaultRoot;
 			OutStack.Kind = Stack.Kind;
 			OutStack.Location = Stack.Location;
 			OutStack.ScriptName = FNiagaraAdapter::ScriptNameForStack(Stack.Kind);
@@ -229,10 +529,70 @@ namespace UE::DreamFX::Editor
 			{
 				if (Statement.Kind == EStatementKind::Assignment)
 				{
-					Diagnostics.Error(TEXT("DFX5090"), Statement.Location,
-						FString::Printf(TEXT("Parameter assignments ('%s = ...') are not available yet (planned for Phase 2)."),
-							*Statement.Name));
-					bOk = false;
+					// L2: consecutive assignments fold into one Set Parameters module, and any module
+					// call between them starts a new group. Appending to the trailing planned module
+					// when it is already a Set Parameters module is exactly that rule.
+					const FName TargetName(*Statement.Name);
+
+					if (!FValueLowering::IsNamespacedName(Statement.Name))
+					{
+						Diagnostics.Error(TEXT("DFX4025"), Statement.Location,
+							FString::Printf(TEXT("'%s' is not a valid assignment target. Parameter names are namespace-qualified, e.g. Particles.MyValue or Emitter.MyCounter."),
+								*Statement.Name));
+						bOk = false;
+						continue;
+					}
+
+					if (!Statement.Value.IsValid())
+					{
+						Diagnostics.Error(TEXT("DFX4005"), Statement.Location,
+							FString::Printf(TEXT("'%s' has no value."), *Statement.Name));
+						bOk = false;
+						continue;
+					}
+
+					FNiagaraTypeDefinition TargetType;
+					if (const FNiagaraTypeDefinition* Existing = Context.DeclaredAttributes
+						? Context.DeclaredAttributes->Find(TargetName) : nullptr)
+					{
+						TargetType = *Existing;
+					}
+					else if (!ResolveAssignmentType(*Statement.Value, Statement.Name, Context, Diagnostics, TargetType))
+					{
+						bOk = false;
+						continue;
+					}
+
+					FPlannedSetParameter Parameter;
+					Parameter.Name = TargetName;
+					Parameter.Type = TargetType;
+					Parameter.Location = Statement.Location;
+					if (!FValueLowering::Lower(*Statement.Value, TargetType, Statement.Name, Diagnostics, Parameter.Value))
+					{
+						bOk = false;
+						continue;
+					}
+
+					if (Context.DeclaredAttributes != nullptr)
+					{
+						// First write declares. A later write with a different inferred type is caught
+						// because the declared type wins and the value is checked against it.
+						Context.DeclaredAttributes->FindOrAdd(TargetName) = TargetType;
+					}
+
+					if (OutStack.Modules.Num() > 0 && OutStack.Modules.Last().bIsSetParameters)
+					{
+						OutStack.Modules.Last().Parameters.Add(MoveTemp(Parameter));
+					}
+					else
+					{
+						FPlannedModule SetParameters;
+						SetParameters.bIsSetParameters = true;
+						SetParameters.SourceName = TEXT("Set Parameters");
+						SetParameters.Location = Statement.Location;
+						SetParameters.Parameters.Add(MoveTemp(Parameter));
+						OutStack.Modules.Add(MoveTemp(SetParameters));
+					}
 					continue;
 				}
 
@@ -315,8 +675,16 @@ namespace UE::DreamFX::Editor
 					FPlannedInput PlannedInput;
 					PlannedInput.Name = InputSchema->Name;
 					PlannedInput.Location = Argument.Location;
+					const FString DisplayName = DescribeInput(Statement.Name, Argument.Name);
 					if (!FValueLowering::Lower(*Argument.Value, InputSchema->Type,
-						DescribeInput(Statement.Name, Argument.Name), Diagnostics, PlannedInput.Value))
+						DisplayName, Diagnostics, PlannedInput.Value))
+					{
+						bOk = false;
+						continue;
+					}
+
+					if (!ValidateLinkedType(PlannedInput.Value, InputSchema->Type, Context,
+						DisplayName, Argument.Location, Diagnostics))
 					{
 						bOk = false;
 						continue;
@@ -346,11 +714,22 @@ namespace UE::DreamFX::Editor
 
 			bool bOk = true;
 
-			if (Renderer.Bindings.Num() > 0)
+			for (const FRendererBinding& Binding : Renderer.Bindings)
 			{
-				Diagnostics.Error(TEXT("DFX5092"), Renderer.Bindings[0].Location,
-					TEXT("'Bind' is not available yet (planned for Phase 2)."));
-				bOk = false;
+				if (!FValueLowering::IsNamespacedName(Binding.Target))
+				{
+					Diagnostics.Error(TEXT("DFX4026"), Binding.Location,
+						FString::Printf(TEXT("'Bind %s -> %s': the target must be a namespace-qualified parameter, e.g. Particles.SpriteSize."),
+							*Binding.PropertyName, *Binding.Target));
+					bOk = false;
+					continue;
+				}
+
+				FPlannedBinding Planned;
+				Planned.PropertyName = Binding.PropertyName;
+				Planned.Target = FName(*Binding.Target);
+				Planned.Location = Binding.Location;
+				OutRenderer.Bindings.Add(MoveTemp(Planned));
 			}
 
 			if (Renderer.MaterialParameters.Num() > 0)
@@ -405,24 +784,98 @@ namespace UE::DreamFX::Editor
 
 			bool bOk = true;
 
-			// Settings and Properties are parsed but not yet applied. Reported rather than dropped:
-			// silently ignoring a declaration the author wrote is exactly the drift the plan's
-			// "text is the only truth" principle exists to prevent.
-			if (Document.Settings.Num() > 0)
+			if (!PlanSettings(Document.Settings, SystemSettings, Document.Root, TEXT("system"),
+				Diagnostics, OutPlan.SystemPropertiesJson))
 			{
-				Diagnostics.Warning(TEXT("DFX5094"), Document.Settings[0].Location,
-					TEXT("System 'Settings' are parsed but not yet applied (planned for Phase 2)."));
+				bOk = false;
 			}
-			if (Document.Parameters.Num() > 0)
+
+			// User parameters are planned before any stack, because a stack assignment reading
+			// `User.Foo` needs its declared type to be resolvable.
+			TMap<FName, FNiagaraTypeDefinition> UserVariableTypes;
+			TSet<FName> DeclaredUserNames;
+			bool bWarnedAboutMetadata = false;
+
+			for (const FParameterDecl& Declaration : Document.Parameters)
 			{
-				Diagnostics.Warning(TEXT("DFX5095"), Document.Parameters[0].Location,
-					TEXT("System 'Properties' (user parameters) are parsed but not yet applied (planned for Phase 2)."));
+				FNiagaraTypeDefinition Type;
+				bool bIsDataInterface = false;
+				if (!FValueLowering::ResolveDeclaredType(Declaration, Diagnostics, Type, bIsDataInterface))
+				{
+					bOk = false;
+					continue;
+				}
+
+				const FName QualifiedName(*FString::Printf(TEXT("User.%s"), *Declaration.Name));
+				if (DeclaredUserNames.Contains(QualifiedName))
+				{
+					Diagnostics.Error(TEXT("DFX3021"), Declaration.Location,
+						FString::Printf(TEXT("User parameter '%s' is declared more than once."), *Declaration.Name));
+					bOk = false;
+					continue;
+				}
+				DeclaredUserNames.Add(QualifiedName);
+
+				FPlannedUserVariable Planned;
+				// AddUserVariable takes the bare name and stores it qualified; the qualified form is
+				// what a stack assignment writes and what a read-back reports, so both are kept.
+				Planned.Name = FName(*Declaration.Name);
+				Planned.Type = Type;
+				Planned.Location = Declaration.Location;
+
+				if (const FAttribute* Description = Declaration.FindAttribute(TEXT("Description")))
+				{
+					if (Description->Value.IsValid())
+					{
+						Planned.Description = Description->Value->Text;
+					}
+				}
+
+				if (Declaration.DefaultValue.IsValid())
+				{
+					if (bIsDataInterface)
+					{
+						// Plan 3.5: v1 declares data interface parameters and lets a blueprint or
+						// component feed them. Configuring the DI's own properties from text is
+						// explicitly out of scope, so a default here would be quietly ignored.
+						Diagnostics.Warning(TEXT("DFX5098"), Declaration.Location,
+							FString::Printf(TEXT("Data interface parameter '%s' has a default value, which v1 does not apply. Feed it at runtime instead."),
+								*Declaration.Name));
+					}
+					else if (!FValueLowering::Lower(*Declaration.DefaultValue, Type,
+						FString::Printf(TEXT("User.%s"), *Declaration.Name), Diagnostics, Planned.DefaultValue))
+					{
+						bOk = false;
+						continue;
+					}
+				}
+
+				// Group / SortPriority have nowhere to go: FNiagaraExt_UserVariable carries only Name,
+				// Type, DefaultValue and Description. Documented as the 2.5 fallback -- they stay in
+				// text so the source keeps its intent, but they do not reach the asset.
+				if (!bWarnedAboutMetadata
+					&& (Declaration.HasAttribute(TEXT("Group")) || Declaration.HasAttribute(TEXT("SortPriority"))))
+				{
+					Diagnostics.Info(TEXT("DFX5099"), Declaration.Location,
+						TEXT("[Group] and [SortPriority] are kept in source only: the external edit API's user variable struct has no metadata fields to write them to."));
+					bWarnedAboutMetadata = true;
+				}
+
+				UserVariableTypes.Add(QualifiedName, Type);
+				OutPlan.UserVariables.Add(MoveTemp(Planned));
 			}
+
+			TMap<FName, FNiagaraTypeDefinition> DeclaredAttributes;
+			FStackContext StackContext;
+			StackContext.Modules = &Modules;
+			StackContext.DefaultRoot = Document.Root;
+			StackContext.UserVariableTypes = &UserVariableTypes;
+			StackContext.DeclaredAttributes = &DeclaredAttributes;
 
 			for (const FStack& Stack : Document.Stacks)
 			{
 				FPlannedStack Planned;
-				if (!PlanStack(Stack, Modules, Document.Root, Diagnostics, Planned, OutPlan.ModuleDependencies))
+				if (!PlanStack(Stack, StackContext, Diagnostics, Planned, OutPlan.ModuleDependencies))
 				{
 					bOk = false;
 				}
@@ -455,11 +908,17 @@ namespace UE::DreamFX::Editor
 				Planned.Name = EmitterName;
 				Planned.Location = Emitter.Location;
 
-				if (Emitter.Settings.Num() > 0)
+				if (!PlanSettings(Emitter.Settings, EmitterSettings, Document.Root, TEXT("emitter"),
+					Diagnostics, Planned.PropertiesJson))
 				{
-					Diagnostics.Warning(TEXT("DFX5094"), Emitter.Settings[0].Location,
-						TEXT("Emitter 'Settings' are parsed but not yet applied (planned for Phase 2)."));
+					bOk = false;
 				}
+
+				// Attribute declarations are per emitter: Particles.* on one emitter is a different
+				// parameter from the same spelling on another.
+				TMap<FName, FNiagaraTypeDefinition> EmitterAttributes;
+				FStackContext EmitterContext = StackContext;
+				EmitterContext.DeclaredAttributes = &EmitterAttributes;
 
 				for (const FStack& Stack : Emitter.Stacks)
 				{
@@ -469,7 +928,7 @@ namespace UE::DreamFX::Editor
 						continue;
 					}
 					FPlannedStack PlannedStack;
-					if (!PlanStack(Stack, Modules, Document.Root, Diagnostics, PlannedStack, OutPlan.ModuleDependencies))
+					if (!PlanStack(Stack, EmitterContext, Diagnostics, PlannedStack, OutPlan.ModuleDependencies))
 					{
 						bOk = false;
 					}
@@ -589,6 +1048,44 @@ namespace UE::DreamFX::Editor
 				}
 
 				FName AddedName;
+
+				if (Module.bIsSetParameters)
+				{
+					TArray<TTuple<FName, FNiagaraTypeDefinition, FInputValue>> Entries;
+					Entries.Reserve(Module.Parameters.Num());
+					for (const FPlannedSetParameter& Parameter : Module.Parameters)
+					{
+						Entries.Emplace(Parameter.Name, Parameter.Type, Parameter.Value);
+					}
+
+					if (!FNiagaraAdapter::AddSetParametersModule(StackAddress, Entries, AddedName, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5024"), Module.Location, Diagnostics);
+						bOk = false;
+						continue;
+					}
+					PreviousModule = AddedName;
+					OutModuleLocations.Add(AddedName, Module.Location);
+
+					// Only literals and enums ride along on the create call; every other value mode has
+					// to be written afterwards, addressing the entry as an input on the new module.
+					const FStackAddress ModuleAddress = OwnerAddress.WithScript(Stack.ScriptName).WithModule(AddedName);
+					for (const FPlannedSetParameter& Parameter : Module.Parameters)
+					{
+						if (Parameter.Value.Mode == EInputValueMode::Literal || Parameter.Value.Mode == EInputValueMode::Enum)
+						{
+							continue;
+						}
+						Errors.Reset();
+						if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Parameter.Name), Parameter.Value, Errors))
+						{
+							ReportAdapterErrors(Errors, TEXT("DFX5025"), Parameter.Location, Diagnostics);
+							bOk = false;
+						}
+					}
+					continue;
+				}
+
 				if (!FNiagaraAdapter::AddModule(StackAddress, Module.Asset, AddedName, Errors))
 				{
 					ReportAdapterErrors(Errors, TEXT("DFX5020"), Module.Location, Diagnostics);
@@ -630,6 +1127,60 @@ namespace UE::DreamFX::Editor
 			for (const FPlannedEmitter& Emitter : Plan.Emitters)
 			{
 				DeclaredEmitters.Add(Emitter.Name);
+			}
+
+			// --- user parameters -------------------------------------------------------------
+			// 4.5's identity contract: user variables are keyed by name so blueprint
+			// SetNiagaraVariable* calls survive a rebuild. Existing ones are therefore only removed
+			// when the source stopped declaring them; the rest are re-added, which updates in place.
+			TArray<FUserVariableInfo> ExistingUserVariables;
+			Errors.Reset();
+			if (!FNiagaraAdapter::GetUserVariables(System, ExistingUserVariables, Errors))
+			{
+				ReportAdapterErrors(Errors, TEXT("DFX5016"), FSourceLocation(), Diagnostics);
+				return false;
+			}
+
+			TSet<FName> DeclaredUserNames;
+			for (const FPlannedUserVariable& Variable : Plan.UserVariables)
+			{
+				// Read-back reports the qualified form even though the write takes the bare name.
+				DeclaredUserNames.Add(FName(*FString::Printf(TEXT("User.%s"), *Variable.Name.ToString())));
+			}
+
+			for (const FUserVariableInfo& Existing : ExistingUserVariables)
+			{
+				if (DeclaredUserNames.Contains(Existing.Name))
+				{
+					continue;
+				}
+				Errors.Reset();
+				if (!FNiagaraAdapter::RemoveUserVariable(System, Existing.Name, Existing.Type, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5017"), FSourceLocation(), Diagnostics);
+					return false;
+				}
+			}
+
+			for (const FPlannedUserVariable& Variable : Plan.UserVariables)
+			{
+				Errors.Reset();
+				if (!FNiagaraAdapter::AddUserVariable(System, Variable.Name, Variable.Type,
+					Variable.Description, Variable.DefaultValue, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5018"), Variable.Location, Diagnostics);
+					return false;
+				}
+			}
+
+			if (!Plan.SystemPropertiesJson.IsEmpty())
+			{
+				Errors.Reset();
+				if (!FNiagaraAdapter::SetSystemProperties(System, Plan.SystemPropertiesJson, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5019"), FSourceLocation(), Diagnostics);
+					return false;
+				}
 			}
 
 			// Emitters that survive are cleared, not removed and re-added: reusing the handle preserves
@@ -715,6 +1266,18 @@ namespace UE::DreamFX::Editor
 
 				const FStackAddress EmitterAddress = SystemAddress.WithEmitter(Emitter.Name);
 
+				// Emitter settings go on before the stacks: SimTarget in particular changes which
+				// modules and data interfaces are legal, so a GPU emitter must know it is one first.
+				if (!Emitter.PropertiesJson.IsEmpty())
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::SetEmitterProperties(EmitterAddress, Emitter.PropertiesJson, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5026"), Emitter.Location, Diagnostics);
+						return false;
+					}
+				}
+
 				for (const FPlannedStack& Stack : Emitter.Stacks)
 				{
 					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations))
@@ -732,13 +1295,28 @@ namespace UE::DreamFX::Editor
 						ReportAdapterErrors(Errors, TEXT("DFX5022"), Renderer.Location, Diagnostics);
 						return false;
 					}
+
+					const FStackAddress RendererAddress = EmitterAddress.WithRenderer(RendererIndex);
+
 					if (!Renderer.PropertiesJson.IsEmpty())
 					{
 						Errors.Reset();
-						if (!FNiagaraAdapter::SetRendererProperties(EmitterAddress.WithRenderer(RendererIndex),
-							Renderer.PropertiesJson, Errors))
+						if (!FNiagaraAdapter::SetRendererProperties(RendererAddress, Renderer.PropertiesJson, Errors))
 						{
 							ReportAdapterErrors(Errors, TEXT("DFX5023"), Renderer.Location, Diagnostics);
+							return false;
+						}
+					}
+
+					// Bindings come after the property blob: SourceMode is a plain property, and it
+					// decides how a binding resolves.
+					for (const FPlannedBinding& Binding : Renderer.Bindings)
+					{
+						Errors.Reset();
+						if (!FNiagaraAdapter::SetRendererBinding(RendererAddress, Binding.PropertyName,
+							Binding.Target, Errors))
+						{
+							ReportAdapterErrors(Errors, TEXT("DFX5027"), Binding.Location, Diagnostics);
 							return false;
 						}
 					}
@@ -871,6 +1449,10 @@ namespace UE::DreamFX::Editor
 					LexDocumentKind(Document.Kind)));
 			return Result;
 		}
+
+		// Lint before planning: its findings are about the source, so they are worth having even when
+		// the build goes on to fail for an unrelated reason.
+		FLint::Run(Document, Diagnostics);
 
 		FModuleLibrary Modules;
 		if (const FProperty* ModulePaths = Document.FindSetting(TEXT("ModulePaths")))

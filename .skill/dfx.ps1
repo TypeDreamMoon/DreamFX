@@ -227,20 +227,46 @@ if ($before.Count -gt 0) {
 
         foreach ($path in $touched | Sort-Object) {
             $relative = [System.IO.Path]::GetRelativePath($projectRoot, $path) -replace '\\', '/'
-            $status = & git -C $projectRoot status --porcelain --untracked-files=all -- $relative 2>$null
 
-            # Untracked shows as '??'. Anything else means git already knows the file, so the run
-            # overwrote content someone may want to keep -- that is the author's call, not ours.
-            if ($status -match '^\?\?') {
-                Write-Host "  $relative  [NEW (untracked)]" -ForegroundColor Green
+            # Query from the asset's own directory, not the project root: plugins are frequently
+            # their own repositories, and asking the project root about a plugin file returns
+            # "fatal: not a git repository" -- which reads identically to "tracked and unchanged"
+            # and would make -CleanNew skip exactly the files it exists to remove.
+            $assetDir = Split-Path -Parent $path
+            $repoRoot = & git -C $assetDir rev-parse --show-toplevel 2>$null
+
+            if (-not $repoRoot) {
+                Write-Host "  $relative  [written, not under version control]" -ForegroundColor Green
+                if ($CleanNew) {
+                    Remove-Item -LiteralPath $path -Force
+                    Write-Host '    deleted (-CleanNew)' -ForegroundColor DarkGray
+                }
+                continue
+            }
+
+            # --ignored=matching reports individual ignored files rather than collapsing them into
+            # their ignored parent directory.
+            $status = & git -C $assetDir status --porcelain --untracked-files=all --ignored=matching -- $path 2>$null
+
+            $ignored = $false
+            if (-not $status) {
+                & git -C $assetDir check-ignore -q -- $path 2>$null
+                $ignored = $LASTEXITCODE -eq 0
+            }
+
+            if ($status -match '^\?\?' -or $status -match '^!!' -or $ignored) {
+                $label = if ($ignored -or $status -match '^!!') { 'NEW (gitignored)' } else { 'NEW (untracked)' }
+                Write-Host "  $relative  [$label]" -ForegroundColor Green
                 if ($CleanNew) {
                     Remove-Item -LiteralPath $path -Force
                     Write-Host '    deleted (-CleanNew)' -ForegroundColor DarkGray
                 }
             }
             elseif ($status) {
+                # git already knows this file, so the run overwrote content someone may want to
+                # keep -- that is the author's call, not ours.
                 Write-Host "  $relative  [TRACKED AND MODIFIED]" -ForegroundColor Red
-                Write-Host "    restore with: git -C `"$projectRoot`" checkout -- `"$relative`"" -ForegroundColor DarkGray
+                Write-Host "    restore with: git -C `"$repoRoot`" checkout -- `"$path`"" -ForegroundColor DarkGray
             }
             else {
                 Write-Host "  $relative  [rewritten, byte-identical]" -ForegroundColor DarkGray
