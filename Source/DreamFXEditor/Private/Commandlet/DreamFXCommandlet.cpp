@@ -983,6 +983,7 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 		UE_LOG(LogDreamFX, Display, TEXT("=== %s%s ==="),
 			*FNiagaraAdapter::ReportStats(),
 			bNoWriteScope ? TEXT(" [write scope OFF]") : TEXT(""));
+		FNiagaraAdapter::ReportOperationTimings();
 	}
 
 	return TotalErrors;

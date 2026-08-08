@@ -404,6 +404,14 @@ namespace UE::DreamFX::Editor
 		static void ResetStats();
 
 		/**
+		 * Logs wall time and call count for every adapter operation, biggest first.
+		 *
+		 * ReportStats says how many times things happened; this says what they cost, which is the
+		 * question that matters and the one that log timestamps kept answering wrongly.
+		 */
+		static void ReportOperationTimings();
+
+		/**
 		 * One line naming what the run cost: contexts built (each is a whole system view model),
 		 * structural versus value calls, and epoch boundaries crossed.
 		 *

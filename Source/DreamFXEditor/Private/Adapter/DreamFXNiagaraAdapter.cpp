@@ -68,6 +68,36 @@ namespace UE::DreamFX::Editor
 		/** False restores the pre-P1 behaviour: one context per call. See SetWriteScopeEnabled. */
 		bool GWriteScopeEnabled = true;
 
+		/**
+		 * Wall time and call count per operation, for `-LogCmds="LogDreamFX Verbose"`.
+		 *
+		 * The counters below say how many times something happened; these say what it cost. Added
+		 * after the first two attempts to explain a slow build from log timestamps both reached the
+		 * wrong conclusion -- the only readings that have survived contact are the ones taken with a
+		 * clock around the thing being blamed.
+		 */
+		TMap<FString, double> GOpSeconds;
+		TMap<FString, int32> GOpCounts;
+
+		/** Charges the enclosing scope to one operation label. */
+		struct FOpTimer
+		{
+			explicit FOpTimer(const TCHAR* InLabel)
+				: Label(InLabel), Start(FPlatformTime::Seconds()) {}
+
+			~FOpTimer()
+			{
+				GOpSeconds.FindOrAdd(Label) += FPlatformTime::Seconds() - Start;
+				++GOpCounts.FindOrAdd(Label);
+			}
+
+			FOpTimer(const FOpTimer&) = delete;
+			FOpTimer& operator=(const FOpTimer&) = delete;
+
+			FString Label;
+			double Start;
+		};
+
 		/** One-shot counters for the build's summary line (plan-v6 P0). */
 		struct FAdapterStats
 		{
@@ -102,6 +132,11 @@ namespace UE::DreamFX::Editor
 				}
 
 				++GStats.ContextsBuilt;
+
+				// Charged separately from whatever operation happens to trigger it: building a context
+				// is the same cost wherever it lands, and attributing it to the caller that unluckily
+				// crossed an epoch boundary would smear it across every label.
+				FOpTimer Timer(TEXT("~context build (view model)"));
 
 				// Inside a write scope the epoch's context is built on first use rather than at the
 				// boundary, so a structural operation that is never followed by a write costs nothing.
@@ -685,6 +720,44 @@ namespace UE::DreamFX::Editor
 	void FNiagaraAdapter::ResetStats()
 	{
 		GStats = FAdapterStats();
+		GOpSeconds.Reset();
+		GOpCounts.Reset();
+	}
+
+	void FNiagaraAdapter::ReportOperationTimings()
+	{
+		if (GOpSeconds.Num() == 0)
+		{
+			return;
+		}
+
+		TArray<TPair<FString, double>> Sorted;
+		for (const TPair<FString, double>& Entry : GOpSeconds)
+		{
+			Sorted.Add(Entry);
+		}
+		Sorted.Sort([](const TPair<FString, double>& A, const TPair<FString, double>& B)
+		{
+			return A.Value > B.Value;
+		});
+
+		double Total = 0.0;
+		for (const TPair<FString, double>& Entry : Sorted)
+		{
+			Total += Entry.Value;
+		}
+
+		UE_LOG(LogDreamFX, Display, TEXT("=== adapter time by operation (%.1f s accounted) ==="), Total);
+		for (const TPair<FString, double>& Entry : Sorted)
+		{
+			const int32 Count = GOpCounts.FindRef(Entry.Key);
+			UE_LOG(LogDreamFX, Display, TEXT("  %8.2f s  %5.1f%%  %6d x  %7.2f ms each  %s"),
+				Entry.Value,
+				Total > 0.0 ? 100.0 * Entry.Value / Total : 0.0,
+				Count,
+				Count > 0 ? (Entry.Value * 1000.0 / Count) : 0.0,
+				*Entry.Key);
+		}
 	}
 
 	FString FNiagaraAdapter::ReportStats()
@@ -747,6 +820,7 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetEmitterInfo(const FStackAddress& EmitterAddress, FEmitterInfo& OutInfo, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("read: GetEmitterInfo"));
 		FEditContext ContextHolder(EmitterAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_EmitterTopology Topology;
@@ -801,6 +875,7 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetScriptStackInfo(const FStackAddress& ScriptAddress, FScriptStackInfo& OutInfo, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("read: GetScriptStackInfo"));
 		FEditContext ContextHolder(ScriptAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ScriptStackTopology Topology;
@@ -833,6 +908,7 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetModuleInfo(const FStackAddress& ModuleAddress, FModuleInfo& OutInfo, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("read: GetModuleInfo"));
 		FEditContext ContextHolder(ModuleAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ModuleTopology Topology;
@@ -957,6 +1033,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::AddEmitterFromTemplate(UNiagaraSystem* System, UNiagaraEmitter* Template,
 		FName EmitterName, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("AddEmitter"));
 		if (System == nullptr)
 		{
 			OutErrors.Add(TEXT("Cannot add an emitter to a null system."));
@@ -1052,6 +1129,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::AddModule(const FStackAddress& StackAddress, UNiagaraScript* ModuleAsset,
 		FName& OutModuleName, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("AddModule"));
 		if (ModuleAsset == nullptr)
 		{
 			OutErrors.Add(TEXT("Cannot add a null module asset."));
@@ -1079,6 +1157,7 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::RemoveModule(const FStackAddress& ModuleAddress, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("RemoveModule"));
 		FEpochGuard Epoch(ModuleAddress.System);
 		FEditContext ContextHolder(ModuleAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
@@ -1088,6 +1167,7 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::SetModuleEnabled(const FStackAddress& ModuleAddress, bool bEnabled, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("SetModuleEnabled"));
 		FEpochGuard Epoch(ModuleAddress.System);
 		FEditContext ContextHolder(ModuleAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
@@ -1099,6 +1179,7 @@ namespace UE::DreamFX::Editor
 		const TArray<TTuple<FName, FNiagaraTypeDefinition, FInputValue>>& Entries,
 		FName& OutModuleName, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("AddSetParametersModule"));
 		TArray<FNiagaraExt_SetParameterEntry> Parameters;
 		Parameters.Reserve(Entries.Num());
 
@@ -1146,6 +1227,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::AddRenderer(const FStackAddress& EmitterAddress, UClass* RendererClass,
 		int32& OutRendererIndex, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("AddRenderer"));
 		if (RendererClass == nullptr)
 		{
 			OutErrors.Add(TEXT("Cannot add a renderer with no class."));
@@ -1186,6 +1268,7 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::SetInput(const FStackAddress& InputAddress, const FInputValue& Value, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("SetInput"));
 		FNiagaraExt_StackInputValue StackValue;
 		if (!ToStackInputValue(Value, StackValue, OutErrors))
 		{
@@ -1201,6 +1284,19 @@ namespace UE::DreamFX::Editor
 		// A static switch is the case this cannot see: it changes which *other* inputs are visible,
 		// and only the caller knows from the module schema that an input is one. The generator calls
 		// EndStructuralEpoch for it.
+		//
+		// Inline edit conditions are the case nobody can see from the schema -- `UseLoopDelay` on
+		// EmitterState is a plain NiagaraBool with no flag of any kind, yet writing it is what reveals
+		// `DelayFirstLoopOnly` below it, and sharing across that write got the next one refused as
+		// "hidden by static-switch / conditional logic". Ending the epoch after every bool write does
+		// fix that, and was tried: it also collapsed the sharing this scope exists for, because most
+		// bools gate nothing. Measured on NS_LevelUp_Descend_Root, 2789 input writes still built 2188
+		// contexts -- a 22% share rate, for a mechanism whose whole point is not rebuilding.
+		//
+		// The generator's retry pass covers it instead, and covers it better: a write refused for any
+		// reason is retried once the module's other inputs have landed, against a deliberately fresh
+		// context. So the common case shares, and the rare gated case pays for one rebuild at the end
+		// rather than every bool paying up front.
 		const bool bStructural = Value.Mode == EInputValueMode::DynamicInput
 			|| Value.Mode == EInputValueMode::DataInterface;
 
@@ -1227,6 +1323,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::SetRendererProperties(const FStackAddress& RendererAddress, const FString& PropertiesJson,
 		TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("SetRendererProperties"));
 		if (PropertiesJson.IsEmpty())
 		{
 			return true;
@@ -1458,6 +1555,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::SetEmitterProperties(const FStackAddress& EmitterAddress, const FString& PropertiesJson,
 		TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("SetEmitterProperties"));
 		if (PropertiesJson.IsEmpty())
 		{
 			return true;
@@ -1561,6 +1659,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::GetDynamicInputChildren(const FStackAddress& InputAddress,
 		TArray<FDynamicInputChild>& OutChildren, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("read: GetDynamicInputChildren"));
 		FEditContext ContextHolder(InputAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_DynamicInputChainRef ChainRef;
@@ -1641,6 +1740,7 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetInputSchema(const FStackAddress& InputAddress, FInputSchema& OutSchema, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("read: GetInputSchema"));
 		FEditContext ContextHolder(InputAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_StackInputSchema Schema;
@@ -1682,6 +1782,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::CompileAndWait(UNiagaraSystem* System, bool bIncludingGpuShaders,
 		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("CompileAndWait"));
 		if (System == nullptr)
 		{
 			OutErrors.Add(TEXT("Cannot compile a null system."));
@@ -1953,6 +2054,7 @@ namespace UE::DreamFX::Editor
 
 	void FNiagaraAdapter::RefreshCurveLookupTables(UNiagaraSystem* System)
 	{
+		FOpTimer OpTimer(TEXT("RefreshCurveLookupTables"));
 #if WITH_EDITORONLY_DATA
 		if (System == nullptr)
 		{
@@ -2038,6 +2140,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::SetModuleScriptVersion(const FStackAddress& ModuleAddress, const FGuid& VersionGuid,
 		TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("SetModuleScriptVersion"));
 		UNiagaraNodeFunctionCall* Node = FindModuleNode(ModuleAddress);
 		if (Node == nullptr)
 		{
@@ -2086,6 +2189,7 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::SetDynamicInputAtVersion(const FStackAddress& InputAddress, UNiagaraScript* DynamicInput,
 		const FGuid& VersionGuid, TArray<FString>& OutErrors)
 	{
+		FOpTimer OpTimer(TEXT("SetDynamicInputAtVersion"));
 		if (DynamicInput == nullptr)
 		{
 			OutErrors.Add(TEXT("Cannot write a null dynamic input."));
