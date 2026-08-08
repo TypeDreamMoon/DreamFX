@@ -21,6 +21,11 @@
 
     Exit code 0 means all four passed. Anything else is the first failing step's code.
 
+    RUN THIS WITH THE EDITOR CLOSED. Steps 2 and 4 write .uasset files, and an editor open on the
+    same project writes them too -- whichever saves second wins, and neither says so. The build warns
+    when it sees an editor running, but it cannot tell which project that editor has open, so the
+    warning is advice rather than a gate.
+
 .EXAMPLE
     ./ci.ps1
 

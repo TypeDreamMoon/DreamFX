@@ -204,6 +204,11 @@ Four steps, each catching something the others cannot:
 `verify` is the one worth understanding. It compares each asset's provenance stamp against its source;
 a mismatch means the committed asset and the committed text disagree, which is invisible any other way.
 
+**Close the editor first.** `build` and `corpus` write `.uasset` files, and an editor open on the same
+project writes them too — whichever saves second wins, and nothing says so. The run warns when it sees
+an editor process, but it cannot tell which project that editor has open, so the warning is advice and
+not a gate.
+
 ---
 
 ## Where to go next
