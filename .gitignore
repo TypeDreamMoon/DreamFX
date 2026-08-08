@@ -68,3 +68,8 @@ Content/Corpus/
 
 # Module and dynamic input assets, built from DFX/Modules/*.dfm by the same rule as the samples.
 Content/Modules/
+
+# Mirrors of this plugin's own assets. `decompile-all` walks every Niagara system it can see, which
+# includes the ones DreamFX generated, and a plugin-rooted export mirrors into the plugin's Content.
+# Build products of build products -- doubly not source.
+Content/Decompiled/
