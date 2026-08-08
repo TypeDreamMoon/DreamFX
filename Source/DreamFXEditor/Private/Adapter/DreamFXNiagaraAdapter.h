@@ -382,12 +382,16 @@ namespace UE::DreamFX::Editor
 		};
 
 		/**
-		 * Ends the current structural epoch on this system.
+		 * Forces the next operation on this system to address a freshly built view model.
 		 *
-		 * Every mutator in this file that changes the shape of the stack calls it already. It is
-		 * public for the one case the adapter cannot see on its own: writing a static switch changes
-		 * which *other* inputs are visible, and only the caller knows from the module schema that a
-		 * given input is one. Harmless outside a write scope.
+		 * It is public for the case the adapter cannot see on its own: writing a static switch changes
+		 * which *other* inputs exist, the engine's refresh for that is deferred to a tick no
+		 * commandlet runs, and only the caller knows from the module schema that a given input is a
+		 * switch. The generator's retry of a refused write asks for the same thing. Harmless outside a
+		 * write scope.
+		 *
+		 * Structural mutators do not need this -- the engine refreshes the group each one changed, in
+		 * place. See EndEpoch in the .cpp for why that is enough and what it cost to assume otherwise.
 		 */
 		static void EndStructuralEpoch(UNiagaraSystem* System);
 
@@ -399,6 +403,15 @@ namespace UE::DreamFX::Editor
 		 * machine, one asset, one flag. `dfx.ps1 build -NoWriteScope` sets it.
 		 */
 		static void SetWriteScopeEnabled(bool bEnabled);
+
+		/**
+		 * Restores the pre-P3 behaviour: every structural mutator drops the shared context.
+		 *
+		 * Like the flag above it exists to be measured against, on one binary rather than two. It is
+		 * also the escape hatch if an engine version stops refreshing in place -- a build that goes
+		 * wrong only without it has found exactly that. `dfx.ps1 build -RebuildOnStructural` sets it.
+		 */
+		static void SetRebuildContextOnStructural(bool bEnabled);
 
 		/** Zeroes the counters reported by ReportStats. */
 		static void ResetStats();

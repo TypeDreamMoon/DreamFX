@@ -68,6 +68,9 @@ namespace UE::DreamFX::Editor
 		/** False restores the pre-P1 behaviour: one context per call. See SetWriteScopeEnabled. */
 		bool GWriteScopeEnabled = true;
 
+		/** True restores the pre-P3 behaviour: every structural mutator drops the context. */
+		bool GRebuildContextOnStructural = false;
+
 		/**
 		 * Wall time and call count per operation, for `-LogCmds="LogDreamFX Verbose"`.
 		 *
@@ -108,6 +111,9 @@ namespace UE::DreamFX::Editor
 
 			/** Of the structural calls, the ones that were a static switch write. */
 			int32 StaticSwitchCalls = 0;
+
+			/** Of the structural calls, the ones that kept the context because the engine refreshed. */
+			int32 RefreshedInPlaceCalls = 0;
 		};
 		FAdapterStats GStats;
 
@@ -160,26 +166,69 @@ namespace UE::DreamFX::Editor
 		};
 
 		/**
-		 * Ends the current structural epoch: the shared context, if any, is dropped.
+		 * Drops the shared context, so the next FEditContext on this system builds a fresh view model.
 		 *
-		 * Called after an operation that changes which stack entries exist. The next FEditContext on
-		 * this system builds a fresh view model, so nothing ever reads entries that describe the
-		 * system as it was before the operation.
-		 *
-		 * Cheap and idempotent outside a write scope, which is what lets every structural mutator call
-		 * it unconditionally instead of asking first.
+		 * Only a write scope has epochs. Guarding on it keeps a structural call made while a read scope
+		 * happens to be open -- the decompiler builds a host system for a standalone emitter this way --
+		 * from quietly dropping that scope's context and costing it the sharing.
 		 */
-		void EndEpoch(UNiagaraSystem* System)
+		void DropSharedContext(UNiagaraSystem* System)
 		{
-			++GStats.StructuralCalls;
-
-			// Only a write scope has epochs. Guarding on it keeps a structural call made while a read
-			// scope happens to be open -- the decompiler builds a host system for a standalone emitter
-			// this way -- from quietly dropping that scope's context and costing it the sharing.
 			if (System != nullptr && GWriteScopedSystems.Contains(System)
 				&& GSharedContexts.Remove(System) > 0)
 			{
 				++GStats.EpochBoundaries;
+			}
+		}
+
+		/** Whether the engine refreshed what this operation invalidated, before it returned. */
+		enum class EStructuralKind
+		{
+			/**
+			 * It did not, or not observably. The context is dropped.
+			 *
+			 * The default, and where an operation belongs until someone has read the engine's
+			 * implementation and found the refresh. Guessing here is not free: assuming a whole build's
+			 * worth of operations refreshed in place produced a system whose data channel reads
+			 * compiled to a single namespace entry.
+			 */
+			Unrefreshed,
+
+			/**
+			 * It did, synchronously, on the group it changed -- so the context still describes the
+			 * system accurately and dropping it only pays to rebuild the other emitters.
+			 *
+			 * Only for operations where that call is visible in the engine source. Today:
+			 * AddModule and AddSetParametersModule call ScriptItem->RefreshChildren(), RemoveModule
+			 * calls it on the script it removed from, and AddEmitter goes as far as RefreshAll().
+			 *
+			 * The cached data these operations invalidate is covered too, by the view model itself:
+			 * EmitterScriptGraphChanged drops that emitter's stack module data on any graph edit, and
+			 * SystemScriptGraphChanged empties the whole map.
+			 */
+			RefreshedInPlace,
+		};
+
+		/**
+		 * Records a structural operation, and drops the context unless the engine already refreshed.
+		 *
+		 * A refresh the engine *defers* does not count as refreshed: a commandlet never pumps the tick
+		 * that would run it. That is also why the deliberate drop stayed -- see EndStructuralEpoch.
+		 *
+		 * Cheap and idempotent outside a write scope, which is what lets every structural mutator call
+		 * it unconditionally instead of asking first.
+		 */
+		void EndEpoch(UNiagaraSystem* System, EStructuralKind Kind = EStructuralKind::Unrefreshed)
+		{
+			++GStats.StructuralCalls;
+
+			if (Kind == EStructuralKind::Unrefreshed || GRebuildContextOnStructural)
+			{
+				DropSharedContext(System);
+			}
+			else
+			{
+				++GStats.RefreshedInPlaceCalls;
 			}
 		}
 
@@ -192,13 +241,15 @@ namespace UE::DreamFX::Editor
 		 */
 		struct FEpochGuard
 		{
-			explicit FEpochGuard(UNiagaraSystem* InSystem) : System(InSystem) {}
-			~FEpochGuard() { EndEpoch(System); }
+			explicit FEpochGuard(UNiagaraSystem* InSystem, EStructuralKind InKind = EStructuralKind::Unrefreshed)
+				: System(InSystem), Kind(InKind) {}
+			~FEpochGuard() { EndEpoch(System, Kind); }
 
 			FEpochGuard(const FEpochGuard&) = delete;
 			FEpochGuard& operator=(const FEpochGuard&) = delete;
 
 			UNiagaraSystem* System = nullptr;
+			EStructuralKind Kind = EStructuralKind::Unrefreshed;
 		};
 
 		FNiagaraExt_StackItemReference ToReference(const FStackAddress& Address)
@@ -706,15 +757,26 @@ namespace UE::DreamFX::Editor
 
 	void FNiagaraAdapter::EndStructuralEpoch(UNiagaraSystem* System)
 	{
-		// The generator calls this for exactly one reason -- a static switch write -- so counting here
-		// is what separates that population from the Add/Remove operations.
+		// Counting here is what separates the callers who ask for this -- a static switch write, and
+		// the generator's retry of a refused one -- from the Add/Remove operations.
 		++GStats.StaticSwitchCalls;
-		EndEpoch(System);
+
+		// Unconditional, unlike the automatic drop above. Both callers are asking for a context that
+		// reflects a change the engine did not refresh synchronously, which is the whole reason this
+		// is public: a static switch changes which *other* inputs exist, and the refresh that would
+		// show them is deferred to a tick a commandlet never runs. A fresh view model is the only
+		// thing that sees them.
+		DropSharedContext(System);
 	}
 
 	void FNiagaraAdapter::SetWriteScopeEnabled(bool bEnabled)
 	{
 		GWriteScopeEnabled = bEnabled;
+	}
+
+	void FNiagaraAdapter::SetRebuildContextOnStructural(bool bEnabled)
+	{
+		GRebuildContextOnStructural = bEnabled;
 	}
 
 	void FNiagaraAdapter::ResetStats()
@@ -763,10 +825,10 @@ namespace UE::DreamFX::Editor
 	FString FNiagaraAdapter::ReportStats()
 	{
 		return FString::Printf(
-			TEXT("adapter: %d view model(s) built, %d structural (%d static switch) + %d value call(s), ")
-			TEXT("%d epoch boundary(ies)"),
-			GStats.ContextsBuilt, GStats.StructuralCalls, GStats.StaticSwitchCalls, GStats.ValueCalls,
-			GStats.EpochBoundaries);
+			TEXT("adapter: %d view model(s) built, %d structural (%d static switch, %d refreshed in place) ")
+			TEXT("+ %d value call(s), %d epoch boundary(ies)"),
+			GStats.ContextsBuilt, GStats.StructuralCalls, GStats.StaticSwitchCalls,
+			GStats.RefreshedInPlaceCalls, GStats.ValueCalls, GStats.EpochBoundaries);
 	}
 
 	bool FNiagaraAdapter::SaveSystem(UNiagaraSystem* System, TArray<FString>& OutErrors)
@@ -1045,7 +1107,8 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FEpochGuard Epoch(System);
+		// UNiagaraExternalEditUtilities::AddEmitter ends with SystemViewModel->RefreshAll().
+		FEpochGuard Epoch(System, EStructuralKind::RefreshedInPlace);
 		FEditContext ContextHolder(System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_EmitterTopology Topology;
@@ -1136,11 +1199,17 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FEpochGuard Epoch(StackAddress.System);
+		// UNiagaraExternalEditUtilities::AddModule calls ScriptItem->RefreshChildren().
+		FEpochGuard Epoch(StackAddress.System, EStructuralKind::RefreshedInPlace);
 		FEditContext ContextHolder(StackAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ModuleTopology Topology;
-		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context);
+
+		// Only the name is read below, and filling the rest walks every input on the module to build
+		// a topology nobody looks at -- 18 of this call's 62 ms. The generator learns a module's
+		// inputs from the schema, not from what it just added.
+		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context,
+			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly);
 
 		OutModuleName = Topology.ModuleName;
 		if (!Drain(Context, OutErrors))
@@ -1158,7 +1227,9 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::RemoveModule(const FStackAddress& ModuleAddress, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("RemoveModule"));
-		FEpochGuard Epoch(ModuleAddress.System);
+
+		// UNiagaraExternalEditUtilities::RemoveModule calls RefreshChildren() on the script it removed from.
+		FEpochGuard Epoch(ModuleAddress.System, EStructuralKind::RefreshedInPlace);
 		FEditContext ContextHolder(ModuleAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		UNiagaraExternalEditUtilities::RemoveModule(ToReference(ModuleAddress), Context);
@@ -1205,11 +1276,15 @@ namespace UE::DreamFX::Editor
 			Parameters.Add(MoveTemp(Parameter));
 		}
 
-		FEpochGuard Epoch(StackAddress.System);
+		// UNiagaraExternalEditUtilities::AddSetParametersModule calls ScriptItem->RefreshChildren().
+		FEpochGuard Epoch(StackAddress.System, EStructuralKind::RefreshedInPlace);
 		FEditContext ContextHolder(StackAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ModuleTopology Topology;
-		UNiagaraExternalEditUtilities::AddSetParametersModule(ToReference(StackAddress), Parameters, Topology, Context);
+
+		// Same as AddModule above: the name is all that is read.
+		UNiagaraExternalEditUtilities::AddSetParametersModule(ToReference(StackAddress), Parameters, Topology, Context,
+			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly);
 
 		OutModuleName = Topology.ModuleName;
 		if (!Drain(Context, OutErrors))
@@ -1297,6 +1372,17 @@ namespace UE::DreamFX::Editor
 		// reason is retried once the module's other inputs have landed, against a deliberately fresh
 		// context. So the common case shares, and the rare gated case pays for one rebuild at the end
 		// rather than every bool paying up front.
+		// The two structural modes are not equally structural, which is why they are split here rather
+		// than tested with one ||:
+		//
+		//   * a dynamic input is written by UNiagaraStackFunctionInput::SetDynamicInput, which ends in
+		//     RefreshChildren() -- the sub-inputs a later write addresses exist by the time this
+		//     returns, so the context is still accurate;
+		//   * a data interface is written by SetDataInterfaceValueExternal, which edits a *placeholder*
+		//     owned by the system view model's FNiagaraPlaceholderDataInterfaceManager. That manager
+		//     caches one placeholder per (emitter, function call, input) and syncs it to the override
+		//     pin from its OnChanged handler. Keeping it alive across a whole build was tried, and
+		//     produced a system whose data channel reads compiled to a single namespace entry.
 		const bool bStructural = Value.Mode == EInputValueMode::DynamicInput
 			|| Value.Mode == EInputValueMode::DataInterface;
 
@@ -1311,7 +1397,9 @@ namespace UE::DreamFX::Editor
 		// After the holder is gone, so the context is not destroyed while it still points at one.
 		if (bStructural)
 		{
-			EndEpoch(InputAddress.System);
+			EndEpoch(InputAddress.System, Value.Mode == EInputValueMode::DynamicInput
+				? EStructuralKind::RefreshedInPlace
+				: EStructuralKind::Unrefreshed);
 		}
 		else
 		{

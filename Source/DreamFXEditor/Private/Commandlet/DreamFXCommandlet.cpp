@@ -854,6 +854,10 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	// model again, which is what the numbers before P1 were measured on.
 	const bool bNoWriteScope = FParse::Param(*Params, TEXT("NoWriteScope"));
 	FNiagaraAdapter::SetWriteScopeEnabled(!bNoWriteScope);
+
+	// plan-v6 P3: the same, one epoch further in. Off, a structural mutator keeps the context and
+	// trusts the engine's own in-place refresh of the group it changed.
+	FNiagaraAdapter::SetRebuildContextOnStructural(FParse::Param(*Params, TEXT("RebuildOnStructural")));
 	FNiagaraAdapter::ResetStats();
 
 	FString SingleFile;
@@ -980,9 +984,11 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 
 	if (!Options.bVerifyOnly && !bLintOnly)
 	{
-		UE_LOG(LogDreamFX, Display, TEXT("=== %s%s ==="),
-			*FNiagaraAdapter::ReportStats(),
-			bNoWriteScope ? TEXT(" [write scope OFF]") : TEXT(""));
+		FString Baselines;
+		if (bNoWriteScope) { Baselines += TEXT(" [write scope OFF]"); }
+		if (FParse::Param(*Params, TEXT("RebuildOnStructural"))) { Baselines += TEXT(" [rebuild on structural]"); }
+
+		UE_LOG(LogDreamFX, Display, TEXT("=== %s%s ==="), *FNiagaraAdapter::ReportStats(), *Baselines);
 		FNiagaraAdapter::ReportOperationTimings();
 	}
 

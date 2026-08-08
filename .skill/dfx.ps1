@@ -70,6 +70,11 @@ param(
     # Slower by design -- it exists so a benchmark can measure both halves on one binary.
     [switch]$NoWriteScope,
 
+    # build: drop the edit context after every structural write, as the generator did before P3.
+    # Slower by design -- same reason as above, plus it is the escape hatch if an engine version
+    # stops refreshing the stack group it just changed.
+    [switch]$RebuildOnStructural,
+
     # list: show dynamic inputs instead of modules.
     [switch]$DynamicInputs,
 
@@ -241,6 +246,7 @@ switch ($Command) {
         if ($Force) { $arguments += '-Force' }
         if ($NoSave) { $arguments += '-NoSave' }
         if ($NoWriteScope) { $arguments += '-NoWriteScope' }
+        if ($RebuildOnStructural) { $arguments += '-RebuildOnStructural' }
     }
     'verify' {
         if (-not $All) {
