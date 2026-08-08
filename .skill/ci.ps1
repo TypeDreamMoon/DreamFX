@@ -7,13 +7,19 @@
     gives the most useful first failure:
 
       1. lint    -- static checks over source. No asset access, so it fails fastest.
-      2. build   -- every .dfs generates and its Niagara compile is clean.
+      2. build   -- every .dfs and .dfm generates and its Niagara compile is clean.
       3. verify  -- every generated asset carries a provenance stamp matching its source.
+      4. corpus  -- the Tests/Corpus suites: diagnostics by code and position, golden topologies,
+                    and decompile idempotence.
 
     Step 3 is the one that catches the case nobody notices: someone edited a .dfs, did not rebuild,
     and committed both. Build alone would pass, because build fixes it.
 
-    Exit code 0 means all three passed. Anything else is the first failing step's code.
+    Step 4 is the one that catches a behaviour changing rather than breaking. Almost everything
+    DreamFX knows about Niagara was established by experiment, not guaranteed by a type; the corpus
+    is what makes a quiet change in any of it fail.
+
+    Exit code 0 means all four passed. Anything else is the first failing step's code.
 
 .EXAMPLE
     ./ci.ps1
@@ -32,6 +38,10 @@ param(
 
     # Do not run the build step. verify then reports any source that has not been built.
     [switch]$SkipBuild,
+
+    # Do not run the corpus suites. They boot the editor, so they cost more than the other three
+    # steps put together; skipping is for a quick local check, never for the gate.
+    [switch]$SkipCorpus,
 
     # Delete assets the build newly created. For a gate that should leave no trace.
     [switch]$CleanNew
@@ -71,6 +81,10 @@ if (-not $SkipBuild) {
 # Skipped after -CleanNew: the assets it would check were just deleted on purpose.
 if (-not $CleanNew) {
     Invoke-Step -Name 'verify' -Arguments (@('verify', '-All') + $common)
+}
+
+if (-not $SkipCorpus) {
+    Invoke-Step -Name 'corpus' -Arguments (@('corpus') + $common)
 }
 
 Write-Host ''

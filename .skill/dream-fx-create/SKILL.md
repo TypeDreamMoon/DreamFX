@@ -72,9 +72,16 @@ System(Name="Samples/NS_MyEffect", Root="Plugin.DreamFX")
    there is `DFX4027`, and it is a real bug, not a pedantic one.
 4. **`hlsl { }` must be a single expression.** No statements, no locals, no `return`. The node it
    lowers to has one output pin and no body to put them in. Multi-statement logic goes in a `.dfm`
-   `DynamicInput`.
+   **`Module`**, whose body is emitted verbatim — not a `DynamicInput`, whose body the translator
+   wraps as `Output = (Type)( ... );` and which is therefore under the same one-expression limit.
+   See [`Docs/language/dfm.md`](../../Docs/language/dfm.md).
 5. **A short module name that matches twice is refused, not guessed.** Disambiguate with a partial
    path: `Spawn/Initialization/InitializeParticle` selects that asset and not its `V2/` sibling.
+6. **Generating a `.dfm` needs MoonEngine.** Writing HLSL onto a Niagara custom node uses export
+   macros a stock engine does not have, so `.dfm` generation is probe-gated at build time. The
+   *product* is unrestricted: generate the module on MoonEngine, commit the asset, and any engine
+   references and cooks it. Elsewhere the build reports `DFX5100` (no asset) or `DFX5107` (asset out
+   of date).
 
 ## Value forms
 
@@ -116,5 +123,8 @@ Source lives under a `DFX/` directory — the project's, or a plugin's. `-All` f
 
 ## See also
 
+- [`Docs/language/`](../../Docs/language/README.md) — the full syntax, one page per file kind plus
+  the value modes and the `L*` rules
+- [`Docs/getting-started.md`](../../Docs/getting-started.md) — the same loop as prose, for a human
 - [`dream-fx-verify`](../dream-fx-verify/SKILL.md) — the build harness and its flags
 - [`dream-fx-diagnose`](../dream-fx-diagnose/SKILL.md) — what each diagnostic code means

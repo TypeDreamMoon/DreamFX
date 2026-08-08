@@ -20,6 +20,33 @@ Without `-Out` the source goes to the log.
 | `-Out` | write here instead of printing |
 | `-Root` | the `Root="..."` to stamp on the output, default `Game`. Asset paths under that root are shortened |
 
+## The `Decompiled/` namespace
+
+An export's `Name=` is **not** the asset it was read from. `/Game/FX/NS_Spark` exports as
+`Name="Decompiled/FX/NS_Spark"`, so building the file writes `/Game/Decompiled/FX/NS_Spark` — a
+mirror — and the original cannot be reached however the file is edited. That is what makes the whole
+`DFX/Decompiled/` tree ordinary source: saving an export rebuilds its mirror, and `build -All`, lint
+and CI cover it like anything else.
+
+Rehoming is idempotent, so re-exporting a mirror reproduces the mirror's own source rather than
+nesting a second copy.
+
+To make the text authoritative for the *original* asset instead, that is **Adopt** — a different
+command, which refuses when anything about the asset cannot be expressed.
+
+### Batch export and mirror comparison
+
+```bash
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile-all -Path '/Game/FX+/Game/Explosions'
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build -All -Force
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 mirror-diff -Path '/Game/FX+/Game/Explosions'
+```
+
+`decompile-all` exports every system under the given paths in one editor boot (`+` or `,` separates
+paths). `mirror-diff` then decompiles the original and its mirror and compares the two texts line by
+line — a stronger check than the round-trip corpus, which only reads back what DreamFX itself wrote.
+Only the `// Decompiled from` line is excused. `-NoCompile` skips the per-mirror compile check.
+
 ## What it does and does not recover
 
 **Recovered**: system and emitter settings that differ from a new asset's, user parameters, every
@@ -64,7 +91,9 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 coverage -Path /Game
 
 Decompiles every Niagara system under a path and reports how many came back whole, plus a
 frequency-ordered list of what could not be represented. This is how v2's feature order should be
-decided — by what the project actually contains.
+decided — by what the project actually contains. `-Path` takes several paths separated by `+`, which
+matters because booting the editor is most of what a scan costs. Assets under `Decompiled/` are left
+out: they are this pipeline's own output, and counting them would report every gap twice.
 
 ```text
 === DreamFX coverage over 2 Niagara system(s) under /DreamFX ===
@@ -81,7 +110,9 @@ Exit code is the number of systems that failed to export.
 
 The output compiles as-is, but it is machine-written. Worth doing by hand:
 
-1. **Retarget `Name=`** if you do not want to overwrite the asset you exported from.
+1. **Leave `Name=` alone** unless you mean to change what the file builds. It already points at the
+   mirror, so saving the file is safe; pointing it back at the original is what *Adopt* is for, and a
+   file in the decompiled tree that names an asset outside `Decompiled/` is refused (DFX8013).
 2. **Put back the inline arithmetic** the exporter turned into `hlsl { }` — it reads better and lint
    can see into it.
 3. **Restore user parameter defaults**, which the export could not read.

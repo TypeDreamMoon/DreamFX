@@ -12,6 +12,12 @@ identifies the failure mode; the position identifies the token. Start from the c
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build <file> -Force
 ```
 
+**Look the code up first: [`Docs/diagnostics/`](../../Docs/diagnostics/README.md) has every one of
+them with its cause and fix.** The index table maps code to page; the page carries the message
+template, where it is raised from, and the prose. This skill covers the handful that come up most and
+the reasoning behind them — the reference covers all 117, and is regenerated from the source by
+`.skill/gen-diagnostics.ps1`, so it does not drift.
+
 ## Ranges
 
 | Range | Stage | What it means |
@@ -129,9 +135,21 @@ The build gate proves the asset generates, not that the effect is right. Two thi
 - **An undeclared system stack keeps whatever it already held.** A `DFX5003` info line lists what was
   left in place. Declaring `SystemUpdate = { }` is how you take ownership of it.
 - **Stack issues are not reported headlessly** — reading them needs a Slate-backed view model, which
-  a commandlet does not have. Open the generated asset in the editor to see them.
+  a commandlet does not have. Two ways to see them: open the generated asset in the editor, or run
+  the corpus suite, which executes inside the editor and therefore *does* report them:
+
+  ```bash
+  pwsh -File Plugins/DreamFX/.skill/dfx.ps1 corpus
+  ```
+
+  This is how an unmet module dependency surfaces. `ScaleSpriteSize` requires `UpdateAge`, provided by
+  `ParticleState`; without it `NormalizedAge` never advances, every age-driven curve evaluates at
+  zero, and the headless build passes.
 
 ## See also
 
+- [`Docs/diagnostics/`](../../Docs/diagnostics/README.md) — every code, cause and fix
+- [`Docs/language/`](../../Docs/language/README.md) — what the syntax the diagnostic is complaining
+  about is supposed to look like
 - [`dream-fx-verify`](../dream-fx-verify/SKILL.md) — the build harness and its flags
 - [`dream-fx-create`](../dream-fx-create/SKILL.md) — writing a new effect from scratch

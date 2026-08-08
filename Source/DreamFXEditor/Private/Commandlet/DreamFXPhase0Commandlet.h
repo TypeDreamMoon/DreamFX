@@ -5,7 +5,7 @@
 #include "DreamFXPhase0Commandlet.generated.h"
 
 /**
- * Phase 0 feasibility nail (see Docs/plan.md section 6).
+ * Phase 0 feasibility nail (see Plan/plan.md section 6).
  *
  * Answers R1 empirically: can UNiagaraExternalEditUtilities drive a Niagara System end to end
  * from a headless commandlet, where FNiagaraExternalEditContext's internally-held

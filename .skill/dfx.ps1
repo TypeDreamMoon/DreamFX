@@ -28,6 +28,14 @@
 
 .EXAMPLE
     ./dfx.ps1 schema GravityForce
+
+.EXAMPLE
+    ./dfx.ps1 decompile-all -Path '/Game/FX+/Game/Explosions'
+    Export every Niagara system under either path into DFX/Decompiled/, in one editor boot.
+
+.EXAMPLE
+    ./dfx.ps1 mirror-diff -Path /Game/FX
+    Check each mirror against the asset it was exported from: same text, and it compiles.
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +44,7 @@ param(
     # schema — print one module's input signature
     # list   — print every module (or, with -DynamicInputs, every dynamic input) on the search paths
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('build', 'verify', 'lint', 'decompile', 'coverage', 'rename', 'graph', 'schema', 'list')]
+    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'corpus')]
     [string]$Command,
 
     # build/verify: path to a .dfs (absolute, or relative to the working directory).
@@ -56,14 +64,23 @@ param(
     # list: show dynamic inputs instead of modules.
     [switch]$DynamicInputs,
 
+    # verify: treat an R7 module-version mismatch as an error rather than a warning. For a release
+    # gate, where assets built against different modules than the text describes must not ship.
+    [switch]$StrictVersions,
+
     # decompile: write the source here instead of printing it.
     [string]$Out,
 
     # decompile: the Root="..." to stamp on the output. Defaults to Game.
     [string]$Root,
 
-    # coverage: the content path to scan. Defaults to /Game.
+    # coverage / decompile-all / mirror-diff: the content path(s) to scan, several separated by '+'.
+    # Defaults to every project mount point.
     [string]$Path,
+
+    # mirror-diff: skip the L2 compile check and report text equivalence only. Much faster, and the
+    # right thing when the mirrors were built in the same session that is now diffing them.
+    [switch]$NoCompile,
 
     # schema: which stack to probe the module in. Defaults to trying each in turn.
     [string]$Stack,
@@ -153,6 +170,55 @@ if (-not (Test-Path -LiteralPath $editorCmd)) {
 
 Write-Host "dfx: $Command  project=$(Split-Path -Leaf $uproject)  engine=$engineRoot" -ForegroundColor DarkGray
 
+# ---------------------------------------------------------------- corpus
+#
+# The corpus suites are automation tests, not a commandlet mode, so that the same assertions run from
+# the editor's Session Frontend without a second implementation. That means booting the editor instead
+# of `-run=`, and reading the verdict out of the log: the automation controller does not set a process
+# exit code, so a run whose exit code is 0 tells you nothing on its own.
+
+if ($Command -eq 'corpus') {
+    $filter = if ($Target) { $Target } else { 'DreamFX.Corpus' }
+
+    # -stdout and -FullStdOutLogOutput are load-bearing: without them UnrealEditor-Cmd writes only to
+    # the log file, this script reads an empty stream, and a run that failed looks exactly like a run
+    # that passed. -TestExit is what makes the process leave once the queue drains.
+    $corpusArguments = @(
+        $uproject,
+        "-ExecCmds=Automation RunTests $filter",
+        '-TestExit=Automation Test Queue Empty',
+        '-unattended', '-nopause', '-nosplash', '-nullrhi', '-NoLiveCoding',
+        '-stdout', '-FullStdOutLogOutput'
+    )
+
+    $output = & $editorCmd @corpusArguments 2>&1
+    $lines = @($output | ForEach-Object { "$_" })
+
+    # The controller writes Result={Success} / Result={Fail}; the process exit code says nothing about
+    # whether any test passed, so these two counts are the verdict.
+    $passed = @($lines | Where-Object { $_.Contains('Result={Success}') }).Count
+    $failed = @($lines | Where-Object { $_.Contains('Result={Fail}') }).Count
+
+    foreach ($line in $lines) {
+        if ($Raw) { Write-Host $line; continue }
+        if ($line -match 'Result=\{Fail\}|LogAutomationController: Error:') {
+            Write-Host ($line -replace '^\[[^\]]*\]\[\s*\d+\]', '') -ForegroundColor Red
+        }
+    }
+
+    Write-Host ''
+    if ($passed + $failed -eq 0) {
+        Write-Host "dfx: corpus ran no tests for filter '$filter'. Is DreamFXEditor built and enabled?" -ForegroundColor Red
+        exit 1
+    }
+    if ($failed -gt 0) {
+        Write-Host "dfx: corpus FAILED ($failed failed, $passed passed)" -ForegroundColor Red
+        exit $failed
+    }
+    Write-Host "dfx: corpus OK ($passed passed)" -ForegroundColor Green
+    exit 0
+}
+
 # ---------------------------------------------------------------- argument assembly
 
 $arguments = @($uproject, '-run=DreamFX')
@@ -172,6 +238,7 @@ switch ($Command) {
             $arguments += "-File=$((Resolve-Path -LiteralPath $Target).Path)"
         }
         $arguments += '-Verify'
+        if ($StrictVersions) { $arguments += '-StrictVersions' }
     }
     'lint' {
         if (-not $All) {
@@ -185,6 +252,15 @@ switch ($Command) {
         $arguments += "-Decompile=$Target"
         if ($Out) { $arguments += "-Out=$Out" }
         if ($Root) { $arguments += "-Root=$Root" }
+    }
+    'decompile-all' {
+        $arguments += '-DecompileAll'
+        if ($Path) { $arguments += "-Path=$Path" }
+    }
+    'mirror-diff' {
+        $arguments += '-MirrorDiff'
+        if ($Path) { $arguments += "-Path=$Path" }
+        if ($NoCompile) { $arguments += '-NoCompile' }
     }
     'coverage' {
         $arguments += '-Coverage'
