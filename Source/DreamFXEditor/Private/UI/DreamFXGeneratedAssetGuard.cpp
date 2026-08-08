@@ -2,6 +2,7 @@
 
 #include "DreamFXModule.h"
 #include "Generation/DreamFXProvenance.h"
+#include "Workspace/DreamFXWorkspaceService.h"
 
 #include "Editor.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -47,13 +48,15 @@ namespace UE::DreamFX::Editor
 			Info.bUseSuccessFailIcons = false;
 
 			// The source path is the actionable part of the message, so make it one click away.
+			// Through the same launch chain the menus use (plan-v3 E5): the OS default handler for a
+			// .dfs is whatever happens to be registered, which on most machines is nothing at all.
 			if (!Stamp.SourceFullPath.IsEmpty())
 			{
 				const FString SourcePath = Stamp.SourceFullPath;
 				Info.HyperlinkText = LOCTEXT("DreamFXOpenSource", "Open source file");
 				Info.Hyperlink = FSimpleDelegate::CreateLambda([SourcePath]()
 				{
-					FPlatformProcess::LaunchFileInDefaultExternalApplication(*SourcePath);
+					FDreamFXLaunchUtils::LaunchTextFileInPreferredEditor(SourcePath);
 				});
 			}
 
