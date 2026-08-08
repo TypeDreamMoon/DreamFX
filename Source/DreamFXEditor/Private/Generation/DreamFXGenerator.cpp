@@ -2250,6 +2250,54 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
+			// Remove the user parameters the source no longer declares, before adding the ones it does.
+			//
+			// A build reuses the asset rather than recreating it, so without this the exposed
+			// parameters only ever grow: rename one and the old name stays, retype one and both types
+			// sit there under the same name. Seen with `_ArrowTex`, which ended up as a `Texture` and a
+			// `DI<Texture>` at once. The source is meant to be the whole truth about the asset, and a
+			// parameter nobody declares any more is not part of it.
+			//
+			// Name *and* type, because that is what RemoveUserVariable is keyed on and what makes a
+			// retype removable at all -- matching on name alone would delete the entry the loop below
+			// is about to add.
+			{
+				TArray<FUserVariableInfo> Existing;
+				Errors.Reset();
+				if (FNiagaraAdapter::GetUserVariables(System, Existing, Errors))
+				{
+					TSet<TPair<FName, FNiagaraTypeDefinition>> Planned;
+					for (const FPlannedUserVariable& Variable : Plan.UserVariables)
+					{
+						Planned.Add(TPair<FName, FNiagaraTypeDefinition>(Variable.Name, Variable.Type));
+					}
+
+					for (const FUserVariableInfo& Stale : Existing)
+					{
+						// GetUserVariables reports the qualified name (`User.X`) and the plan holds the
+						// bare one, which is the same split AddUserVariable already documents.
+						FString BareName = Stale.Name.ToString();
+						BareName.RemoveFromStart(TEXT("User."), ESearchCase::CaseSensitive);
+
+						if (Planned.Contains(TPair<FName, FNiagaraTypeDefinition>(FName(*BareName), Stale.Type)))
+						{
+							continue;
+						}
+
+						Errors.Reset();
+						if (!FNiagaraAdapter::RemoveUserVariable(System, Stale.Name, Stale.Type, Errors))
+						{
+							// Not fatal. A parameter that will not come off leaves the asset carrying
+							// something the source does not describe, which is the state this whole
+							// block is narrowing -- failing the build over it would be worse.
+							UE_LOG(LogDreamFX, Warning,
+								TEXT("Could not remove user parameter '%s' that the source no longer declares: %s"),
+								*Stale.Name.ToString(), *FString::Join(Errors, TEXT(" | ")));
+						}
+					}
+				}
+			}
+
 			for (const FPlannedUserVariable& Variable : Plan.UserVariables)
 			{
 				Errors.Reset();
