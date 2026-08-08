@@ -1,0 +1,11 @@
+// A five-component vector literal has no Niagara type; the arity check is what turns it into an error.
+// EXPECT DFX4002
+System(Name="Corpus/NS_VectorTooManyComponents", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            GravityForce(Gravity = (0, 0, -980, 1, 2));
+        }
+    }
+}

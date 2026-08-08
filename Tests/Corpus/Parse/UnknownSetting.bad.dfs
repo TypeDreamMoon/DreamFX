@@ -1,0 +1,13 @@
+// An unchecked misspelled setting does nothing at all, and the effect is simply wrong with no sign why.
+// EXPECT DFX3020
+System(Name="Corpus/NS_UnknownSetting", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmpuTime = 0.0;
+    }
+
+    Emitter Sparks
+    {
+        ParticleUpdate = { GravityForce(Gravity = (0, 0, -980)); }
+    }
+}

@@ -1,0 +1,13 @@
+// Property types are a closed set; an unknown one has to list it.
+// EXPECT DFX4021
+System(Name="Corpus/NS_UnknownParameterType", Root="Plugin.DreamFX")
+{
+    Properties = {
+        matrix Transform;
+    }
+
+    Emitter Sparks
+    {
+        ParticleUpdate = { GravityForce(Gravity = (0, 0, -980)); }
+    }
+}

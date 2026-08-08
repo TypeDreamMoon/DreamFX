@@ -1,7 +1,7 @@
 // Negative case for the Phase 1 acceptance criterion: a mistyped module input name must be reported
 // with the line and column of the argument itself, not of the module or the file.
 //
-// Expected: DFX3003 at (12,13), naming 'Gravty' and suggesting 'Gravity'.
+// EXPECT DFX3003 (11,17)
 System(Name="Corpus/NS_BadInputName", Root="Plugin.DreamFX")
 {
     Emitter Sparks

@@ -1,0 +1,10 @@
+// A `from` reference pulls a whole emitter in by copy (R3), including whatever User.* it reads. The
+// host has to declare those or the copied emitter silently reads a parameter that does not exist --
+// which is why the diagnostic points at the `from` line rather than at the .dfe.
+// EXPECT DFX3043
+System(Name="Corpus/NS_MissingUserParameter", Root="Plugin.DreamFX")
+{
+    Emitter Flash from "../Support/E_NeedsUserParameter"
+    {
+    }
+}

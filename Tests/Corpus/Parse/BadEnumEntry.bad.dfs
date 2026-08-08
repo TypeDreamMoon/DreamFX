@@ -1,0 +1,12 @@
+// Niagara enum labels are not guessable from the DSL side -- the asset stores NewEnumerator0 and the
+// real name lives in display text -- so an unknown entry has to list the ones that exist.
+// EXPECT DFX4006
+System(Name="Corpus/NS_BadEnumEntry", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Sometimes);
+        }
+    }
+}

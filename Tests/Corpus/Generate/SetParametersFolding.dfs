@@ -1,0 +1,53 @@
+// Golden topology for L2's folding rule.
+//
+// Consecutive assignments collapse into one Set Parameters module, and a module call between them
+// breaks the run. That boundary is invisible in a successful build and is exactly what the round-trip
+// symmetry depends on: one Set Parameters module has to come back out as one block of assignments.
+// The golden file records where the breaks land.
+System(Name="Corpus/NS_SetParametersFolding", Root="Plugin.DreamFX")
+{
+    Emitter Motes
+    {
+        Settings = {
+            SimTarget          = CPU;
+            Determinism        = true;
+            RandomSeed         = 3;
+            AllocationMode     = Fixed;
+            PreAllocationCount = 8;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnBurst_Instantaneous(SpawnCount = 4, SpawnTime = 0.0);
+        }
+
+        ParticleSpawn = {
+            // Run one: two assignments with nothing between them.
+            float Particles.Moon.A = 1.0;
+            float Particles.Moon.B = 2.0;
+
+            // The call is the break.
+            SystemLocation();
+
+            // Run two.
+            float Particles.Moon.C = 3.0;
+        }
+
+        ParticleUpdate = {
+            GravityForce(Gravity = (0, 0, -980));
+            SolveForcesAndVelocity();
+        }
+
+        SpriteRenderer Core
+        {
+            SortMode = ViewDepth;
+        }
+
+        // Declaration order is renderer order and there is no other addressing scheme (L8), so the
+        // second renderer being second is part of what the golden pins.
+        SpriteRenderer Glow
+        {
+            SortMode = ViewDistance;
+        }
+    }
+}

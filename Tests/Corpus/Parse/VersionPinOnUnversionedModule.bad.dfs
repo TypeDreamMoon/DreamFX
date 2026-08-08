@@ -1,0 +1,14 @@
+// R7's `@version` pin records which version of a module the source was written against, and the
+// build refuses to quietly use a different one. Pinning a module that never opted into versioning
+// pins nothing at all, so it is an error rather than a no-op -- an ignored pin reads as protection
+// that is not there.
+// EXPECT DFX3009
+System(Name="Corpus/NS_VersionPinUnversioned", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            GravityForce@2.0(Gravity = (0, 0, -980));
+        }
+    }
+}

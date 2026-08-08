@@ -1,0 +1,12 @@
+// An unqualified assignment target has no namespace to live in, and guessing one puts the value
+// somewhere the author never named.
+// EXPECT DFX4025
+System(Name="Corpus/NS_BadAssignmentTarget", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            float Flicker = 1.0;
+        }
+    }
+}

@@ -1,0 +1,16 @@
+// Renderer types are a closed set; an unknown one must name the set rather than fail deeper in the API.
+// EXPECT DFX3004
+System(Name="Corpus/NS_UnknownRenderer", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            GravityForce(Gravity = (0, 0, -980));
+        }
+
+        SparkleRenderer Core
+        {
+            SortMode = ViewDepth;
+        }
+    }
+}

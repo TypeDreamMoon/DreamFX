@@ -1,0 +1,12 @@
+// Support file, not a fixture: it exists so MissingUserParameter.bad.dfs has something to pull in.
+// Lives outside Parse/ because everything under Parse/ is a test case and has to declare its own
+// expectations.
+Emitter(Name="Corpus/E_NeedsUserParameter", Root="Plugin.DreamFX")
+{
+    Settings = { SimTarget = CPU; }
+
+    EmitterUpdate = {
+        EmitterState(LifeCycleMode = Self, LoopBehavior = Once);
+        SpawnBurst_Instantaneous(SpawnCount = User.FlashCount, SpawnTime = 0.0);
+    }
+}

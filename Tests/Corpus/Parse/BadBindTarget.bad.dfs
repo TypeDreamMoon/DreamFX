@@ -1,0 +1,14 @@
+// A renderer binding target is a parameter, not a bare name.
+// EXPECT DFX4026
+System(Name="Corpus/NS_BadBindTarget", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = { GravityForce(Gravity = (0, 0, -980)); }
+
+        SpriteRenderer Core
+        {
+            Bind Color -> MyColor;
+        }
+    }
+}

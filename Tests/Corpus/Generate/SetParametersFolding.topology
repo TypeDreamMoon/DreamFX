@@ -1,0 +1,18 @@
+SystemUpdate:
+  - SystemState
+emitter Motes
+  EmitterUpdate:
+    - EmitterState
+    - SpawnBurst_Instantaneous
+  ParticleSpawn:
+    - SetParameters#0
+        = Particles.Moon.A
+        = Particles.Moon.B
+    - SystemLocation
+    - SetParameters#1
+        = Particles.Moon.C
+  ParticleUpdate:
+    - GravityForce
+    - SolveForcesAndVelocity
+  renderer 0: SpriteRenderer
+  renderer 1: SpriteRenderer

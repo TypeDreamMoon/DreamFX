@@ -1,0 +1,13 @@
+// The DFX3003 mistake one level down a dynamic input chain, where the address is a path and not a name.
+// EXPECT DFX3008
+System(Name="Corpus/NS_UnknownDynamicInputInput", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleSpawn = {
+            AddVelocityInCone(
+                VelocityStrength = RandomRangeFloat(Minmum = 1.0, Maximum = 2.0)
+            );
+        }
+    }
+}

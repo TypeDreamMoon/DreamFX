@@ -1,0 +1,49 @@
+// Round-trip fixture for plan-v5 R1: a static switch on a *module*.
+//
+// E4-1 solved this one level down, on dynamic input chains. At module level it was still open, and
+// it was the single largest failure in the four content packs: 824 of 1316 rebuild errors were one
+// shape of DFX3003, "module has no input named X" for an input the module really does have -- once
+// its switches are set.
+//
+// `SpriteSizeMode = Uniform` is what makes `UniformSpriteSize` exist at all. Read from an authored
+// module the input is there; probed on a freshly added one, where the switch sits at its default, it
+// is not. Type-checking the export against the unconfigured module therefore rejected an argument
+// the author had legitimately written.
+//
+// The order below is deliberate and is the second half of R1: the switch is written first, because
+// Niagara refuses a write to an input the current switch state hides. The generator reorders on its
+// own, so a hand-written file need not know that -- but a fixture that relied on the reordering
+// would not notice if the probe silently stopped applying switches, because the argument would then
+// simply vanish from the schema again.
+System(Name="Corpus/NS_ModuleStaticSwitches", Root="Plugin.DreamFX")
+{
+    Emitter Motes
+    {
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 20.0);
+        }
+
+        ParticleSpawn = {
+            // Three switches, three inputs that only exist because of them. Each pair is a separate
+            // chance for the probe to be reading the wrong configuration.
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 2.0,
+                ColorMode         = DirectSet,
+                Color             = (0.2, 0.6, 1.0, 1.0),
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 12.5
+            );
+            SystemLocation();
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+        }
+
+        SpriteRenderer Body
+        {
+        }
+    }
+}

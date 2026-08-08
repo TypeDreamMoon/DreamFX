@@ -1,0 +1,12 @@
+// A module name that resolves to nothing has to read differently from a module that exists but has
+// no such input, or a typo in a path looks like a typo in an argument.
+// EXPECT DFX3001
+System(Name="Corpus/NS_UnknownModule", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            GravtyForce(Gravity = (0, 0, -980));
+        }
+    }
+}

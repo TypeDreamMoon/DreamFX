@@ -1,0 +1,11 @@
+// An empty hlsl block lowers to an expression with no text in it.
+// EXPECT DFX4036
+System(Name="Corpus/NS_EmptyHlslBlock", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            float Particles.Moon.Flicker = hlsl { };
+        }
+    }
+}

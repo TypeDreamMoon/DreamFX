@@ -1,0 +1,17 @@
+// Negative case for the dynamic input version pin's syntax (plan-v5 R1b).
+//
+// `@1.0` after a name that is not a call has nothing to pin -- an enum entry and a linked parameter
+// have no script and therefore no version. Accepting it silently would let `Channel = R@1.0` read as
+// the entry `R`, with the pin quietly discarded, which is exactly the class of silent loss the
+// version work exists to remove.
+//
+// EXPECT DFX2007
+System(Name="Corpus/NS_VersionPinOnNonCall", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            ScaleColor(ScaleAlpha = User.Alpha@1.0);
+        }
+    }
+}

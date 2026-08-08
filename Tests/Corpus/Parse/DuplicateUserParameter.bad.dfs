@@ -1,0 +1,14 @@
+// Two user parameters with one name: a blueprint SetNiagaraVariable would reach whichever won.
+// EXPECT DFX3021
+System(Name="Corpus/NS_DuplicateUserParameter", Root="Plugin.DreamFX")
+{
+    Properties = {
+        float Speed = 1.0;
+        float Speed = 2.0;
+    }
+
+    Emitter Sparks
+    {
+        ParticleUpdate = { GravityForce(Gravity = (0, 0, -980)); }
+    }
+}

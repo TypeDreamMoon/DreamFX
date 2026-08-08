@@ -1,0 +1,13 @@
+// DI<> with no inner type names no class to instantiate.
+// EXPECT DFX4020
+System(Name="Corpus/NS_DataInterfaceWithoutInner", Root="Plugin.DreamFX")
+{
+    Properties = {
+        DI TargetMesh;
+    }
+
+    Emitter Sparks
+    {
+        ParticleUpdate = { GravityForce(Gravity = (0, 0, -980)); }
+    }
+}

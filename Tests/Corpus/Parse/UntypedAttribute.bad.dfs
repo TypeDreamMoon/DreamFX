@@ -1,0 +1,12 @@
+// L2 types a new attribute from its first value, and an hlsl block carries no type of its own, so the
+// author has to say what they meant instead of the compiler guessing.
+// EXPECT DFX4022
+System(Name="Corpus/NS_UntypedAttribute", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            Particles.Moon.Flicker = hlsl { frac(Engine.Time) };
+        }
+    }
+}

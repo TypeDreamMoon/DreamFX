@@ -1,0 +1,11 @@
+// Arity is the only thing separating lerp(a, b) from lerp(a, b, t).
+// EXPECT DFX4034
+System(Name="Corpus/NS_BuiltinWrongArity", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            float Particles.Moon.Level = lerp(0.0, 1.0);
+        }
+    }
+}

@@ -1,0 +1,76 @@
+// Round-trip fixture for the three plan-v3 E4 gaps, each of which was a silent loss before:
+//
+//   E4-1  a static switch on a dynamic input   RandomnessMode on RandomRangeFloat
+//   E4-2  a disabled module                    `disabled GravityForce(...)`
+//   E4-3  an array-valued asset reference      Meshes on a MeshRenderer
+//
+// All three are "the export rebuilt into something quietly different" bugs rather than crashes, so
+// only a fixed-point test catches a regression in them.
+System(Name="Corpus/NS_SwitchesAndArrays", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime = 0.0;
+    }
+
+    Properties = {
+        float Speed = 200.0;
+    }
+
+    Emitter Chunks
+    {
+        Settings = {
+            SimTarget          = CPU;
+            Determinism        = true;
+            RandomSeed         = 5;
+            AllocationMode     = Fixed;
+            PreAllocationCount = 8;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnBurst_Instantaneous(SpawnCount = 8, SpawnTime = 0.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode = DirectSet,
+                Lifetime     = 1.5,
+                ColorMode    = DirectSet,
+                Color        = (1.0, 0.5, 0.1, 1.0)
+            );
+            SystemLocation();
+
+            // E4-1. RandomnessMode is a static switch on the dynamic input: it exists only on a live
+            // chain, so before E4-1 it was neither readable nor writable and an export dropped it.
+            // It is written before Minimum/Maximum regardless of the order here -- a switch reshapes
+            // which siblings are in the graph, and Niagara refuses a write to one that is not.
+            AddVelocityInCone(
+                ConeAngle        = 25.0,
+                VelocityStrength = RandomRangeFloat(
+                    Minimum        = User.Speed * 0.5,
+                    Maximum        = User.Speed,
+                    RandomnessMode = SimulationDefaults
+                )
+            );
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+
+            // E4-2. Parked, not deleted: the inputs are the reason to keep it, so the gravity here is
+            // deliberately off the default -- a default would be suppressed on export and the test
+            // would pass without proving that a disabled module keeps what was set on it. Before E4-2
+            // this came back enabled, which is a behaviour change no diff of the source would show.
+            disabled GravityForce(Gravity = (0, 0, -321));
+
+            SolveForcesAndVelocity();
+        }
+
+        // E4-3. Meshes is an array of element structs, and the asset reference is one field inside
+        // each. Writing it as an array of paths is what makes a mesh renderer migrate at all.
+        MeshRenderer Body
+        {
+            Meshes = ["/Engine/BasicShapes/Cube"];
+        }
+    }
+}

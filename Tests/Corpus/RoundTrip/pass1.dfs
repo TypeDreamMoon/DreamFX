@@ -51,8 +51,9 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
         }
 
         ParticleUpdate = {
+            ParticleState();
             GravityForce(Gravity = (0.0, 0.0, -680.0));
-            DragForce(Drag = 1.4);
+            Drag(Drag = 1.4);
             SolveForcesAndVelocity();
             ScaleSpriteSize(
                 ScaleSpriteSizeMode = Uniform,
@@ -73,6 +74,7 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
         {
             Alignment = Unaligned;
             FacingMode = FaceCamera;
+            Material = "/Niagara/DefaultAssets/DefaultSpriteMaterial";
             SortMode = ViewDepth;
         }
     }
@@ -98,6 +100,7 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
         }
 
         ParticleUpdate = {
+            ParticleState();
             ScaleSpriteSize(ScaleSpriteSizeMode = Uniform, UniformScaleFactor = 1.5);
         }
 
@@ -105,6 +108,7 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
         {
             Alignment = Unaligned;
             FacingMode = FaceCamera;
+            Material = "/Niagara/DefaultAssets/DefaultSpriteMaterial";
         }
     }
 

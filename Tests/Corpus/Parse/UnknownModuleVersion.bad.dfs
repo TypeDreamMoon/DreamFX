@@ -1,0 +1,20 @@
+// Negative case for plan-v5 R1b, the version pin that selects.
+//
+// A pin now picks which version of a module script to build against, which means a pin naming a
+// version the asset does not have must be an error rather than a silently ignored decoration. The
+// old contract -- "the pin records what this was written against and the build refuses to use a
+// different one" -- could not tell those apart, because it never selected anything.
+//
+// The message lists the versions the asset does offer, because "5.0 is not available" is only
+// actionable next to "1.0, 2.0 are".
+//
+// EXPECT DFX3009
+System(Name="Corpus/NS_UnknownModuleVersion", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            ScaleColor@99.7(ScaleAlpha = 0.5);
+        }
+    }
+}

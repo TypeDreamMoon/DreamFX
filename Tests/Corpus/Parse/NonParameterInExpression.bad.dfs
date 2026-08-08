@@ -1,0 +1,11 @@
+// Only namespaced parameters exist inside an inline expression; a bare name has nothing to bind to.
+// EXPECT DFX4032
+System(Name="Corpus/NS_NonParameterInExpression", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            float Particles.Moon.Level = Flicker * 2.0;
+        }
+    }
+}

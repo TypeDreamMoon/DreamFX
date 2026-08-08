@@ -1,0 +1,20 @@
+// Curve tangents are data (3.5). An unrecognised interpolation mode would fall back to Auto and drop
+// the hand-tuned shape without saying so.
+// EXPECT DFX4039
+System(Name="Corpus/NS_BadCurveInterpolation", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            ScaleSpriteSize(
+                ScaleSpriteSizeMode = Uniform,
+                UniformScaleFactor = FloatFromCurve(
+                    FloatCurve = curve {
+                        0.0 -> 1.0 [ Interp=Smooth ];
+                        1.0 -> 0.0;
+                    }
+                )
+            );
+        }
+    }
+}

@@ -1,0 +1,11 @@
+// The L6 whitelist. Widening it is the slide into a 13k-line expression backend, so the gate is a test.
+// EXPECT DFX3006
+System(Name="Corpus/NS_InlineFunctionNotAllowed", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            float Particles.Moon.Wave = sin(Particles.NormalizedAge);
+        }
+    }
+}

@@ -1,0 +1,55 @@
+// plan-v2 W4: a GPU emitter in the round-trip corpus.
+//
+// SimTarget is an emitter setting like any other, but everything downstream of it is different -- the
+// particle scripts become a compute shader, the build has to wait for a second compiler, and bounds
+// stop being computed for you. A round-trip fixture is what keeps the export of SimTarget and
+// FixedBounds honest; without one, a decompiler that quietly dropped either would still look fine,
+// because a GPU emitter exported as a CPU one compiles perfectly well and runs somewhere else.
+System(Name="Corpus/NS_GpuEmitter", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime  = 0.0;
+        FixedBounds = box(-100, -100, -100, 100, 100, 100);
+    }
+
+    Emitter Motes
+    {
+        Settings = {
+            SimTarget          = GPU;
+            LocalSpace         = false;
+            Determinism        = true;
+            RandomSeed         = 9;
+            AllocationMode     = Fixed;
+            PreAllocationCount = 128;
+            FixedBounds        = box(-100, -100, -100, 100, 100, 100);
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 50.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 1.0,
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 4.0
+            );
+            SystemLocation();
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            GravityForce(Gravity = (0, 0, -200));
+            SolveForcesAndVelocity();
+        }
+
+        SpriteRenderer Core
+        {
+            Alignment  = Unaligned;
+            FacingMode = FaceCamera;
+            SortMode   = None;
+        }
+    }
+}

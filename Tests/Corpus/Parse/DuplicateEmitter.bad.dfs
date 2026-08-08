@@ -1,0 +1,15 @@
+// Emitter names are the stable key the regeneration contract (4.5) matches handles by, so two
+// emitters sharing one name is data loss rather than a naming nit.
+// EXPECT DFX3005
+System(Name="Corpus/NS_DuplicateEmitter", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = { GravityForce(Gravity = (0, 0, -980)); }
+    }
+
+    Emitter Sparks
+    {
+        ParticleUpdate = { DragForce(Drag = 1.0); }
+    }
+}

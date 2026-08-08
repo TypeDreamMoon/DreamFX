@@ -1,0 +1,16 @@
+// L7: a float user parameter driving an int32 input. A link binds directly with no conversion step,
+// so this truncates silently -- the exact failure L7 exists to refuse.
+// EXPECT DFX4027
+System(Name="Corpus/NS_NarrowingLink", Root="Plugin.DreamFX")
+{
+    Properties = {
+        float SparkCount = 24.0;
+    }
+
+    Emitter Sparks
+    {
+        EmitterUpdate = {
+            SpawnBurst_Instantaneous(SpawnCount = User.SparkCount, SpawnTime = 0.0);
+        }
+    }
+}

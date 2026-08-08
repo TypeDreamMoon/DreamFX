@@ -1,0 +1,14 @@
+// An empty curve evaluates to nothing; catching it here beats wondering why a size faded to zero.
+// EXPECT DFX4038
+System(Name="Corpus/NS_CurveWithoutKeys", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            ScaleSpriteSize(
+                ScaleSpriteSizeMode = Uniform,
+                UniformScaleFactor = FloatFromCurve(FloatCurve = curve { })
+            );
+        }
+    }
+}

@@ -1,0 +1,15 @@
+// A stack input's hlsl block lowers to a node with one typed output pin and no body, so statements
+// cannot be expressed. The message has to point at the .dfm form that can hold them.
+// EXPECT DFX4030
+System(Name="Corpus/NS_HlslMultiStatement", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            float Particles.Moon.Flicker = hlsl {
+                float T = Engine.Time;
+                return frac(T);
+            };
+        }
+    }
+}

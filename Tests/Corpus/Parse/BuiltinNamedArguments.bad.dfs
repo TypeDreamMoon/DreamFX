@@ -1,0 +1,12 @@
+// An L6 builtin is positional; named arguments read as a dynamic input call and would resolve to a
+// different thing entirely.
+// EXPECT DFX4033
+System(Name="Corpus/NS_BuiltinNamedArguments", Root="Plugin.DreamFX")
+{
+    Emitter Sparks
+    {
+        ParticleUpdate = {
+            float Particles.Moon.Level = saturate(Value = Particles.NormalizedAge);
+        }
+    }
+}

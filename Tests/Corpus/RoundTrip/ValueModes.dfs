@@ -1,0 +1,98 @@
+// Round-trip fixture covering every value mode in one file (L3), because each is decompiled by its
+// own branch and a regression in one is invisible from the others.
+//
+//   literal            SpawnCount, Gravity
+//   linked             User.Speed -> a module input
+//   enum               LoopBehavior, SortMode
+//   dynamic input      FloatFromCurve, with a nested chain under AddVelocityInCone
+//   curve with tangents
+//   hlsl block
+//   renderer Bind
+//   Set Parameters folding
+System(Name="Corpus/NS_ValueModes", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime  = 0.0;
+        FixedBounds = box(-50, -50, -50, 50, 50, 50);
+    }
+
+    Properties = {
+        int   Count = 8;
+        float Speed = 120.0;
+        Color Tint  = (0.2, 0.6, 1.0, 1.0);
+    }
+
+    Emitter Motes
+    {
+        Settings = {
+            SimTarget          = CPU;
+            LocalSpace         = true;
+            Determinism        = true;
+            RandomSeed         = 11;
+            AllocationMode     = Fixed;
+            PreAllocationCount = 16;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnBurst_Instantaneous(SpawnCount = User.Count, SpawnTime = 0.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 2.0,
+                ColorMode         = DirectSet,
+                Color             = User.Tint,
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 6.0
+            );
+            SystemLocation();
+
+            AddVelocityInCone(
+                ConeAngle        = 30.0,
+                VelocityStrength = RandomRangeFloat(Minimum = User.Speed * 0.5, Maximum = User.Speed)
+            );
+
+            float Particles.Moon.Seed  = 0.25;
+            float Particles.Moon.Phase = 0.5;
+        }
+
+        ParticleUpdate = {
+            // ScaleSpriteSize declares a prerequisite on UpdateAge, and NormalizedAge is a constant
+            // zero without it -- the curve below would evaluate at one point forever. Niagara reports
+            // that as a stack issue, which only appears when stack issues are readable (the editor),
+            // so this is the kind of thing only the corpus catches.
+            ParticleState();
+
+            GravityForce(Gravity = (0, 0, -400));
+            SolveForcesAndVelocity();
+
+            ScaleSpriteSize(
+                ScaleSpriteSizeMode = Uniform,
+                UniformScaleFactor  = FloatFromCurve(
+                    FloatCurve = curve {
+                        0.0 -> 1.0;
+                        0.6 -> 0.7 [ Interp=Cubic; Arrive=-0.3; Leave=-0.9 ];
+                        1.0 -> 0.0 [ Interp=Linear ];
+                    },
+                    CurveIndex = Particles.NormalizedAge
+                )
+            );
+
+            Color Particles.Color = hlsl {
+                float4(User.Tint.rgb, saturate(1.0 - Particles.NormalizedAge))
+            };
+        }
+
+        SpriteRenderer Core
+        {
+            Alignment  = Unaligned;
+            FacingMode = FaceCamera;
+            SortMode   = ViewDepth;
+
+            Bind SpriteSize -> Particles.SpriteSize;
+            Bind Color      -> Particles.Color;
+        }
+    }
+}
