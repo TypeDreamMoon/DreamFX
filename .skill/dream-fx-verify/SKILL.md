@@ -30,6 +30,11 @@ from anywhere inside the project.
 Editor boot dominates the cost — roughly 12 s of the wall time regardless of how many files are
 built. Batch edits rather than looping per file.
 
+Close the editor before a build. Both processes write the same packages otherwise, and the one that
+saves second wins silently; the run warns when it sees an editor but cannot tell which project that
+editor has open. Large sources are slow for a structural reason, not a fixable one —
+[Docs/performance-2026-08-08.md](../../Docs/performance-2026-08-08.md) has the measurements.
+
 | Argument | Effect |
 | :-- | :-- |
 | *(positional)* | the source file — absolute, or relative to the working directory |
@@ -37,6 +42,7 @@ built. Batch edits rather than looping per file.
 | `-Force` | bypass the provenance-hash skip. Without it an unchanged file reports `up to date` and proves nothing |
 | `-NoSave` | build in memory without writing packages — the right flag for checking that source is valid |
 | `-CleanNew` | delete the `.uasset` files this run wrote, **but only those git reports untracked**, then report the rest |
+| `-NoWriteScope` | build the slow way, rebuilding the edit context per write. Diagnostic only — it exists so a benchmark can measure both halves on one binary |
 | `-Project` | the `.uproject`. Defaults to the nearest one at or above the target, then the working directory |
 | `-Engine` | engine root. Defaults to the `EngineAssociation` lookup; `UE_ENGINE_ROOT` also works |
 | `-Raw` | print the whole engine log instead of just the `LogDreamFX` lines |

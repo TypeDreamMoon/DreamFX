@@ -85,6 +85,12 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 `-SkipCorpus` 跳过第四步（它要起编辑器，比前三步加起来还贵）；`-StrictVersions` 把 R7 版本漂移
 从 warning 升成 error，给发布分支用。
 
+**跑 CI 前先关编辑器**：`build` 和 `corpus` 都写 `.uasset`，编辑器开着同一个工程也在写，
+谁后存谁赢，而且两边都不吭声。commandlet 启动时探到编辑器进程会警告一句，但它分不清那个编辑器
+开的是不是本工程，所以只是提醒、不是门禁。
+
+构建耗时的实测与结论见 [Docs/performance-2026-08-08.md](Docs/performance-2026-08-08.md)。
+
 ## 结构
 
 ```
