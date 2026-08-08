@@ -56,9 +56,15 @@ DerivedDataCache/*
 
 .obsidian/*
 
-# Documentation is maintained outside this repository
-Docs/
+# Plans are local working notes and stay out of the repository; Docs/ ships with the plugin.
+Plan/
 
 # Generated Niagara assets. Design principle 1: .uasset is a build product, the .dfs is the source.
 # Rebuild them with: pwsh -File .skill/dfx.ps1 build -All -Force
 Content/Samples/
+
+# Assets the corpus suites build from Tests/Corpus fixtures. Recreated by every `dfx corpus` run.
+Content/Corpus/
+
+# Module and dynamic input assets, built from DFX/Modules/*.dfm by the same rule as the samples.
+Content/Modules/
