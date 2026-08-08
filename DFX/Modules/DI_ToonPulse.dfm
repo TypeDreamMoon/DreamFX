@@ -1,14 +1,10 @@
-// The plan document's section 3.3 dynamic input, kept as a language sample.
+// The plan document's section 3.3 dynamic input, generated for real since plan-v2 W1.
 //
-// It parses, lints and CI-gates today, but it does NOT generate an asset: putting HLSL on a Niagara
-// custom node needs UNiagaraNodeCustomHlsl::SetCustomHlsl, which NiagaraEditor does not export, and
-// the field behind it is private. Building this file reports DFX5100 saying so.
-//
-// Its equivalent, reachable today, is an inline hlsl { } expression at the point of use:
-//
-//     SpriteSizeMin = hlsl { pow(0.5 + 0.5 * sin(Engine.Time * 6.0 * 6.2831853), 2.0) }
-//
-// which is what NS_ToonHitSpark.dfs does.
+// A DynamicInput body has to be a single expression, with or without the `return`. The Niagara
+// translator wraps a dynamic input's custom HLSL as `Output = (Type)( <body> );`, so statements
+// before the return would produce invalid HLSL rather than an error naming the real problem;
+// DFX3037 catches that here instead. Multi-statement logic belongs in a Module -- see
+// M_ToonSpin.dfm, whose body is emitted verbatim.
 DynamicInput(Name="Modules/Moon/ToonPulse", Root="Plugin.DreamFX")
 {
     Settings = {

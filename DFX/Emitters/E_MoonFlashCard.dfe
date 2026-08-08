@@ -34,6 +34,9 @@ Emitter(Name="Emitters/E_MoonFlashCard", Root="Plugin.DreamFX")
     }
 
     ParticleUpdate = {
+        // ScaleSpriteSize has a prerequisite on UpdateAge, which ParticleState provides. Without it
+        // the module reports an unmet dependency and NormalizedAge never advances.
+        ParticleState();
         ScaleSpriteSize(ScaleSpriteSizeMode = Uniform, UniformScaleFactor = 1.5);
     }
 

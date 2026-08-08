@@ -87,8 +87,16 @@ System(Name="Samples/NS_ToonHitSpark", Root="Plugin.DreamFX")
         }
 
         ParticleUpdate = {
+            // ScaleSpriteSize declares a prerequisite on UpdateAge, which ParticleState provides.
+            // Without it NormalizedAge never advances and the curve below evaluates at zero forever --
+            // a silently wrong effect that only surfaces as a Niagara stack issue, which the headless
+            // build cannot read (GetStackIssues is not headless-safe). The corpus suite is what found
+            // it, running in the editor where stack issues are available.
+            ParticleState();
+
             GravityForce(Gravity = (0, 0, -680));
-            DragForce(Drag = 1.4);
+            // Drag, not DragForce: the older module is deprecated and reports DFX6004.
+            Drag(Drag = 1.4);
             SolveForcesAndVelocity();
 
             ScaleSpriteSize(

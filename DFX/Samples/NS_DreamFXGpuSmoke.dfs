@@ -1,0 +1,83 @@
+// plan-v2 W4: the GPU path, which every phase from 0 onwards deferred.
+//
+// A GPU emitter is not a flag on an otherwise identical system. Its particle scripts become a compute
+// shader instead of VM bytecode, which is a different compiler on a different thread, and
+// WaitForCompilationComplete skips it unless asked -- so a headless build of a GPU system used to
+// finish, and report success, while the shader was still building. The build now waits for the
+// shaders when any emitter declares SimTarget = GPU.
+//
+// FixedBounds is here for the same reason DFX7101 warns about its absence: a GPU emitter cannot read
+// its own particle positions back to compute bounds, so without a fixed box it gets a default one and
+// disappears the moment the camera looks at it from the wrong angle. This file is both the GPU smoke
+// test and the proof that DFX7101 stays quiet when the bounds are set.
+System(Name="Samples/NS_DreamFXGpuSmoke", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime  = 0.0;
+        FixedBounds = box(-150, -150, -150, 150, 150, 150);
+    }
+
+    Properties = {
+        float SpawnRate = 200.0 [ Group="Burst" ];
+    }
+
+    Emitter Motes
+    {
+        Settings = {
+            SimTarget          = GPU;
+            LocalSpace         = false;
+            Determinism        = true;
+            RandomSeed         = 42;
+            // A GPU emitter allocates once; there is no growing the buffer mid-simulation.
+            AllocationMode     = Fixed;
+            PreAllocationCount = 512;
+            FixedBounds        = box(-150, -150, -150, 150, 150, 150);
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = User.SpawnRate);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 1.5,
+                ColorMode         = DirectSet,
+                Color             = (0.3, 0.8, 1.0, 1.0),
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 5.0
+            );
+            SystemLocation();
+            AddVelocityInCone(ConeAngle = 45.0, VelocityStrength = 180.0);
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            GravityForce(Gravity = (0, 0, -320));
+            SolveForcesAndVelocity();
+
+            ScaleSpriteSize(
+                ScaleSpriteSizeMode = Uniform,
+                UniformScaleFactor  = FloatFromCurve(
+                    FloatCurve = curve {
+                        0.0 -> 0.2;
+                        0.2 -> 1.0 [ Interp=Cubic ];
+                        1.0 -> 0.0 [ Interp=Linear ];
+                    },
+                    CurveIndex = Particles.NormalizedAge
+                )
+            );
+        }
+
+        SpriteRenderer Core
+        {
+            Alignment  = Unaligned;
+            FacingMode = FaceCamera;
+            SortMode   = None;
+
+            Bind SpriteSize -> Particles.SpriteSize;
+            Bind Color      -> Particles.Color;
+        }
+    }
+}

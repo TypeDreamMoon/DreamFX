@@ -1,0 +1,77 @@
+// plan-v2 W1 acceptance: a system that references both hand-written .dfm assets.
+//
+//   ToonSpin  -- a Module, called like any stock module, with its own named inputs
+//   ToonPulse -- a DynamicInput, used in a value position like any stock dynamic input
+//
+// ModulePaths adds the generated modules' folder to the search path; the Niagara defaults stay on it,
+// so stock modules still resolve by short name.
+System(Name="Samples/NS_DreamFXModules", Root="Plugin.DreamFX")
+{
+    Settings = {
+        ModulePaths = ["/DreamFX/Modules"];
+        WarmupTime  = 0.0;
+        FixedBounds = box(-100, -100, -100, 100, 100, 100);
+    }
+
+    Properties = {
+        float SpawnRate = 24.0  [ Group="Burst" ];
+        float Spin      = 220.0 [ Group="Motion" ];
+    }
+
+    Emitter Motes
+    {
+        Settings = {
+            SimTarget          = CPU;
+            LocalSpace         = true;
+            Determinism        = true;
+            RandomSeed         = 7;
+            AllocationMode     = Fixed;
+            PreAllocationCount = 32;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            // Continuous, not a single burst: a one-shot lands every particle on the same point at
+            // the same age, which makes both the spin and the pulse impossible to see.
+            SpawnRate(SpawnRate = User.SpawnRate);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 3.0,
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 12.0
+            );
+            SystemLocation();
+            AddVelocityInCone(ConeAngle = 35.0, VelocityStrength = 90.0);
+
+            // ToonSpin reads and writes Particles.SpriteRotation, so the attribute has to exist before
+            // the update stack runs. Declaring it here is the first write (L2).
+            float Particles.SpriteRotation = 0.0;
+        }
+
+        ParticleUpdate = {
+            // ScaleSpriteSize needs NormalizedAge to advance, which ParticleState provides.
+            ParticleState();
+
+            // The generated Module. Its inputs are the ones declared in M_ToonSpin.dfm.
+            ToonSpin(SpinRate = User.Spin, bClockwise = true, RateScale = 1.0);
+
+            // The generated DynamicInput, in a value position -- exactly how a stock one is used.
+            ScaleSpriteSize(
+                ScaleSpriteSizeMode = Uniform,
+                UniformScaleFactor  = ToonPulse(Frequency = 4.0, Sharpness = 3.0)
+            );
+        }
+
+        SpriteRenderer Core
+        {
+            Alignment  = Unaligned;
+            FacingMode = FaceCamera;
+            SortMode   = ViewDepth;
+
+            Bind SpriteRotation -> Particles.SpriteRotation;
+        }
+    }
+}
