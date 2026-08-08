@@ -1,5 +1,7 @@
 #include "DreamFXPaths.h"
 
+#include "Settings/DreamFXEditorSettings.h"
+
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/PackageName.h"
@@ -71,12 +73,116 @@ namespace UE::DreamFX::Editor
 					/*bClearFileNames=*/false);
 				for (const FString& File : Found)
 				{
+					// Decompiled exports are included (plan-v4 V1-3). They used to be filtered out here
+					// because their `Name=` pointed at the asset they were read from, so building one
+					// overwrote third-party content; now it points into the `Decompiled/` namespace, so
+					// the worst a build can do is rewrite the mirror. The cost of the old exclusion was
+					// that editing an export and saving did nothing at all, with no message.
 					OutFiles.AddUnique(FPaths::ConvertRelativePathToFull(File));
 				}
 			}
 		}
 
 		OutFiles.Sort();
+	}
+
+	bool FDreamFXPaths::IsDecompiledExport(const FString& FilePath)
+	{
+		const UDreamFXEditorSettings* Settings = GetDefault<UDreamFXEditorSettings>();
+		const FString Configured = Settings ? Settings->DecompiledOutputDirectory : FString();
+		if (Configured.IsEmpty())
+		{
+			return false;
+		}
+
+		FString Directory = FPaths::ConvertRelativePathToFull(
+			FPaths::Combine(FPaths::ProjectDir(), Configured));
+		if (!Directory.EndsWith(TEXT("/")))
+		{
+			Directory += TEXT("/");
+		}
+
+		return FPaths::ConvertRelativePathToFull(FilePath).StartsWith(Directory, ESearchCase::IgnoreCase);
+	}
+
+	FString FDreamFXPaths::ToDecompiledNamespace(const FString& MountRelativePath)
+	{
+		FString Relative = MountRelativePath;
+		Relative.RemoveFromStart(TEXT("/"));
+
+		const FString Prefix = FString(DecompiledNamespace) + TEXT("/");
+		if (Relative.StartsWith(Prefix, ESearchCase::IgnoreCase))
+		{
+			return Relative;
+		}
+		return Prefix + Relative;
+	}
+
+	bool FDreamFXPaths::IsDecompiledNamespaceAsset(const FString& PackagePath)
+	{
+		// The namespace sits directly under the mount point, so what matters is the second segment:
+		// "/Game/Decompiled/FX/NS_X" yes, "/Game/FX/Decompiled/NS_X" no.
+		FString Remainder = PackagePath;
+		if (!Remainder.RemoveFromStart(TEXT("/")))
+		{
+			return false;
+		}
+
+		int32 SlashIndex;
+		if (!Remainder.FindChar(TEXT('/'), SlashIndex))
+		{
+			return false;
+		}
+
+		return Remainder.RightChop(SlashIndex + 1)
+			.StartsWith(FString(DecompiledNamespace) + TEXT("/"), ESearchCase::IgnoreCase);
+	}
+
+	FString FDreamFXPaths::DecompiledSourcePathFor(const FString& PackagePath, const TCHAR* Extension)
+	{
+		const UDreamFXEditorSettings* Settings = GetDefault<UDreamFXEditorSettings>();
+		const FString OutputDirectory = (Settings && !Settings->DecompiledOutputDirectory.IsEmpty())
+			? Settings->DecompiledOutputDirectory
+			: FString(TEXT("DFX/Decompiled"));
+
+		FString Relative = PackagePath;
+		Relative.RemoveFromStart(TEXT("/"));
+
+		return FPaths::ConvertRelativePathToFull(
+			FPaths::Combine(FPaths::ProjectDir(), OutputDirectory, Relative + Extension));
+	}
+
+	bool FDreamFXPaths::ResolveRootTokenForPackage(const FString& PackagePath, FString& OutRootToken,
+		FString& OutMountPoint, FString& OutError)
+	{
+		const FString MountPointName = FPackageName::GetPackageMountPoint(PackagePath).ToString();
+		if (MountPointName.IsEmpty())
+		{
+			OutError = FString::Printf(TEXT("'%s' is not under any mounted content root."), *PackagePath);
+			return false;
+		}
+
+		OutMountPoint = FString::Printf(TEXT("/%s"), *MountPointName);
+
+		if (MountPointName == TEXT("Game"))
+		{
+			OutRootToken = TEXT("Game");
+			return true;
+		}
+
+		for (const TSharedRef<IPlugin>& Plugin : IPluginManager::Get().GetEnabledPlugins())
+		{
+			if (Plugin->GetMountedAssetPath().LeftChop(1) == OutMountPoint)
+			{
+				OutRootToken = FString::Printf(TEXT("Plugin.%s"), *Plugin->GetName());
+				return true;
+			}
+		}
+
+		OutError = FString::Printf(
+			TEXT("'%s' is mounted at '%s', which belongs to no enabled plugin. DreamFX can only address /Game and plugin content."),
+			*PackagePath, *OutMountPoint);
+		return false;
 	}
 
 	bool FDreamFXPaths::IsSourceFile(const FString& FilePath)
