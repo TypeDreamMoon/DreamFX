@@ -1688,8 +1688,11 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RequestCompile begin '%s'"), *System->GetName());
 		System->RequestCompile(/*bForce=*/false);
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RequestCompile issued, waiting '%s'"), *System->GetName());
 		System->WaitForCompilationComplete(bIncludingGpuShaders, /*bShowProgress=*/false);
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete end '%s'"), *System->GetName());
 
 		FNiagaraExternalEditContext Context(System);
 		FNiagaraExt_SystemCompileState State;

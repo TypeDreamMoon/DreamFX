@@ -2569,16 +2569,22 @@ namespace UE::DreamFX::Editor
 			return Result;
 		}
 
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE ApplyPlan begin '%s'"), *Plan.FullAssetPath);
+
 		TMap<FName, FSourceLocation> ModuleLocations;
 		if (!ApplyPlan(System, Plan, Diagnostics, ModuleLocations))
 		{
 			return Result;
 		}
 
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE ApplyPlan end '%s'"), *Plan.FullAssetPath);
+
 		// Before the compile, because the compile is the first thing that reads them. A curve written
 		// through the data-interface JSON path has its keys but not the sample table those keys are
 		// baked into, and nothing in that path bakes it (see RefreshCurveLookupTables).
 		FNiagaraAdapter::RefreshCurveLookupTables(System);
+
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RefreshCurveLookupTables end '%s'"), *Plan.FullAssetPath);
 
 		// plan-v2 W4. A GPU emitter's real work is the compute shader, and WaitForCompilationComplete
 		// does not wait for it unless asked -- so without this a GPU system's build reports the VM
