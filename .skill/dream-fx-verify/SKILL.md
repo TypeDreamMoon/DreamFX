@@ -43,6 +43,7 @@ editor has open. Large sources are slow for a structural reason, not a fixable o
 | `-NoSave` | build in memory without writing packages — the right flag for checking that source is valid |
 | `-CleanNew` | delete the `.uasset` files this run wrote, **but only those git reports untracked**, then report the rest |
 | `-NoWriteScope` | build the slow way, rebuilding the edit context per write. Diagnostic only — it exists so a benchmark can measure both halves on one binary |
+| `-RebuildOnStructural` | the same, one epoch further in: drop the context after every structural write instead of trusting the engine's own in-place refresh. Also the escape hatch if an engine version stops refreshing the stack group it just changed |
 | `-Project` | the `.uproject`. Defaults to the nearest one at or above the target, then the working directory |
 | `-Engine` | engine root. Defaults to the `EngineAssociation` lookup; `UE_ENGINE_ROOT` also works |
 | `-Raw` | print the whole engine log instead of just the `LogDreamFX` lines |
