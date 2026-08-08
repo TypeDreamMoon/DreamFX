@@ -610,31 +610,41 @@ namespace UE::DreamFX::Editor
 		}
 
 		FModuleInfo Info;
-		Errors.Reset();
-		const bool bReadTopology = FNiagaraAdapter::GetModuleInfo(ModuleAddress, Info, Errors);
-
 		FModuleSchema Schema;
-		if (bReadTopology)
+		bool bReadTopology = false;
 		{
-			for (const FInputInfo& Input : Info.Inputs)
+			// Everything from here to the closing brace only reads, and the per-input call below made
+			// this the most expensive loop in a build: one whole probe-system view model per input, on
+			// every module of every source. Sharing one across the burst is what FReadScope is for, and
+			// the switch writes above are deliberately outside it -- they change what these reads
+			// report, which is the one thing a shared view model cannot survive.
+			FNiagaraAdapter::FReadScope ReadScope(ProbeSystem);
+
+			Errors.Reset();
+			bReadTopology = FNiagaraAdapter::GetModuleInfo(ModuleAddress, Info, Errors);
+
+			if (bReadTopology)
 			{
-				FInputSchema InputSchema;
-				InputSchema.Name = Input.Name;
-				InputSchema.Type = Input.Type;
-				InputSchema.bIsStaticSwitch = Input.bStaticSwitch;
-
-				// bSupportsExpressions is only knowable per live input, and it gates whether an
-				// `hlsl { }` block is legal here (Phase 3), so it is worth the extra call.
-				TArray<FString> InputErrors;
-				FInputSchema Detail;
-				if (FNiagaraAdapter::GetInputSchema(ModuleAddress.WithInput(Input.Name), Detail, InputErrors))
+				for (const FInputInfo& Input : Info.Inputs)
 				{
-					InputSchema.bSupportsExpressions = Detail.bSupportsExpressions;
-					InputSchema.Category = Detail.Category;
-					InputSchema.Description = Detail.Description;
-				}
+					FInputSchema InputSchema;
+					InputSchema.Name = Input.Name;
+					InputSchema.Type = Input.Type;
+					InputSchema.bIsStaticSwitch = Input.bStaticSwitch;
 
-				Schema.Inputs.Add(MoveTemp(InputSchema));
+					// bSupportsExpressions is only knowable per live input, and it gates whether an
+					// `hlsl { }` block is legal here (Phase 3), so it is worth the extra call.
+					TArray<FString> InputErrors;
+					FInputSchema Detail;
+					if (FNiagaraAdapter::GetInputSchema(ModuleAddress.WithInput(Input.Name), Detail, InputErrors))
+					{
+						InputSchema.bSupportsExpressions = Detail.bSupportsExpressions;
+						InputSchema.Category = Detail.Category;
+						InputSchema.Description = Detail.Description;
+					}
+
+					Schema.Inputs.Add(MoveTemp(InputSchema));
+				}
 			}
 		}
 
@@ -989,6 +999,10 @@ namespace UE::DreamFX::Editor
 		Errors.Reset();
 		if (FNiagaraAdapter::SetDynamicInputAtVersion(InputAddress, DynamicInput, VersionGuid, Errors))
 		{
+			// Read-only from here, and per-input again: one view model per child without the scope.
+			// Opened after the write above, which is what put the chain there to be read.
+			FNiagaraAdapter::FReadScope ReadScope(ProbeSystem);
+
 			TArray<FDynamicInputChild> Children;
 			Errors.Reset();
 			if (FNiagaraAdapter::GetDynamicInputChildren(InputAddress, Children, Errors) && Children.Num() > 0)
