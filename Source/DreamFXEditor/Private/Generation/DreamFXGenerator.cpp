@@ -1073,7 +1073,53 @@ namespace UE::DreamFX::Editor
 						Context.DeclaredAttributes->FindOrAdd(TargetName) = TargetType;
 					}
 
-					if (OutStack.Modules.Num() > 0 && OutStack.Modules.Last().bIsSetParameters)
+					// Folding stops at a read-after-write. Every entry of a Set Parameters module takes
+					// its value from the parameter map as it was on entry, so two assignments merged
+					// into one module cannot see each other:
+					//
+					//     Particles.PPP        = Add_Vector(A = Particles.MyMeshPos, ...);
+					//     Particles.MyMeshPos  = Particles.PPP;
+					//
+					// Folded, the second reads a PPP the first has not published yet, and Niagara
+					// refuses it -- "变量 Particles.PPP 在设置之前被读取", on four of the content-pack
+					// assets. The original assets have two modules here, because the editor makes a new
+					// one each time; only DreamFX merges them, so only DreamFX has to know when not to.
+					auto ReadsAlreadyWritten = [](const FPlannedSetParameter& Candidate, const TSet<FName>& Written)
+					{
+						auto LinksIntoWritten = [&Written](const FInputValue& Value)
+						{
+							return Value.Mode == EInputValueMode::Linked
+								&& Written.Contains(Value.LinkedVariable.GetName());
+						};
+
+						if (LinksIntoWritten(Candidate.Value))
+						{
+							return true;
+						}
+						// A dynamic input's arguments are where most of these hide: the read is an
+						// argument of the expression, not the assignment's own value.
+						for (const FPlannedInput& Nested : Candidate.NestedInputs)
+						{
+							if (LinksIntoWritten(Nested.Value))
+							{
+								return true;
+							}
+						}
+						return false;
+					};
+
+					bool bCanFold = OutStack.Modules.Num() > 0 && OutStack.Modules.Last().bIsSetParameters;
+					if (bCanFold)
+					{
+						TSet<FName> WrittenSoFar;
+						for (const FPlannedSetParameter& Existing : OutStack.Modules.Last().Parameters)
+						{
+							WrittenSoFar.Add(Existing.Name);
+						}
+						bCanFold = !ReadsAlreadyWritten(Parameter, WrittenSoFar);
+					}
+
+					if (bCanFold)
 					{
 						OutStack.Modules.Last().Parameters.Add(MoveTemp(Parameter));
 					}
@@ -1977,13 +2023,47 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
+				// Inputs are written switches-first, then values (see PlanArguments). That order is
+				// right for the common case and wrong for one real one: it assumes a static switch is
+				// never itself gated. ShapeLocation disproves that -- `UseEndcapsInSurfaceOnlyMode` is
+				// a static switch, and what reveals it is `SurfaceOnly`, a plain bool that therefore
+				// lands in the *second* pass. The switch was written while still hidden and Niagara
+				// refused it, which is one of the four DFX5021 failures on the content packs.
+				//
+				// Rather than model the gating graph -- which the schema does not expose and which the
+				// author is under no obligation to declare in any particular order -- a refused write
+				// is simply retried once, after every other input on this module has landed. Whatever
+				// gates it has been set by then, whichever pass it was in. A write that fails again is
+				// reported with the error from the *second* attempt, so the message describes the state
+				// the author can actually see.
+				TArray<const FPlannedInput*> Refused;
 				for (const FPlannedInput& Input : Module.Inputs)
 				{
 					Errors.Reset();
 					if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input.Path), Input, Errors))
 					{
-						ReportAdapterErrors(Errors, TEXT("DFX5021"), Input.Location, Diagnostics);
-						bOk = false;
+						Refused.Add(&Input);
+					}
+				}
+
+				if (Refused.Num() > 0)
+				{
+					// The retry has to see the module as it is now, not as the shared edit context
+					// last described it. That matters for the gate that is invisible to everyone:
+					// Niagara's inline edit conditions are plain bools with no schema flag, so writing
+					// one reveals its dependents without anything being able to predict it. Ending the
+					// epoch here buys that for the price of a single rebuild per module that needed a
+					// retry, instead of a rebuild after every bool write.
+					FNiagaraAdapter::EndStructuralEpoch(OwnerAddress.System);
+
+					for (const FPlannedInput* Input : Refused)
+					{
+						Errors.Reset();
+						if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input->Path), *Input, Errors))
+						{
+							ReportAdapterErrors(Errors, TEXT("DFX5021"), Input->Location, Diagnostics);
+							bOk = false;
+						}
 					}
 				}
 
