@@ -116,26 +116,34 @@ Decompiled exports are included, like any other source. See [Export vs Adopt](#e
 The **Open in VSCode** link jumps to the first error's file, line and column. The diagnostic has
 carried a position all along; before this it only reached the log.
 
-### The startup backlog
+### The bulk batch
 
-The directory watcher reports everything that changed while the editor was shut down as soon as it
-registers, in one delivery that looks exactly like a very large save. After re-exporting a content
-pack that is the whole source tree at once: 24 systems rebuilding concurrently put 237 jobs into the
-Niagara compile queue, and the editor did not survive it.
+Re-exporting a content pack, switching branch, or running a scripted rewrite changes many sources at
+once, and rebuilding each one queues a Niagara compile per system. On this project that killed the
+editor: 24 systems rebuilding together put 237 jobs into the compile queue.
 
-So a batch arriving within 30 seconds of startup and holding more than **Startup Rebuild Threshold**
-files (Project Settings → Plugins → DreamFX, default 8) is offered rather than built:
+So a batch holding more than **Bulk Rebuild Threshold** files (Project Settings → Plugins → DreamFX,
+default 8) is offered rather than built:
 
-> DreamFX: *N* source files changed while the editor was closed. Rebuilding them all at once would
-> queue hundreds of Niagara compiles. — **Rebuild them now**
+> DreamFX: *N* source files changed at once. Rebuilding them all now would queue hundreds of Niagara
+> compiles. — **Rebuild them now**
 
 The files are kept, not dropped: dropping them would leave the assets stale with nothing to notice
 it, which is the same failure the gate exists to prevent, only quieter. If the toast expires, *Tools
 → DreamFX → Rebuild DFX* does the same thing.
 
-Only the startup backlog is gated. Saving while the editor is open still rebuilds immediately,
-however many files the save touches — that path is the iteration loop and is left alone. An explicit
-*Rebuild DFX* is never gated either: it was asked for.
+An ordinary save is never gated — one file, or any batch at or under the threshold, rebuilds
+immediately, because that path is the iteration loop. An explicit *Rebuild DFX* is never gated
+either: it was asked for.
+
+> [!NOTE]
+> This gate was first written against a different theory — that the danger was the watcher replaying
+> everything changed while the editor was shut down — and measurement contradicted it.
+> `RegisterDirectoryChangedCallback_Handle` starts watching at registration and reports no backlog:
+> twelve files changed with the editor closed produced *nothing at all* on reopen. The batch that
+> actually hurts arrives while the editor is open. Measured with twelve files before the fix: 54
+> Niagara system compiles and eight compile-pool saturations. After: the toast, and nothing built
+> until asked.
 
 ### Verify DFX
 

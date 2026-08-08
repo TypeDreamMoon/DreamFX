@@ -28,26 +28,13 @@ namespace UE::DreamFX::Editor
 		 */
 		constexpr float DebounceSeconds = 0.75f;
 
-		/**
-		 * How long after registering a change still counts as the shutdown backlog rather than a save.
-		 *
-		 * The directory watcher replays everything that changed while the editor was closed as soon as
-		 * it is registered, in one delivery, indistinguishable from a save except by when it arrives.
-		 * Generous because the replay lands behind the rest of editor startup, and harmless if it is
-		 * too generous: the window only decides whether a *large* batch is built or offered.
-		 */
-		constexpr double StartupReplayWindowSeconds = 30.0;
-
 		TMap<FString, FDelegateHandle> GWatchHandles;
 		FTSTicker::FDelegateHandle GTickerHandle;
 		TSet<FString> GPendingFiles;
 		double GLastChangeTime = 0.0;
 
-		/** When the watch began, for the startup window above. */
-		double GWatchStartTime = 0.0;
-
-		/** A startup backlog too large to build unasked. Held until the author says so. */
-		TSet<FString> GDeferredStartupFiles;
+		/** A batch too large to build unasked. Held until the author says so. */
+		TSet<FString> GDeferredBulkFiles;
 
 		/** Set by an explicit command; a plain save leaves it false and stays quiet when it worked. */
 		bool GAnnounceSuccess = false;
@@ -230,25 +217,25 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
-		 * Offers a startup backlog instead of building it.
+		 * Offers a bulk batch instead of building it.
 		 *
 		 * The files are kept rather than dropped: dropping them would leave the assets stale with no
 		 * way to notice, which is the failure this is meant to prevent, just quieter.
 		 */
-		void OfferDeferredStartupBatch()
+		void OfferDeferredBulkBatch()
 		{
 			FNotificationInfo Info(FText::Format(
-				LOCTEXT("DreamFXStartupBacklog",
-					"DreamFX: {0} source files changed while the editor was closed. Rebuilding them all "
-					"at once would queue hundreds of Niagara compiles."),
-				FText::AsNumber(GDeferredStartupFiles.Num())));
+				LOCTEXT("DreamFXBulkBacklog",
+					"DreamFX: {0} source files changed at once. Rebuilding them all now would queue "
+					"hundreds of Niagara compiles."),
+				FText::AsNumber(GDeferredBulkFiles.Num())));
 			Info.ExpireDuration = 30.0f;
 			Info.bFireAndForget = true;
 
 			Info.Hyperlink = FSimpleDelegate::CreateLambda([]()
 			{
-				GPendingFiles.Append(GDeferredStartupFiles);
-				GDeferredStartupFiles.Reset();
+				GPendingFiles.Append(GDeferredBulkFiles);
+				GDeferredBulkFiles.Reset();
 
 				// Say so when it finishes, and skip the debounce: the author just asked for this, so
 				// waiting another three quarters of a second only makes the click feel broken.
@@ -264,9 +251,9 @@ namespace UE::DreamFX::Editor
 			}
 
 			UE_LOG(LogDreamFX, Display,
-				TEXT("%d source file(s) changed while the editor was closed. Not building automatically -- ")
-				TEXT("use the notification, or Tools > DreamFX > Rebuild DFX."),
-				GDeferredStartupFiles.Num());
+				TEXT("%d source file(s) changed at once. Not building automatically -- use the ")
+				TEXT("notification, or Tools > DreamFX > Rebuild DFX."),
+				GDeferredBulkFiles.Num());
 		}
 
 		bool Tick(float /*DeltaTime*/)
@@ -281,19 +268,25 @@ namespace UE::DreamFX::Editor
 				return true;
 			}
 
-			// plan-v6 P2. A large batch this soon after startup is the shutdown backlog, not something
-			// anyone just saved, and building it concurrently is what killed the editor after a
-			// re-export. An explicit command (GAnnounceSuccess) is exempt: it was asked for.
+			// plan-v6 P2, corrected by measurement. The batch is gated on its size alone, whenever it
+			// arrives. plan-v6 assumed the danger was a startup replay of everything that changed while
+			// the editor was shut down; testing showed this watcher gets no such replay --
+			// RegisterDirectoryChangedCallback_Handle starts watching at registration, and twelve files
+			// changed with the editor closed produced nothing at all on reopen. The batch that actually
+			// hurts is a bulk change while the editor is *open*: re-exporting a content pack, switching
+			// branch, or a scripted rewrite. Measured with twelve files, that queued 54 Niagara system
+			// compiles and saturated the compile pool eight times; the crash plan-v6 describes was the
+			// same thing at 24 systems.
+			//
+			// An explicit command (GAnnounceSuccess) is exempt: it was asked for.
 			const UDreamFXEditorSettings* Settings = GetDefault<UDreamFXEditorSettings>();
-			const int32 Threshold = Settings ? Settings->StartupRebuildThreshold : 8;
+			const int32 Threshold = Settings ? Settings->BulkRebuildThreshold : 8;
 
-			if (!GAnnounceSuccess
-				&& GPendingFiles.Num() > Threshold
-				&& FPlatformTime::Seconds() - GWatchStartTime < StartupReplayWindowSeconds)
+			if (!GAnnounceSuccess && GPendingFiles.Num() > Threshold)
 			{
-				GDeferredStartupFiles.Append(GPendingFiles);
+				GDeferredBulkFiles.Append(GPendingFiles);
 				GPendingFiles.Reset();
-				OfferDeferredStartupBatch();
+				OfferDeferredBulkBatch();
 				return true;
 			}
 
@@ -329,8 +322,6 @@ namespace UE::DreamFX::Editor
 
 	void FSourceWatcher::Register()
 	{
-		GWatchStartTime = FPlatformTime::Seconds();
-
 		FDirectoryWatcherModule& Module = FModuleManager::LoadModuleChecked<FDirectoryWatcherModule>(
 			TEXT("DirectoryWatcher"));
 		IDirectoryWatcher* Watcher = Module.Get();

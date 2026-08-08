@@ -42,17 +42,19 @@ public:
 	FString DecompiledOutputDirectory = TEXT("DFX/Decompiled");
 
 	/**
-	 * How many files a *startup* batch may hold before the watcher stops building it automatically.
+	 * How many files may change at once before the watcher stops rebuilding them automatically.
 	 *
-	 * The directory watcher reports everything that changed while the editor was shut down, all at
-	 * once, as if it had just been saved. After a re-export that is the whole source tree: 24 systems
-	 * rebuilt concurrently put 237 jobs in the Niagara compile queue and the editor did not survive
-	 * it. Past this many, the watcher offers the rebuild instead of starting it.
+	 * Re-exporting a content pack, switching branch or running a scripted rewrite changes many
+	 * sources in one go, and rebuilding all of them queues a Niagara compile per system. Measured
+	 * with twelve files: 54 system compiles and eight compile-pool saturations, on a project where
+	 * the same thing at 24 systems put 237 jobs in the queue and killed the editor. Past this many,
+	 * the watcher offers the rebuild instead of starting it.
 	 *
-	 * Only the startup backlog is gated. Saving a file while the editor is open still rebuilds
-	 * immediately however many files the save touches, which is what makes the iteration loop work.
+	 * Ordinary saves are unaffected -- one file, or any batch at or under this size, still rebuilds
+	 * immediately, which is what makes the iteration loop work. An explicit *Rebuild DFX* is never
+	 * gated either: it was asked for.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Workspace", meta = (ClampMin = "1",
-		DisplayName = "Startup Rebuild Threshold"))
-	int32 StartupRebuildThreshold = 8;
+		DisplayName = "Bulk Rebuild Threshold"))
+	int32 BulkRebuildThreshold = 8;
 };
