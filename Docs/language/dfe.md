@@ -5,7 +5,7 @@ A `.dfe` holds one `Emitter` block, written exactly as it would be inline in a `
 ```cpp
 Emitter(Name="Emitters/E_MoonFlashCard", Root="Plugin.DreamFX")
 {
-    Settings = { SimTarget = CPU; LocalSpace = true; }
+    Settings = { SimTarget = CPU; LocalSpace = true; QualityLevelMask = 31; }
 
     EmitterUpdate = {
         EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.12);
@@ -18,6 +18,10 @@ Emitter(Name="Emitters/E_MoonFlashCard", Root="Plugin.DreamFX")
     SpriteRenderer Card { ... }
 }
 ```
+
+`QualityLevelMask` is the scalability bitmask, which lives inside the emitter's `FNiagaraPlatformSet`
+rather than at the top level. Settings whose property sits inside a struct are spelled with a dotted
+path internally; the DSL name is the leaf, because that is the part an author sets.
 
 A `.dfe` generates nothing on its own (DFX5097). It exists to be pulled into a system:
 

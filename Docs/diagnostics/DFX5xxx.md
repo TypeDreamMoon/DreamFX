@@ -14,7 +14,7 @@
 Stack '%s' has no Niagara script usage mapping.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:750`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1029`
 <!-- generated:end DFX5001 -->
 
 **Cause.** A stack kind with no Niagara script usage behind it. Reserved stacks (`Stage`, `OnEvent`) reach here if they get past DFX2012.
@@ -32,7 +32,7 @@ Stack '%s' has no Niagara script usage mapping.
 This system declares no emitters, so it will produce nothing.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1428`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1938`
 <!-- generated:end DFX5002 -->
 
 **Cause.** A system with no emitters compiles and produces nothing.
@@ -50,7 +50,7 @@ This system declares no emitters, so it will produce nothing.
 '%s' is not declared in this source, so its existing modules are left as-is: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1738`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2342`
 <!-- generated:end DFX5003 -->
 
 **Cause.** Declaring a stack means taking it over; a stack this source never mentions keeps whatever it had. `CreateNiagaraSystem` puts a `SystemState` in `SystemUpdate`, and clearing it wholesale would make every `.dfs` without an explicit `SystemUpdate` produce a system that never runs. Informational so the difference is visible rather than silent.
@@ -68,7 +68,7 @@ This system declares no emitters, so it will produce nothing.
 No Material was set, so the engine default was applied: %s. Write 'Material = \"...\";' to choose your own.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1821`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2443`
 <!-- generated:end DFX5004 -->
 
 **Cause.** A renderer with no `Material` gets the engine default, which is why an untextured effect still draws.
@@ -104,7 +104,7 @@ SavePackage failed for '%s'.
 'MaterialParam' is reserved syntax and is not implemented in v1 (plan section 7).
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1009`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1446`
 <!-- generated:end DFX5093 -->
 
 **Cause.** `MaterialParam` is reserved syntax (L8) with no implementation in v1.
@@ -122,7 +122,7 @@ SavePackage failed for '%s'.
 Only System documents can be generated right now; this file declares a %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2040`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2662`
 <!-- generated:end DFX5097 -->
 
 **Cause.** Only `.dfs` and `.dfm` produce assets. A `.dfe` is merged into its host by copy (R3) and has nothing of its own to generate.
@@ -140,7 +140,7 @@ Only System documents can be generated right now; this file declares a %s.
 Data interface parameter '%s' has a default value, which v1 does not apply. Feed it at runtime instead.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1264`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1701`
 <!-- generated:end DFX5098 -->
 
 **Cause.** A data interface parameter's default is not applied: v1 declares DI parameters and leaves the value to runtime (plan 3.5).
@@ -158,7 +158,7 @@ Data interface parameter '%s' has a default value, which v1 does not apply. Feed
 [Group] and [SortPriority] are kept in source only: the external edit API's user variable struct has no metadata fields to write them to.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1282`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1719`
 <!-- generated:end DFX5099 -->
 
 **Cause.** `[Group]` and `[SortPriority]` have nowhere to go: the external edit API's user variable struct carries name, type and description and no other metadata.

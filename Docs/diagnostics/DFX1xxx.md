@@ -14,7 +14,7 @@
 Could not read source file '%s'.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1485`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1540`
 <!-- generated:end DFX1000 -->
 
 **Cause.** The path does not exist, or the process cannot read it. A `from` reference and a `-File=` argument both land here.

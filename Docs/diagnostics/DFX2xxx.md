@@ -14,7 +14,7 @@
 Unknown document type '%s'. Expected System, Emitter, Module or DynamicInput.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1388`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1443`
 <!-- generated:end DFX2000 -->
 
 **Cause.** The first word of the file is not one of the four document kinds.
@@ -86,7 +86,7 @@ Expected a number but found '%s'.
 Expected a value but found %s.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:549`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:575`
 <!-- generated:end DFX2004 -->
 
 **Cause.** A value was expected after `=`.
@@ -104,7 +104,7 @@ Expected a value but found %s.
 '#EndRegion' has no matching '#Region'.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:757`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:783`
 <!-- generated:end DFX2005 -->
 
 **Cause.** `#EndRegion` appeared with no open `#Region`.
@@ -122,7 +122,7 @@ Expected a value but found %s.
 Unknown directive '#%s'. Expected Region or EndRegion.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:767`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:793`
 <!-- generated:end DFX2006 -->
 
 **Cause.** The only directives are `#Region` and `#EndRegion`.
@@ -140,7 +140,7 @@ Unknown directive '#%s'. Expected Region or EndRegion.
 Expected a version after '@'.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:821`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:454`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:475`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:853`
 <!-- generated:end DFX2007 -->
 
 **Cause.** `@` introduces an R7 version pin and must be followed by a version.
@@ -158,7 +158,7 @@ Expected a version after '@'.
 Module '%s' was given a positional argument. Module inputs must be written as 'Name = Value'.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:840`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:639`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:872`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:907`
 <!-- generated:end DFX2008 -->
 
 **Cause.** A module call was given a bare value. Niagara addresses module inputs by name, and the order they appear in the stack UI is not the order they are declared in.
@@ -176,7 +176,7 @@ Module '%s' was given a positional argument. Module inputs must be written as 'N
 '#Region \"%s\"' was never closed with '#EndRegion'.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:912`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:944`
 <!-- generated:end DFX2010 -->
 
 **Cause.** A `#Region` ran to the end of the block without an `#EndRegion`. Harmless -- regions are text -- but usually means a section was moved and its closer left behind.
@@ -194,7 +194,7 @@ Module '%s' was given a positional argument. Module inputs must be written as 'N
 '%s' blocks are reserved syntax and are not supported in v1.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1047`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1102`
 <!-- generated:end DFX2012 -->
 
 **Cause.** `Stage` and `OnEvent` are parsed so the syntax is settled, but v1 generates neither. The external edit API has no way to address a simulation-stage or event-handler stack.
@@ -212,7 +212,7 @@ Module '%s' was given a positional argument. Module inputs must be written as 'N
 '%s' is a system-scope stack and must be written at the top level of a .dfs, not inside an emitter.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1057`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1112`
 <!-- generated:end DFX2013 -->
 
 **Cause.** `SystemSpawn` and `SystemUpdate` belong to the system, not to an emitter (L1).
@@ -230,12 +230,30 @@ Module '%s' was given a positional argument. Module inputs must be written as 'N
 'from' must be followed by a quoted path to a .dfe source file.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1131`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1186`
 <!-- generated:end DFX2015 -->
 
 **Cause.** `from` takes a quoted path to a `.dfe`.
 
 **Fix.** Quote it. The extension is optional; the path resolves relative to this file first.
+
+## DFX2016
+
+<!-- generated:begin DFX2016 -->
+**Severity** error
+
+**Message**
+
+```
+(built at runtime)
+```
+
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1078`
+<!-- generated:end DFX2016 -->
+
+**Cause.** A `Defaults = { … }` block contained something other than an assignment. A default says what reading a parameter produces when nothing set it, so a module call has nothing to mean there.
+
+**Fix.** Move the module call into one of the stacks (`ParticleSpawn`, `ParticleUpdate`, …). Only `<type> Namespace.Name = value;` belongs in `Defaults`.
 
 ## DFX2018
 
@@ -248,7 +266,7 @@ Module '%s' was given a positional argument. Module inputs must be written as 'N
 A Module or DynamicInput must declare a 'Body = { }' block.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1298`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1353`
 <!-- generated:end DFX2018 -->
 
 **Cause.** A `.dfm` with no `Body` declares inputs and generates a module that does nothing.
@@ -266,7 +284,7 @@ A Module or DynamicInput must declare a 'Body = { }' block.
 Header argument '%s' must be a quoted string.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1325`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1342`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1350`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1380`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1397`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1405`
 <!-- generated:end DFX2019 -->
 
 **Cause.** Header arguments (`Name=`, `Root=`) are quoted strings.
@@ -302,7 +320,7 @@ Unknown curve key attribute '%s'. Expected Interp, Arrive or Leave.
 File declares '%s' but its extension is '%s'. Rename the file to '%s' or change the declaration.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1402`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1457`
 <!-- generated:end DFX2021 -->
 
 **Cause.** The declared document kind and the file extension disagree.
@@ -320,7 +338,7 @@ File declares '%s' but its extension is '%s'. Rename the file to '%s' or change 
 Unexpected '%s' after the end of the document. A DreamFX file declares exactly one top-level object.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1431`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1486`
 <!-- generated:end DFX2022 -->
 
 **Cause.** Content followed the closing brace of the top-level object. Usually a duplicated block or one brace too few somewhere above.
@@ -338,7 +356,7 @@ Unexpected '%s' after the end of the document. A DreamFX file declares exactly o
 '%s' is a module call, so it cannot be given a type. Types are written only on assignments.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:868`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:900`
 <!-- generated:end DFX2023 -->
 
 **Cause.** A type was written in front of a module call. Types annotate assignments, where L2 has to know what a new attribute is; a module call's types come from its schema.
@@ -356,7 +374,7 @@ Unexpected '%s' after the end of the document. A DreamFX file declares exactly o
 'disabled' can only prefix a module call, and '%s' is an assignment.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:879`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:911`
 <!-- generated:end DFX2024 -->
 
 **Cause.** `disabled` prefixes a *module call*, and the statement it was written on is an assignment.

@@ -149,6 +149,30 @@ Emitter.MyCounter          = 0;
 The target is namespace-qualified (DFX4025). The type comes from the value; an `hlsl` block, a dynamic
 input and an inline expression all have none, so those need the annotation (DFX4022).
 
+## `Defaults` — what a read produces when nothing wrote
+
+> **Not working yet.** The syntax parses and the generator applies it, and the engine half it depends
+> on does not reach whatever holds these parameters. Written down because the block is in the
+> grammar; see [roundtrip-2026-08-08-3.md](../roundtrip-2026-08-08-3.md) for the four measured dead
+> ends. Nothing exports one today.
+
+```cpp
+Emitter Sparks
+{
+    Defaults = {
+        float Particles.MySize = 1.0;             // a value
+        Vector Particles.Home  = Engine.Owner.Position;   // a binding
+    }
+
+    ParticleSpawn = { … }
+}
+```
+
+An assignment says *this parameter is now this*. A default says *if nothing set it, reading it gives
+this* — Niagara's `DefaultMode`, and the difference between a read that compiles and one that does
+not. Entries are assignments with a declared type (DFX4028); the value must be a literal, an enum or
+another parameter, because a default cannot compute per particle (DFX4029).
+
 ## Renderers
 
 ```cpp

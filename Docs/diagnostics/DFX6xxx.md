@@ -14,7 +14,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1894`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2516`
 <!-- generated:end DFX6001 -->
 
 **Cause.** A Niagara compile error, mapped back to the source line of the module that raised it.
@@ -32,7 +32,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1898`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2520`
 <!-- generated:end DFX6002 -->
 
 **Cause.** A Niagara compile warning, mapped back to source.
@@ -50,7 +50,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1939`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2561`
 <!-- generated:end DFX6003 -->
 
 **Cause.** A Niagara stack issue at error level -- an unmet module dependency, most often. Stack issues are only readable where Slate exists, so these appear in the editor and in the corpus suite but not in a headless build (`GetStackIssues` is not headless-safe).
@@ -68,7 +68,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1943`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2565`
 <!-- generated:end DFX6004 -->
 
 **Cause.** A Niagara stack issue at warning level. A deprecated module reports here.
@@ -86,7 +86,7 @@
 Niagara compilation of '%s' did not succeed (status %s).
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2202`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2835`
 <!-- generated:end DFX6005 -->
 
 **Cause.** The system's compile did not reach a successful state. Individual errors are reported as DFX6001 above this.
