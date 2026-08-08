@@ -343,6 +343,10 @@ namespace UE::DreamFX::Editor
 			// export that omitted it produced a system that could not be built at all (plan-v5 item A).
 			{ TEXT("RequiresPersistentIDs"),TEXT("bRequiresPersistentIDs"), nullptr },
 			{ TEXT("Enabled"),              TEXT("bIsEnabled"),           nullptr },
+			// The scalability bitmask, one int32 inside the FNiagaraPlatformSet. Named for the mask
+			// rather than for `Platforms` because that is what an author sets; the rest of the platform
+			// set (per-device-profile overrides) does not round-trip and is reported as a gap instead.
+			{ TEXT("QualityLevelMask"),     TEXT("Platforms.QualityLevelMask"), nullptr },
 		};
 
 		/** `ModulePaths` configures DreamFX itself and never reaches the asset. */
@@ -420,6 +424,40 @@ namespace UE::DreamFX::Editor
 		}
 
 		/** Translates a `Settings = { }` block into the JSON blob the property writers take. */
+		/**
+		 * Writes Value at a dotted property path, creating the objects along the way.
+		 *
+		 * `Platforms.QualityLevelMask` has to arrive as a nested object because that is what
+		 * SetObjectProperties reads it back out of -- FNiagaraPlatformSet is a struct, and the mask is
+		 * one int32 inside it. A path with no dot is the ordinary case and lands as a plain field.
+		 */
+		void SetJsonFieldByPath(const TSharedRef<FJsonObject>& Root, const FString& Path,
+			const TSharedPtr<FJsonValue>& Value)
+		{
+			TArray<FString> Segments;
+			Path.ParseIntoArray(Segments, TEXT("."));
+			if (Segments.Num() <= 1)
+			{
+				Root->SetField(Path, Value);
+				return;
+			}
+
+			TSharedRef<FJsonObject> Object = Root;
+			for (int32 Index = 0; Index < Segments.Num() - 1; ++Index)
+			{
+				const TSharedPtr<FJsonObject>* Existing = nullptr;
+				if (Object->TryGetObjectField(Segments[Index], Existing) && Existing != nullptr && Existing->IsValid())
+				{
+					Object = Existing->ToSharedRef();
+					continue;
+				}
+				const TSharedRef<FJsonObject> Child = MakeShared<FJsonObject>();
+				Object->SetObjectField(Segments[Index], Child);
+				Object = Child;
+			}
+			Object->SetField(Segments.Last(), Value);
+		}
+
 		bool PlanSettings(const TArray<FPropertyEntry>& Settings, TArrayView<const FSettingMapping> Mappings,
 			const FString& DefaultRoot, const TCHAR* ScopeLabel, FDiagnosticSink& Diagnostics, FString& OutJson)
 		{
@@ -479,7 +517,7 @@ namespace UE::DreamFX::Editor
 					Json = MakeShared<FJsonValueString>(ApplyValueAlias(Mapping->ValueAliases, Json->AsString()));
 				}
 
-				Properties->SetField(Mapping->PropertyName, Json);
+				SetJsonFieldByPath(Properties, Mapping->PropertyName, Json);
 			}
 
 			OutJson = Properties->Values.Num() > 0 ? SerializeJsonObject(Properties) : FString();

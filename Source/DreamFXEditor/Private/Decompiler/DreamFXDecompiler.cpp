@@ -658,6 +658,39 @@ namespace UE::DreamFX::Editor
 		 * Only fields DreamFX knows how to write back are considered, so an export never contains a
 		 * setting the compiler would reject.
 		 */
+		/**
+		 * Reads a dotted property path out of Object, or an invalid pointer if any segment is missing.
+		 *
+		 * The mirror of the generator's SetJsonFieldByPath: a setting whose property lives inside a
+		 * struct, such as `Platforms.QualityLevelMask`, arrives as a nested object here too.
+		 */
+		TSharedPtr<FJsonValue> FindJsonValueByPath(const TSharedPtr<FJsonObject>& Object, const FString& Path)
+		{
+			if (!Object.IsValid())
+			{
+				return nullptr;
+			}
+
+			TArray<FString> Segments;
+			Path.ParseIntoArray(Segments, TEXT("."));
+			if (Segments.Num() <= 1)
+			{
+				return Object->TryGetField(Path);
+			}
+
+			TSharedPtr<FJsonObject> Current = Object;
+			for (int32 Index = 0; Index < Segments.Num() - 1; ++Index)
+			{
+				const TSharedPtr<FJsonObject>* Child = nullptr;
+				if (!Current->TryGetObjectField(Segments[Index], Child) || Child == nullptr || !Child->IsValid())
+				{
+					return nullptr;
+				}
+				Current = *Child;
+			}
+			return Current->TryGetField(Segments.Last());
+		}
+
 		void WriteChangedSettings(FWriter& Writer, const FString& Json, const FString& DefaultsJson,
 			TArrayView<const TPair<const TCHAR*, const TCHAR*>> Mappings, TArray<FString>& OutLines)
 		{
@@ -678,7 +711,7 @@ namespace UE::DreamFX::Editor
 
 			for (const TPair<const TCHAR*, const TCHAR*>& Mapping : Mappings)
 			{
-				const TSharedPtr<FJsonValue> Value = Current->TryGetField(Mapping.Value);
+				const TSharedPtr<FJsonValue> Value = FindJsonValueByPath(Current, Mapping.Value);
 				if (!Value.IsValid() || Value->IsNull())
 				{
 					continue;
@@ -686,7 +719,7 @@ namespace UE::DreamFX::Editor
 
 				if (Defaults.IsValid())
 				{
-					const TSharedPtr<FJsonValue> Default = Defaults->TryGetField(Mapping.Value);
+					const TSharedPtr<FJsonValue> Default = FindJsonValueByPath(Defaults, Mapping.Value);
 					if (Default.IsValid() && FJsonValue::CompareEqual(*Value, *Default))
 					{
 						continue;
@@ -1120,6 +1153,10 @@ namespace UE::DreamFX::Editor
 			{ TEXT("CalculateBoundsMode"),  TEXT("CalculateBoundsMode") },
 			{ TEXT("RequiresPersistentIDs"),TEXT("bRequiresPersistentIDs") },
 			{ TEXT("Enabled"),              TEXT("bIsEnabled") },
+			// Found by diffing all 112 properties of one emitter against its mirror: 31 in the asset,
+			// -1 in the export. Behaviourally the same while five quality levels exist, which is
+			// exactly why it would never have shown up as a build failure.
+			{ TEXT("QualityLevelMask"),     TEXT("Platforms.QualityLevelMask") },
 		};
 
 		const TPair<const TCHAR*, const TCHAR*> SystemSettingFields[] =
