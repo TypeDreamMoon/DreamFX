@@ -13,6 +13,7 @@ namespace UE::DreamFX::Editor
 		const TCHAR* const KeySourceHash     = TEXT("DreamFX.SourceHash");
 		const TCHAR* const KeyGenerator      = TEXT("DreamFX.GeneratorVersion");
 		const TCHAR* const KeyModules        = TEXT("DreamFX.ModuleDependencies");
+		const TCHAR* const KeyModuleVersions = TEXT("DreamFX.ModuleVersions");
 
 		FMetaData* GetPackageMetaData(const UObject* Asset)
 		{
@@ -30,7 +31,11 @@ namespace UE::DreamFX::Editor
 		// Format: <language revision>.<generator revision>. The language part changes when source that
 		// used to compile no longer means the same thing; the generator part when the emitted asset
 		// shape changes. Either one invalidates every cached asset.
-		return TEXT("1.0");
+		//
+		// 1.1 -- stamp v2 (plan-v2 W3): module version GUIDs. Bumped because an asset stamped by 1.0
+		// has no versions recorded, and treating "absent" as "unchanged" would make the check useless
+		// on exactly the assets that predate it.
+		return TEXT("1.1");
 	}
 
 	void FProvenance::Write(UObject* Asset, const FProvenanceStamp& Stamp)
@@ -46,6 +51,17 @@ namespace UE::DreamFX::Editor
 		MetaData->SetValue(Asset, KeySourceHash, *Stamp.SourceHash);
 		MetaData->SetValue(Asset, KeyGenerator, *Stamp.GeneratorVersion);
 		MetaData->SetValue(Asset, KeyModules, *FString::Join(Stamp.ModuleDependencies, TEXT(";")));
+
+		// "path=1.0:guid" pairs. Sorted, so an unchanged build produces an unchanged stamp and the
+		// asset does not show up as modified in a diff for no reason.
+		TArray<FString> VersionPairs;
+		VersionPairs.Reserve(Stamp.ModuleVersions.Num());
+		for (const TPair<FString, FString>& Entry : Stamp.ModuleVersions)
+		{
+			VersionPairs.Add(FString::Printf(TEXT("%s=%s"), *Entry.Key, *Entry.Value));
+		}
+		VersionPairs.Sort();
+		MetaData->SetValue(Asset, KeyModuleVersions, *FString::Join(VersionPairs, TEXT(";")));
 	}
 
 	bool FProvenance::Read(const UObject* Asset, FProvenanceStamp& OutStamp)
@@ -68,6 +84,23 @@ namespace UE::DreamFX::Editor
 			Modules.ParseIntoArray(OutStamp.ModuleDependencies, TEXT(";"), /*InCullEmpty=*/true);
 		}
 
+		OutStamp.ModuleVersions.Reset();
+		const FString Versions = MetaData->GetValue(Asset, KeyModuleVersions);
+		if (!Versions.IsEmpty())
+		{
+			TArray<FString> VersionPairs;
+			Versions.ParseIntoArray(VersionPairs, TEXT(";"), /*InCullEmpty=*/true);
+			for (const FString& Pair : VersionPairs)
+			{
+				FString Path;
+				FString Version;
+				if (Pair.Split(TEXT("="), &Path, &Version))
+				{
+					OutStamp.ModuleVersions.Add(Path, Version);
+				}
+			}
+		}
+
 		return true;
 	}
 
@@ -80,6 +113,7 @@ namespace UE::DreamFX::Editor
 			MetaData->RemoveValue(Asset, KeySourceHash);
 			MetaData->RemoveValue(Asset, KeyGenerator);
 			MetaData->RemoveValue(Asset, KeyModules);
+			MetaData->RemoveValue(Asset, KeyModuleVersions);
 		}
 	}
 

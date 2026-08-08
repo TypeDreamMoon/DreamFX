@@ -53,5 +53,23 @@ namespace UE::DreamFX::Editor
 
 		/** True when the first segment of a dotted name is a Niagara parameter namespace. */
 		static bool IsNamespacedName(const FString& Name);
+
+		/**
+		 * The token to write for an enum entry, guaranteed to read back as that same entry.
+		 *
+		 * plan-v5 R2. The decompiler used to print the entry's display label and hope: on
+		 * `ENiagaraFloatFromLinearColorOptions` the label is `A` where the lookup wants `Alpha`, and
+		 * 37 exports named a channel that does not exist. Rather than encode which enums spell
+		 * themselves which way -- a table that is wrong the first time an artist adds an enum asset --
+		 * the candidate is resolved back through the importer's own lookup, and a candidate that does
+		 * not survive that round trip is rejected in favour of one that does.
+		 *
+		 * Returns the internal name as a last resort, which is what an author would have to write
+		 * anyway; an empty string only for a null enum or an index that is not an entry.
+		 */
+		static FString EnumEntryToSourceToken(const UEnum* Enum, int32 Index);
+
+		/** The same round trip, entered from the qualified FName a read hands back. */
+		static FString EnumEntryToSourceToken(const UEnum* Enum, FName QualifiedName);
 	};
 }

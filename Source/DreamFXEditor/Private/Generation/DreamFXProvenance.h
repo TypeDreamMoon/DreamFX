@@ -23,6 +23,16 @@ namespace UE::DreamFX::Editor
 		/** Package paths of every module asset used, so R7 drift can be reported. */
 		TArray<FString> ModuleDependencies;
 
+		/**
+		 * R7, stamp v2: each dependency's exposed version at build time, keyed by asset path and
+		 * spelled "Major.Minor:Guid".
+		 *
+		 * This is the whole mechanism behind "the engine upgraded and a module I use changed under
+		 * me". The source hash cannot see it -- the text is byte-identical and the asset it resolves
+		 * to is a different thing than it was. Nothing else in the build notices.
+		 */
+		TMap<FString, FString> ModuleVersions;
+
 		bool IsValid() const { return !SourceHash.IsEmpty(); }
 	};
 

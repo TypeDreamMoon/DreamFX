@@ -58,6 +58,20 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
+		 * That label as something the lexer will read as one identifier: "Spawn Only" -> "SpawnOnly".
+		 *
+		 * Lives here rather than in the decompiler because the writer and the reader have to agree on
+		 * it exactly, and two copies of a spelling rule are two spellings waiting to happen.
+		 */
+		FString EnumLabelToIdentifier(const FString& DisplayName)
+		{
+			FString Label = EnumLabelOf(DisplayName);
+			Label.ReplaceInline(TEXT(" "), TEXT(""), ESearchCase::CaseSensitive);
+			Label.ReplaceInline(TEXT("-"), TEXT(""), ESearchCase::CaseSensitive);
+			return Label;
+		}
+
+		/**
 		 * Finds an enum entry by the short name an author writes.
 		 *
 		 * UEnum stores entries fully qualified ("ENiagaraCoordinateSpace::Simulation") but nobody
@@ -110,6 +124,63 @@ namespace UE::DreamFX::Editor
 			}
 			return FString::Join(Names, TEXT(", "));
 		}
+	}
+
+	FString FValueLowering::EnumEntryToSourceToken(const UEnum* Enum, int32 Index)
+	{
+		if (Enum == nullptr || Index < 0 || Index >= Enum->NumEnums() - 1)
+		{
+			return FString();
+		}
+
+		const FString ShortName = Enum->GetNameStringByIndex(Index);
+		const FName Wanted = Enum->GetNameByIndex(Index);
+
+		// Most readable first, then progressively more literal. Each candidate has to resolve back to
+		// this very entry: `A` is a fine label right up until the lookup reads it as something else,
+		// or as nothing at all.
+		const FString Candidates[] =
+		{
+			EnumLabelToIdentifier(Enum->GetDisplayNameTextByIndex(Index).ToString()),
+			ShortName,
+		};
+
+		for (const FString& Candidate : Candidates)
+		{
+			if (Candidate.IsEmpty())
+			{
+				continue;
+			}
+			FName Resolved;
+			if (FindEnumEntry(Enum, Candidate, Resolved) && Resolved == Wanted)
+			{
+				return Candidate;
+			}
+		}
+
+		// Nothing round-trips. The internal name is still the honest answer -- the import will report
+		// it as an unknown entry, which is a diagnostic naming the real problem rather than a silently
+		// different channel.
+		return ShortName;
+	}
+
+	FString FValueLowering::EnumEntryToSourceToken(const UEnum* Enum, FName QualifiedName)
+	{
+		if (Enum == nullptr)
+		{
+			return QualifiedName.ToString();
+		}
+
+		const int32 Index = Enum->GetIndexByName(QualifiedName);
+		if (Index == INDEX_NONE)
+		{
+			// An entry the enum no longer has. Writing it verbatim keeps the export honest: the
+			// rebuild fails naming it, instead of quietly picking a neighbour.
+			return QualifiedName.ToString();
+		}
+
+		const FString Token = EnumEntryToSourceToken(Enum, Index);
+		return Token.IsEmpty() ? QualifiedName.ToString() : Token;
 	}
 
 	bool FValueLowering::IsNamespacedName(const FString& Name)

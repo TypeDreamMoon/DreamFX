@@ -21,6 +21,18 @@ namespace UE::DreamFX::Editor
 		 * nothing -- neither the asset nor the provenance stamp.
 		 */
 		bool bVerifyOnly = false;
+
+		/**
+		 * R7. A module whose exposed version moved since the asset was built is a warning by default
+		 * and an error here.
+		 *
+		 * Warning is the right default because the usual cause is an engine upgrade, which every
+		 * source in the tree hits at once and which a rebuild resolves; failing the gate on it would
+		 * stop work for something a build fixes. Error is the right behaviour for a release branch,
+		 * where "these assets were built against different modules than the text describes" is exactly
+		 * what must not ship.
+		 */
+		bool bStrictVersions = false;
 	};
 
 	struct FGenerateResult

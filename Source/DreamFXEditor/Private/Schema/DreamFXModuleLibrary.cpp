@@ -1,17 +1,29 @@
 #include "DreamFXModuleLibrary.h"
 
 #include "DreamFXModule.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "HAL/FileManager.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
+#include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 
 namespace UE::DreamFX::Editor
 {
 	FModuleLibrary::FModuleLibrary()
 	{
 		AddDefaultSearchPaths();
+	}
+
+	FModuleLibrary::~FModuleLibrary()
+	{
+		if (ProbeSystem != nullptr)
+		{
+			ProbeSystem->RemoveFromRoot();
+			ProbeSystem = nullptr;
+		}
 	}
 
 	void FModuleLibrary::AddDefaultSearchPaths()
@@ -98,8 +110,16 @@ namespace UE::DreamFX::Editor
 			Cache.Remove(Trimmed);
 		}
 
-		const ENiagaraScriptUsage RequiredUsage = bDynamicInput
-			? ENiagaraScriptUsage::DynamicInput : ENiagaraScriptUsage::Module;
+		// A dynamic input position also accepts a plain Function script. Niagara does -- this project's
+		// content plugs `/Niagara/Functions/Localspace/SimulationPosition` into one, and the asset
+		// compiles -- and refusing it made two chains unexportable and unbuildable for no reason other
+		// than a stricter reading of "usage" than the engine's own (plan-v5 R3).
+		auto UsageAccepted = [bDynamicInput](ENiagaraScriptUsage Usage)
+		{
+			return bDynamicInput
+				? (Usage == ENiagaraScriptUsage::DynamicInput || Usage == ENiagaraScriptUsage::Function)
+				: (Usage == ENiagaraScriptUsage::Module);
+		};
 		const TCHAR* const KindLabel = bDynamicInput ? TEXT("dynamic input") : TEXT("module");
 
 		auto LoadByPackage = [](const FString& PackageName) -> UNiagaraScript*
@@ -119,7 +139,7 @@ namespace UE::DreamFX::Editor
 			{
 				return nullptr;
 			}
-			if (Script->GetUsage() != RequiredUsage)
+			if (!UsageAccepted(Script->GetUsage()))
 			{
 				OutError = FString::Printf(
 					TEXT("'%s' resolves to a Niagara script whose usage is '%s', but a %s was expected here."),
@@ -198,7 +218,7 @@ namespace UE::DreamFX::Editor
 		{
 			if (UNiagaraScript* Script = LoadByPackage(PackageName))
 			{
-				if (Script->GetUsage() == RequiredUsage)
+				if (UsageAccepted(Script->GetUsage()))
 				{
 					Matching.Add(Script);
 				}
@@ -211,6 +231,24 @@ namespace UE::DreamFX::Editor
 				TEXT("'%s' matched %d asset(s) but none is a %s: %s"),
 				*Trimmed, Filtered.Num(), KindLabel, *FString::Join(Filtered, TEXT(", ")));
 			return nullptr;
+		}
+
+		// A declared DynamicInput outranks a plain Function script that merely *may* sit in the same
+		// position. Accepting both as equals (the first cut of the SimulationPosition fix) made
+		// `RandomRangeFloat` ambiguous between /Niagara/DynamicInputs/UniformRange/V2 and
+		// /Niagara/Functions -- a name every hand-written sample in this repo already used, and which
+		// had resolved unambiguously for as long as it had existed. Widening a lookup must not
+		// reclassify names that already resolved.
+		if (bDynamicInput && Matching.Num() > 1)
+		{
+			TArray<UNiagaraScript*> Declared = Matching.FilterByPredicate([](const UNiagaraScript* Script)
+			{
+				return Script->GetUsage() == ENiagaraScriptUsage::DynamicInput;
+			});
+			if (Declared.Num() > 0)
+			{
+				Matching = MoveTemp(Declared);
+			}
 		}
 
 		if (Matching.Num() > 1)
@@ -229,7 +267,7 @@ namespace UE::DreamFX::Editor
 		return Accept(Matching[0]);
 	}
 
-	FString FModuleLibrary::GetUnambiguousName(UNiagaraScript* Script, bool bDynamicInput)
+	FString FModuleLibrary::FindAddressableName(UNiagaraScript* Script, bool bDynamicInput)
 	{
 		if (Script == nullptr)
 		{
@@ -240,10 +278,6 @@ namespace UE::DreamFX::Editor
 
 		TArray<FString> Segments;
 		PackageName.ParseIntoArray(Segments, TEXT("/"), /*InCullEmpty=*/true);
-		if (Segments.Num() == 0)
-		{
-			return PackageName;
-		}
 
 		// Grow the candidate one leading segment at a time: "Name", then "Folder/Name", and so on.
 		for (int32 Take = 1; Take < Segments.Num(); ++Take)
@@ -263,7 +297,91 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
-		return PackageName;
+		// The full path, but only if it really loads back to this script. It does not for a script
+		// stored inside another asset, where the package names the owner.
+		{
+			FString Error;
+			const UNiagaraScript* Resolved = bDynamicInput ? FindDynamicInput(PackageName, Error) : FindModule(PackageName, Error);
+			if (Resolved == Script)
+			{
+				return PackageName;
+			}
+		}
+
+		return FString();
+	}
+
+	FString FModuleLibrary::GetUnambiguousName(UNiagaraScript* Script, bool bDynamicInput)
+	{
+		if (Script == nullptr)
+		{
+			return FString();
+		}
+
+		const FString Addressable = FindAddressableName(Script, bDynamicInput);
+		return Addressable.IsEmpty() ? Script->GetOutermost()->GetName() : Addressable;
+	}
+
+	UNiagaraScript* FModuleLibrary::MaterializeEmbeddedScript(UNiagaraScript* Script, const FString& PackagePath,
+		const FString& AssetName, FString& OutError)
+	{
+		if (Script == nullptr)
+		{
+			OutError = TEXT("Cannot extract a null script.");
+			return nullptr;
+		}
+
+		const FString FullPackageName = PackagePath / AssetName;
+		const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *FullPackageName, *AssetName);
+
+		// A previous export of the same system already lifted it out. Reusing that keeps re-exporting
+		// idempotent, which is the whole basis of the mirror-diff contract.
+		if (UNiagaraScript* Existing = LoadObject<UNiagaraScript>(nullptr, *ObjectPath))
+		{
+			return Existing;
+		}
+
+		UPackage* Package = CreatePackage(*FullPackageName);
+		if (Package == nullptr)
+		{
+			OutError = FString::Printf(TEXT("Could not create package '%s'."), *FullPackageName);
+			return nullptr;
+		}
+		Package->FullyLoad();
+
+		UNiagaraScript* Copy = Cast<UNiagaraScript>(
+			StaticDuplicateObject(Script, Package, FName(*AssetName)));
+		if (Copy == nullptr)
+		{
+			OutError = FString::Printf(TEXT("Could not copy script '%s' out of '%s'."),
+				*Script->GetName(), *Script->GetOutermost()->GetName());
+			return nullptr;
+		}
+
+		Copy->SetFlags(RF_Public | RF_Standalone);
+		FAssetRegistryModule::AssetCreated(Copy);
+		Package->MarkPackageDirty();
+
+		const FString FileName = FPackageName::LongPackageNameToFilename(
+			FullPackageName, FPackageName::GetAssetPackageExtension());
+
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		if (!UPackage::SavePackage(Package, Copy, *FileName, SaveArgs))
+		{
+			OutError = FString::Printf(TEXT("SavePackage failed for '%s'."), *FileName);
+			return nullptr;
+		}
+
+		// Deliberately *not* registered in PackagesByName. The index is what short names resolve
+		// through, and it is built from the search paths -- which `Decompiled/` is not one of. A
+		// registration here would let this process resolve a short name that no other process can,
+		// and the export would name the script that way. Callers reference an extracted script by its
+		// full package path, which needs no index at all.
+
+		UE_LOG(LogDreamFX, Display, TEXT("  extracted embedded script '%s' -> %s"),
+			*Script->GetName(), *FullPackageName);
+		return Copy;
 	}
 
 	void FModuleLibrary::ListAvailable(bool bDynamicInput, TArray<FString>& OutEntries)
@@ -331,10 +449,16 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
+		// Rooted for the library's lifetime: a long read collects garbage between modules, and this
+		// member is not a reference GC can see. Without the root the probe is destroyed mid-build and
+		// the pointer keeps looking valid.
+		ProbeSystem->AddToRoot();
+
 		Errors.Reset();
 		if (!FNiagaraAdapter::AddEmitter(ProbeSystem, TEXT("Probe"), Errors))
 		{
 			bProbeSystemFailed = true;
+			ProbeSystem->RemoveFromRoot();
 			ProbeSystem = nullptr;
 			OutError = FString::Join(Errors, TEXT(" | "));
 			return false;
@@ -343,7 +467,65 @@ namespace UE::DreamFX::Editor
 		return true;
 	}
 
+	namespace
+	{
+		/**
+		 * A switch assignment, spelled so that two assignments are the same string exactly when they
+		 * would produce the same module.
+		 *
+		 * The literal case hexes the bytes rather than printing them: a switch is an int, a bool or an
+		 * enum, so the blob is four bytes, and comparing the raw memory is the only comparison that is
+		 * right for every struct without a per-type table.
+		 */
+		FString DescribeValueForCacheKey(const FInputValue& Value)
+		{
+			switch (Value.Mode)
+			{
+			case EInputValueMode::Literal:
+				return FString::Printf(TEXT("L%s:%s"),
+					Value.LiteralStruct != nullptr ? *Value.LiteralStruct->GetName() : TEXT("?"),
+					*BytesToHex(Value.LiteralBytes.GetData(), Value.LiteralBytes.Num()));
+
+			case EInputValueMode::Enum:
+				return FString::Printf(TEXT("E%s:%s"),
+					Value.EnumType != nullptr ? *Value.EnumType->GetPathName() : TEXT("?"),
+					*Value.EnumEntryName.ToString());
+
+			default:
+				// Nothing else can drive a static switch, but a key that silently collapsed two
+				// different values into one entry would hand back the wrong schema.
+				return FString::Printf(TEXT("M%d"), static_cast<int32>(Value.Mode));
+			}
+		}
+
+		FString MakeStackSchemaKey(const UNiagaraScript* Module, EStackKind Stack,
+			TArrayView<const TPair<FName, FInputValue>> SwitchValues, const FGuid& VersionGuid)
+		{
+			FString Key = FString::Printf(TEXT("%s|%d|%s"), *Module->GetPathName(), static_cast<int32>(Stack),
+				*VersionGuid.ToString(EGuidFormats::Digits));
+			// In application order, not sorted: the order is what the caller derived from the source,
+			// and a switch gated by another switch only writes in one of the two orders.
+			for (const TPair<FName, FInputValue>& Switch : SwitchValues)
+			{
+				Key += FString::Printf(TEXT("|%s=%s"), *Switch.Key.ToString(), *DescribeValueForCacheKey(Switch.Value));
+			}
+			return Key;
+		}
+	}
+
 	const FModuleSchema* FModuleLibrary::GetStackSchema(UNiagaraScript* Module, EStackKind Stack, FString& OutError)
+	{
+		return GetStackSchema(Module, Stack, TArrayView<const TPair<FName, FInputValue>>(), FGuid(), OutError);
+	}
+
+	const FModuleSchema* FModuleLibrary::GetStackSchema(UNiagaraScript* Module, EStackKind Stack,
+		TArrayView<const TPair<FName, FInputValue>> SwitchValues, FString& OutError)
+	{
+		return GetStackSchema(Module, Stack, SwitchValues, FGuid(), OutError);
+	}
+
+	const FModuleSchema* FModuleLibrary::GetStackSchema(UNiagaraScript* Module, EStackKind Stack,
+		TArrayView<const TPair<FName, FInputValue>> SwitchValues, const FGuid& VersionGuid, FString& OutError)
 	{
 		if (Module == nullptr)
 		{
@@ -351,10 +533,10 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		const TPair<TWeakObjectPtr<const UNiagaraScript>, EStackKind> Key(Module, Stack);
-		if (const FModuleSchema* Cached = StackSchemaCache.Find(Key))
+		const FString Key = MakeStackSchemaKey(Module, Stack, SwitchValues, VersionGuid);
+		if (const TUniquePtr<FModuleSchema>* Cached = StackSchemaCache.Find(Key))
 		{
-			return Cached;
+			return Cached->Get();
 		}
 
 		FString ProbeError;
@@ -366,6 +548,10 @@ namespace UE::DreamFX::Editor
 				TEXT("Falling back to the asset-level schema for '%s': %s"), *Module->GetName(), *ProbeError);
 			return GetModuleSchema(Module, OutError);
 		}
+
+		// A probe is a module add, a recompile and a topology read -- the same debris every other
+		// adapter call leaves, and a build probes once per distinct configuration.
+		FNiagaraAdapter::CollectIfHeavy();
 
 		const FName ScriptName = FNiagaraAdapter::ScriptNameForStack(Stack);
 		FStackAddress Address(ProbeSystem);
@@ -385,6 +571,43 @@ namespace UE::DreamFX::Editor
 		}
 
 		const FStackAddress ModuleAddress = Address.WithModule(AddedName);
+
+		// R1b. Before the switches, because the version decides which switches the module even has.
+		// A failure here is fatal to the probe rather than a warning: reading the newest version's
+		// topology and calling it the pinned version's is precisely the silent wrong answer this
+		// whole mechanism exists to stop.
+		if (VersionGuid.IsValid())
+		{
+			Errors.Reset();
+			if (!FNiagaraAdapter::SetModuleScriptVersion(ModuleAddress, VersionGuid, Errors))
+			{
+				OutError = FString::Printf(TEXT("Could not probe module '%s' at the pinned script version: %s"),
+					*Module->GetName(), *FString::Join(Errors, TEXT(" | ")));
+
+				TArray<FString> RemoveErrors;
+				FNiagaraAdapter::RemoveModule(ModuleAddress, RemoveErrors);
+				return nullptr;
+			}
+		}
+
+		// R1. Written before the topology is read, and in the caller's order, because each one
+		// recompiles the module and changes what the next read reports.
+		//
+		// A refused write is logged rather than fatal: the switch may be hidden by another switch the
+		// source did not set, and the reads below then report a module missing the inputs that switch
+		// would have revealed -- which is exactly the DFX3003 the author needs to see, naming the input
+		// rather than an internal probe failure.
+		for (const TPair<FName, FInputValue>& Switch : SwitchValues)
+		{
+			Errors.Reset();
+			if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Switch.Key), Switch.Value, Errors))
+			{
+				UE_LOG(LogDreamFX, Warning,
+					TEXT("Could not set static switch '%s' while probing module '%s' in the %s stack: %s. The inputs it reveals will not be visible to the type check."),
+					*Switch.Key.ToString(), *Module->GetName(), LexStackKind(Stack),
+					*FString::Join(Errors, TEXT(" | ")));
+			}
+		}
 
 		FModuleInfo Info;
 		Errors.Reset();
@@ -427,10 +650,16 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		return &StackSchemaCache.Add(Key, MoveTemp(Schema));
+		return StackSchemaCache.Add(Key, MakeUnique<FModuleSchema>(MoveTemp(Schema))).Get();
 	}
 
 	const TMap<FName, FInputValue>* FModuleLibrary::GetStackDefaults(UNiagaraScript* Module, EStackKind Stack, FString& OutError)
+	{
+		return GetStackDefaults(Module, Stack, FGuid(), OutError);
+	}
+
+	const TMap<FName, FInputValue>* FModuleLibrary::GetStackDefaults(UNiagaraScript* Module, EStackKind Stack,
+		const FGuid& VersionGuid, FString& OutError)
 	{
 		if (Module == nullptr)
 		{
@@ -438,10 +667,10 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		const TPair<TWeakObjectPtr<const UNiagaraScript>, EStackKind> Key(Module, Stack);
-		if (const TMap<FName, FInputValue>* Cached = StackDefaultsCache.Find(Key))
+		const FString Key = MakeStackSchemaKey(Module, Stack, TArrayView<const TPair<FName, FInputValue>>(), VersionGuid);
+		if (const TUniquePtr<TMap<FName, FInputValue>>* Cached = StackDefaultsCache.Find(Key))
 		{
-			return Cached;
+			return Cached->Get();
 		}
 
 		if (!EnsureProbeSystem(OutError))
@@ -467,6 +696,20 @@ namespace UE::DreamFX::Editor
 
 		const FStackAddress ModuleAddress = Address.WithModule(AddedName);
 
+		if (VersionGuid.IsValid())
+		{
+			Errors.Reset();
+			if (!FNiagaraAdapter::SetModuleScriptVersion(ModuleAddress, VersionGuid, Errors))
+			{
+				OutError = FString::Printf(TEXT("Could not probe module '%s' for defaults at its own script version: %s"),
+					*Module->GetName(), *FString::Join(Errors, TEXT(" | ")));
+
+				TArray<FString> RemoveErrors;
+				FNiagaraAdapter::RemoveModule(ModuleAddress, RemoveErrors);
+				return nullptr;
+			}
+		}
+
 		TArray<TTuple<FName, FInputValue>> Values;
 		Errors.Reset();
 		const bool bRead = FNiagaraAdapter::GetModuleInputValues(ModuleAddress, Values, Errors);
@@ -486,7 +729,7 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		return &StackDefaultsCache.Add(Key, MoveTemp(Defaults));
+		return StackDefaultsCache.Add(Key, MakeUnique<TMap<FName, FInputValue>>(MoveTemp(Defaults))).Get();
 	}
 
 	const FString* FModuleLibrary::GetRendererDefaults(UClass* RendererClass, FString& OutError)
@@ -497,9 +740,9 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		if (const FString* Cached = RendererDefaultsCache.Find(RendererClass))
+		if (const TUniquePtr<FString>* Cached = RendererDefaultsCache.Find(RendererClass))
 		{
-			return Cached;
+			return Cached->Get();
 		}
 
 		if (!EnsureProbeSystem(OutError))
@@ -531,7 +774,7 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		return &RendererDefaultsCache.Add(RendererClass, MoveTemp(Json));
+		return RendererDefaultsCache.Add(RendererClass, MakeUnique<FString>(MoveTemp(Json))).Get();
 	}
 
 	bool FModuleLibrary::GetRendererBindingDefaults(UClass* RendererClass,
@@ -614,9 +857,9 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		if (const FModuleSchema* Cached = SchemaCache.Find(Module))
+		if (const TUniquePtr<FModuleSchema>* Cached = SchemaCache.Find(Module))
 		{
-			return Cached;
+			return Cached->Get();
 		}
 
 		FModuleSchema Schema;
@@ -627,7 +870,7 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		return &SchemaCache.Add(Module, MoveTemp(Schema));
+		return SchemaCache.Add(Module, MakeUnique<FModuleSchema>(MoveTemp(Schema))).Get();
 	}
 
 	const FModuleSchema* FModuleLibrary::GetDynamicInputSchema(const UNiagaraScript* DynamicInput, FString& OutError)
@@ -638,9 +881,9 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		if (const FModuleSchema* Cached = SchemaCache.Find(DynamicInput))
+		if (const TUniquePtr<FModuleSchema>* Cached = SchemaCache.Find(DynamicInput))
 		{
-			return Cached;
+			return Cached->Get();
 		}
 
 		FModuleSchema Schema;
@@ -651,6 +894,143 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
-		return &SchemaCache.Add(DynamicInput, MoveTemp(Schema));
+		return SchemaCache.Add(DynamicInput, MakeUnique<FModuleSchema>(MoveTemp(Schema))).Get();
+	}
+
+	const FModuleSchema* FModuleLibrary::GetDynamicInputStackSchema(UNiagaraScript* DynamicInput,
+		const FNiagaraTypeDefinition& HostType, FString& OutError)
+	{
+		return GetDynamicInputStackSchema(DynamicInput, HostType, FGuid(), OutError);
+	}
+
+	const FModuleSchema* FModuleLibrary::GetDynamicInputStackSchema(UNiagaraScript* DynamicInput,
+		const FNiagaraTypeDefinition& HostType, const FGuid& VersionGuid, FString& OutError)
+	{
+		if (DynamicInput == nullptr)
+		{
+			OutError = TEXT("Cannot read the schema of a null dynamic input.");
+			return nullptr;
+		}
+
+		// The host type is part of the key as well as the version: the same dynamic input plugged into
+		// a float and into a Vector3 is probed through different Set Parameters entries.
+		const FString Key = FString::Printf(TEXT("%s|%s|%s"),
+			*DynamicInput->GetPathName(),
+			HostType.IsValid() ? *HostType.GetName() : TEXT("-"),
+			*VersionGuid.ToString(EGuidFormats::Digits));
+
+		if (const TUniquePtr<FModuleSchema>* Cached = DynamicInputStackSchemaCache.Find(Key))
+		{
+			return Cached->Get();
+		}
+
+		// The asset schema first: it is what the probe falls back to.
+		const FModuleSchema* AssetSchema = GetDynamicInputSchema(DynamicInput, OutError);
+		if (AssetSchema == nullptr)
+		{
+			return nullptr;
+		}
+
+		// Copied by value up front: the probe below reads other schemas, and even with the cache boxed
+		// a fallback has to own its copy rather than alias whatever AssetSchema pointed at.
+		const FModuleSchema Fallback = *AssetSchema;
+
+		auto FallBack = [this, DynamicInput, &Fallback, &Key](const FString& Reason) -> const FModuleSchema*
+		{
+			UE_LOG(LogDreamFX, Warning,
+				TEXT("Falling back to the asset-level schema for dynamic input '%s': %s Static switches on it stay invisible."),
+				*DynamicInput->GetName(), *Reason);
+			return DynamicInputStackSchemaCache.Add(Key, MakeUnique<FModuleSchema>(Fallback)).Get();
+		};
+
+		if (!HostType.IsValid())
+		{
+			// Deliberately not cached: a later call from a site that does know the host type should
+			// still get the real probe rather than this degraded answer.
+			return AssetSchema;
+		}
+
+		FString ProbeError;
+		if (!EnsureProbeSystem(ProbeError))
+		{
+			return FallBack(ProbeError);
+		}
+
+		// A Set Parameters entry, because it is the one module that can be created with an input of
+		// any given type -- there is no stock module with an input of every dynamic input's output.
+		const FStackAddress StackAddress = FStackAddress(ProbeSystem)
+			.WithEmitter(TEXT("Probe"))
+			.WithScript(FNiagaraAdapter::ScriptNameForStack(EStackKind::ParticleUpdate));
+
+		const FName ProbeParameter(TEXT("Particles.DreamFXDynamicInputProbe"));
+		TArray<TTuple<FName, FNiagaraTypeDefinition, FInputValue>> Entries;
+		Entries.Emplace(ProbeParameter, HostType, FInputValue());
+
+		// Traced because each of these steps recompiles the probe emitter, and a step that does not
+		// come back leaves no other evidence of which one it was.
+		UE_LOG(LogDreamFX, Verbose, TEXT("        probe: adding a Set Parameters entry of type %s"),
+			*HostType.GetName());
+
+		TArray<FString> Errors;
+		FName AddedName;
+		if (!FNiagaraAdapter::AddSetParametersModule(StackAddress, Entries, AddedName, Errors))
+		{
+			return FallBack(*FString::Join(Errors, TEXT(" | ")));
+		}
+
+		const FStackAddress ModuleAddress = StackAddress.WithModule(AddedName);
+		const FStackAddress InputAddress = ModuleAddress.WithInput(ProbeParameter);
+
+		FModuleSchema Probed;
+		bool bProbed = false;
+
+		// R1b: bound to the pinned version as it is written, because the version decides which inputs
+		// the chain has and what type each one is.
+		Errors.Reset();
+		if (FNiagaraAdapter::SetDynamicInputAtVersion(InputAddress, DynamicInput, VersionGuid, Errors))
+		{
+			TArray<FDynamicInputChild> Children;
+			Errors.Reset();
+			if (FNiagaraAdapter::GetDynamicInputChildren(InputAddress, Children, Errors) && Children.Num() > 0)
+			{
+				for (const FDynamicInputChild& Child : Children)
+				{
+					FInputSchema InputSchema;
+					InputSchema.Name = Child.Name;
+					InputSchema.Type = Child.Type;
+					InputSchema.bIsStaticSwitch = Child.bStaticSwitch;
+
+					// bSupportsExpressions is only knowable per live input, and it gates whether an
+					// `hlsl { }` block is legal here -- same reason GetStackSchema pays for this call.
+					TArray<FString> InputErrors;
+					FInputSchema Detail;
+					if (FNiagaraAdapter::GetInputSchema(InputAddress.WithInput(Child.Name), Detail, InputErrors))
+					{
+						InputSchema.bSupportsExpressions = Detail.bSupportsExpressions;
+						InputSchema.Category = Detail.Category;
+						InputSchema.Description = Detail.Description;
+					}
+
+					Probed.Inputs.Add(MoveTemp(InputSchema));
+				}
+				bProbed = true;
+			}
+		}
+
+		// Always remove, even when the probe failed: a leftover Set Parameters module would change
+		// what the next module added to this stack sees.
+		Errors.Reset();
+		if (!FNiagaraAdapter::RemoveModule(ModuleAddress, Errors))
+		{
+			UE_LOG(LogDreamFX, Warning, TEXT("Could not remove the dynamic input probe module: %s"),
+				*FString::Join(Errors, TEXT(" | ")));
+		}
+
+		if (!bProbed)
+		{
+			return FallBack(TEXT("the probe chain could not be read."));
+		}
+
+		return DynamicInputStackSchemaCache.Add(Key, MakeUnique<FModuleSchema>(MoveTemp(Probed))).Get();
 	}
 }

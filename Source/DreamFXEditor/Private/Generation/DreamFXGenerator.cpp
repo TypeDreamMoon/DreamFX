@@ -6,11 +6,13 @@
 #include "DreamFXParser.h"
 #include "DreamFXProvenance.h"
 #include "DreamFXValueLowering.h"
+#include "Generation/DreamFXModuleGenerator.h"
 #include "Lint/DreamFXLint.h"
 #include "Schema/DreamFXModuleLibrary.h"
 #include "SourceFiles/DreamFXPaths.h"
 
 #include "Dom/JsonObject.h"
+#include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "NiagaraScript.h"
@@ -22,6 +24,32 @@ namespace UE::DreamFX::Editor
 {
 	namespace
 	{
+		/**
+		 * Every module and dynamic input asset a build touched, with the version each exposed at the
+		 * time (R7, plan-v2 W3).
+		 *
+		 * Collected during planning rather than read back afterwards, because the asset pointer is in
+		 * hand exactly once -- at resolution -- and turning a path back into an asset later would mean
+		 * loading it again to ask a question that was already answerable.
+		 */
+		struct FDependencySet
+		{
+			TArray<FString> Paths;
+			/** Asset path -> "Major.Minor:Guid". */
+			TMap<FString, FString> Versions;
+
+			void Add(const UNiagaraScript* Asset)
+			{
+				if (Asset == nullptr)
+				{
+					return;
+				}
+				const FString Path = Asset->GetPathName();
+				Paths.AddUnique(Path);
+				Versions.Add(Path, FNiagaraAdapter::GetScriptVersion(Asset).ToStampString());
+			}
+		};
+
 		/**
 		 * One resolved write, addressed by its input-name path relative to the owning module.
 		 *
@@ -35,6 +63,9 @@ namespace UE::DreamFX::Editor
 			TArray<FName> Path;
 			FInputValue Value;
 			FSourceLocation Location;
+
+			/** For a dynamic input write, the script version its node is rebound to (R1b). */
+			FGuid DynamicInputVersion;
 		};
 
 		/** One entry of a folded Set Parameters module (L2). */
@@ -44,6 +75,9 @@ namespace UE::DreamFX::Editor
 			FNiagaraTypeDefinition Type;
 			FInputValue Value;
 			FSourceLocation Location;
+
+			/** As FPlannedInput: the entry's own value may itself be a pinned dynamic input (R1b). */
+			FGuid DynamicInputVersion;
 
 			/** Writes below the entry itself: the dynamic input chain hanging off it, if any. */
 			TArray<FPlannedInput> NestedInputs;
@@ -56,9 +90,15 @@ namespace UE::DreamFX::Editor
 			TArray<FPlannedInput> Inputs;
 			FSourceLocation Location;
 
+			/** `Foo@1.2(...)`: the version the module is rebound to after it is added (R1b). */
+			FGuid VersionGuid;
+
 			/** When true this is a Set Parameters module and Parameters holds its entries. */
 			bool bIsSetParameters = false;
 			TArray<FPlannedSetParameter> Parameters;
+
+			/** `disabled Foo(...)`: added to the stack, then switched off (plan-v3 E4-2). */
+			bool bDisabled = false;
 		};
 
 		struct FPlannedStack
@@ -111,7 +151,7 @@ namespace UE::DreamFX::Editor
 			TArray<FPlannedUserVariable> UserVariables;
 			TArray<FPlannedStack> SystemStacks;
 			TArray<FPlannedEmitter> Emitters;
-			TArray<FString> ModuleDependencies;
+			FDependencySet Dependencies;
 		};
 
 		/** Converts a literal AST value into JSON for the object-property blob writers. */
@@ -135,6 +175,25 @@ namespace UE::DreamFX::Editor
 
 			case EValueKind::String:
 			{
+				// plan-v5 R4. A quoted structured value is spliced in as JSON rather than written as a
+				// JSON *string*, which is how `MaterialParameters` and the other struct-shaped renderer
+				// properties survive a round trip (see TryWriteJsonBlob in the decompiler).
+				//
+				// Gated on the leading brace and on the parse succeeding, so an ordinary string
+				// property is unaffected: no renderer property in the engine holds a string that both
+				// starts with `{`/`[` and is valid JSON, and one that did would have been written by
+				// this same pair of rules anyway.
+				if (Value.Text.StartsWith(TEXT("{")) || Value.Text.StartsWith(TEXT("[")))
+				{
+					TSharedPtr<FJsonValue> Parsed;
+					const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Value.Text);
+					if (FJsonSerializer::Deserialize(Reader, Parsed) && Parsed.IsValid())
+					{
+						OutJson = Parsed;
+						return true;
+					}
+				}
+
 				// A quoted string in a property block is an asset reference often enough that resolving
 				// the DreamFX root prefix is the useful default; plain strings pass through unchanged
 				// because resolution only rewrites references that carry a root or look like a path.
@@ -148,7 +207,12 @@ namespace UE::DreamFX::Editor
 							FString::Printf(TEXT("Property '%s': %s"), *PropertyName, *Error));
 						return false;
 					}
-					OutJson = MakeShared<FJsonValueString>(Resolved);
+					// The external edit API's JSON importer rejects bare package paths -- its reference
+					// converter demands the Package.Object form. ResolveAssetPath already assumes the
+					// asset shares the package's short name when it strips a suffix, so appending it
+					// back is lossless.
+					OutJson = MakeShared<FJsonValueString>(
+						FString::Printf(TEXT("%s.%s"), *Resolved, *FPackageName::GetShortName(Resolved)));
 					return true;
 				}
 				OutJson = MakeShared<FJsonValueString>(Value.Text);
@@ -247,6 +311,9 @@ namespace UE::DreamFX::Editor
 			{ TEXT("InterpolatedSpawning"), TEXT("InterpolatedSpawnMode"), nullptr },
 			{ TEXT("CalculateBoundsMode"),  TEXT("CalculateBoundsMode"),  nullptr },
 			{ TEXT("FixedBounds"),          TEXT("FixedBounds"),          nullptr },
+			// Niagara refuses to compile a system that reads `Particles.ID` unless this is on, so an
+			// export that omitted it produced a system that could not be built at all (plan-v5 item A).
+			{ TEXT("RequiresPersistentIDs"),TEXT("bRequiresPersistentIDs"), nullptr },
 			{ TEXT("Enabled"),              TEXT("bIsEnabled"),           nullptr },
 		};
 
@@ -325,13 +392,13 @@ namespace UE::DreamFX::Editor
 		}
 
 		/** Translates a `Settings = { }` block into the JSON blob the property writers take. */
-		bool PlanSettings(const TArray<FProperty>& Settings, TArrayView<const FSettingMapping> Mappings,
+		bool PlanSettings(const TArray<FPropertyEntry>& Settings, TArrayView<const FSettingMapping> Mappings,
 			const FString& DefaultRoot, const TCHAR* ScopeLabel, FDiagnosticSink& Diagnostics, FString& OutJson)
 		{
 			bool bOk = true;
 			TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
 
-			for (const FProperty& Setting : Settings)
+			for (const FPropertyEntry& Setting : Settings)
 			{
 				if (IsGeneratorOnlySetting(Setting.Name))
 				{
@@ -436,7 +503,59 @@ namespace UE::DreamFX::Editor
 			const TMap<FName, FNiagaraTypeDefinition>* UserVariableTypes = nullptr;
 			/** Custom attributes already declared by an earlier assignment (L2 "first write declares"). */
 			TMap<FName, FNiagaraTypeDefinition>* DeclaredAttributes = nullptr;
+			/** The package this build is writing, so a reference into a *different* one can be caught. */
+			FString SystemPackageName;
 		};
+
+		/**
+		 * Finds a `refPath` in a data-interface blob that names a private subobject of another asset.
+		 *
+		 * The `:` is what distinguishes a subobject reference (`/Game/X.X:Emitter_0.Renderer_2`) from an
+		 * ordinary asset reference (`/Game/X.X`). The first is legal only inside the package that owns
+		 * it; written into a different package, SavePackage aborts the process. The second is fine and
+		 * must keep working -- meshes, materials and textures are all referenced that way.
+		 */
+		bool FindForeignSubobjectReference(const FString& Json, const FString& OwnPackageName, FString& OutOffender)
+		{
+			int32 Cursor = 0;
+			const FString Needle(TEXT("\"refPath\""));
+			while (true)
+			{
+				const int32 Key = Json.Find(Needle, ESearchCase::IgnoreCase, ESearchDir::FromStart, Cursor);
+				if (Key == INDEX_NONE)
+				{
+					return false;
+				}
+
+				int32 Open = Json.Find(TEXT("\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, Key + Needle.Len());
+				if (Open == INDEX_NONE)
+				{
+					return false;
+				}
+				++Open;
+				const int32 Close = Json.Find(TEXT("\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, Open);
+				if (Close == INDEX_NONE)
+				{
+					return false;
+				}
+
+				const FString Path = Json.Mid(Open, Close - Open);
+				int32 Colon = INDEX_NONE;
+				if (Path.FindChar(TEXT(':'), Colon))
+				{
+					const FString Package = Path.Left(Path.Find(TEXT("."), ESearchCase::CaseSensitive) == INDEX_NONE
+						? Path.Len()
+						: Path.Find(TEXT("."), ESearchCase::CaseSensitive));
+					if (!OwnPackageName.IsEmpty() && Package != OwnPackageName)
+					{
+						OutOffender = Path;
+						return true;
+					}
+				}
+
+				Cursor = Close + 1;
+			}
+		}
 
 		/**
 		 * Types an assignment's right-hand side.
@@ -511,6 +630,12 @@ namespace UE::DreamFX::Editor
 				return true;
 			}
 
+			// This was briefly a warning for same-layout types, on the theory that Niagara links by
+			// reinterpreting bytes and a Vector4f fed into a LinearColor input therefore builds. It
+			// does not: the translator rejects it with "变量 Pillar001.ccC 之前已被定义，但其类型不同！
+			// Vector 4 != 线性颜色", and the only thing the downgrade achieved was moving the failure
+			// from a diagnostic that names the source line to a Niagara compile error that does not.
+			// Same-size is not same-type here, so it stays an error (plan-v5 item C).
 			Diagnostics.Error(TEXT("DFX4027"), Location,
 				FString::Printf(TEXT("'%s' is %s, but '%s' is %s. Linking binds a parameter directly -- there is no conversion. Declare '%s' as %s, or drive the input another way."),
 					*SourceName.ToString(), *FValueLowering::DescribeType(*SourceType),
@@ -520,12 +645,56 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
+		 * The input a written identifier means, when more than one input answers to it.
+		 *
+		 * plan-v5 R2. Niagara names an inline edit condition after the input it gates -- `ScaleRGB`
+		 * the checkbox next to `Scale RGB` the value -- and the DSL's space-insensitive matching makes
+		 * those one name. Taking the first match wrote a colour into the checkbox and failed with the
+		 * engine's own "值必须是NiagaraBool".
+		 *
+		 * The value decides. A boolean literal means the checkbox; anything else means the value. The
+		 * test is the real lowering, run into a scratch sink, so it stays right for whatever pair of
+		 * types collides next; values with no lowering of their own -- a dynamic input chain, an hlsl
+		 * block -- fall back to "not the bool", which is what those can never be.
+		 */
+		const FInputSchema* ResolveInput(const FModuleSchema& Schema, const FNamedArgument& Argument)
+		{
+			TArray<const FInputSchema*> Candidates;
+			Schema.FindInputsByIdentifier(Argument.Name, Candidates);
+
+			if (Candidates.Num() <= 1 || !Argument.Value.IsValid())
+			{
+				return Candidates.Num() > 0 ? Candidates[0] : nullptr;
+			}
+
+			for (const FInputSchema* Candidate : Candidates)
+			{
+				FDiagnosticSink Scratch;
+				FInputValue Lowered;
+				if (FValueLowering::Lower(*Argument.Value, Candidate->Type, Argument.Name, Scratch, Lowered))
+				{
+					return Candidate;
+				}
+			}
+
+			for (const FInputSchema* Candidate : Candidates)
+			{
+				if (Candidate->Type != FNiagaraTypeDefinition::GetBoolDef())
+				{
+					return Candidate;
+				}
+			}
+
+			return Candidates[0];
+		}
+
+		/**
 		 * Resolves one value into the flat list of writes it needs, recursing through dynamic input
 		 * chains. Nothing is written here -- this is still the plan phase.
 		 */
 		bool PlanInputValue(const FValue& Value, const FNiagaraTypeDefinition& TargetType,
 			const TArray<FName>& Path, const FString& DisplayName, const FStackContext& Context,
-			FDiagnosticSink& Diagnostics, TArray<FPlannedInput>& OutInputs, TArray<FString>& OutDependencies)
+			FDiagnosticSink& Diagnostics, TArray<FPlannedInput>& OutInputs, FDependencySet& OutDependencies)
 		{
 			auto Emit = [&OutInputs, &Path, &Value](FInputValue&& InputValue)
 			{
@@ -558,6 +727,37 @@ namespace UE::DreamFX::Editor
 				return true;
 			}
 
+			// plan-v5 R4 step 3, the read side of the decompiler's verbatim data interface blob. A
+			// data-interface input given a quoted JSON object is configured with it; the same input
+			// given a quoted anything-else still falls through to the normal lowering, where a string
+			// on a non-asset input is the DFX4001 it has always been.
+			if (Value.Kind == EValueKind::String && TargetType.IsDataInterface()
+				&& Value.Text.StartsWith(TEXT("{")))
+			{
+				TSharedPtr<FJsonObject> Parsed;
+				const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Value.Text);
+				if (FJsonSerializer::Deserialize(Reader, Parsed) && Parsed.IsValid())
+				{
+					// plan-v5 R3's acceptance guard, in the one channel that can still carry such a
+					// reference. A `refPath` naming a *subobject* (the `:` is what makes it one) of some
+					// other asset cannot legally live in this system: SavePackage rejects a reference to
+					// another package's private object with `appError`, which kills the process instead
+					// of reporting anything. The decompiler no longer writes these, but a hand-written
+					// or older file still can, and a crash is not an acceptable way to find out.
+					FString Offender;
+					if (FindForeignSubobjectReference(Value.Text, Context.SystemPackageName, Offender))
+					{
+						Diagnostics.Error(TEXT("DFX3010"), Value.Location,
+							FString::Printf(TEXT("Input '%s' configures a data interface with a reference to '%s', which is a private subobject of another asset. Saving a system that holds one aborts the editor rather than failing, so DreamFX refuses it here. Reference an asset, not a subobject inside one."),
+								*DisplayName, *Offender));
+						return false;
+					}
+
+					Emit(FInputValue::MakeDataInterface(TargetType.GetClass(), Value.Text));
+					return true;
+				}
+			}
+
 			// L6: arithmetic and builtin calls collapse into one HLSL expression rather than growing an
 			// operator-node backend.
 			if (FExpressions::RequiresHlslLowering(Value))
@@ -582,9 +782,41 @@ namespace UE::DreamFX::Editor
 							*Value.Text, *FExpressions::ListBuiltins(), *Error));
 					return false;
 				}
-				OutDependencies.AddUnique(DynamicInput->GetPathName());
+				OutDependencies.Add(DynamicInput);
 
-				const FModuleSchema* Schema = Context.Modules->GetDynamicInputSchema(DynamicInput, Error);
+				// R1b, the dynamic input half. `MakeFloatFromLinearColor@1.0` and the same call with
+				// no pin are different scripts as far as their inputs are concerned: the revision
+				// moved `Channel` from one enum asset to another, so `Channel = R` is valid on one and
+				// meaningless on the other.
+				FGuid PinnedVersion;
+				if (!Value.VersionPin.IsEmpty())
+				{
+					const TArray<FScriptVersion> Available = FNiagaraAdapter::GetAvailableScriptVersions(DynamicInput);
+					const FScriptVersion* Match = Available.FindByPredicate(
+						[&Value](const FScriptVersion& Candidate) { return Candidate.ToLabel() == Value.VersionPin; });
+
+					if (Match == nullptr)
+					{
+						TArray<FString> Labels;
+						for (const FScriptVersion& Candidate : Available)
+						{
+							Labels.AddUnique(Candidate.ToLabel());
+						}
+						Diagnostics.Error(TEXT("DFX3009"), Value.Location,
+							FString::Printf(TEXT("Dynamic input '%s' is pinned to version %s, which its asset does not offer. Available version(s): %s."),
+								*Value.Text, *Value.VersionPin,
+								Labels.Num() > 0 ? *FString::Join(Labels, TEXT(", ")) : TEXT("(this asset does not use versioning)")));
+						return false;
+					}
+					PinnedVersion = Match->Guid;
+				}
+
+				// The *stack* schema, not the asset one: a static switch on the dynamic input exists
+				// only on a live chain, and planning against the asset schema is what made
+				// `Absolute = true` a "no input named" error (plan-v3 E4-1). TargetType is what the
+				// probe plugs the dynamic input into.
+				const FModuleSchema* Schema = Context.Modules->GetDynamicInputStackSchema(
+					DynamicInput, TargetType, PinnedVersion, Error);
 				if (Schema == nullptr)
 				{
 					Diagnostics.Error(TEXT("DFX3007"), Value.Location,
@@ -603,49 +835,80 @@ namespace UE::DreamFX::Editor
 
 				// The chain node itself is written before its children, because addressing a child
 				// means addressing *through* the node that owns it.
-				Emit(FInputValue::MakeDynamicInput(DynamicInput));
+				{
+					FPlannedInput Planned;
+					Planned.Path = Path;
+					Planned.Value = FInputValue::MakeDynamicInput(DynamicInput);
+					Planned.DynamicInputVersion = PinnedVersion;
+					Planned.Location = Value.Location;
+					OutInputs.Add(MoveTemp(Planned));
+				}
 
 				bool bOk = true;
 				TSet<FName> Seen;
-				for (const FNamedArgument& Argument : Value.Arguments)
+
+				// Static switches first, source order preserved within each group.
+				//
+				// Not a style choice: a switch reshapes which of its siblings are part of the graph at
+				// all, and SetStackInputData refuses a write to an input the current switch state hides
+				// ("该输入被静态开关/条件逻辑隐藏"). Writing `EvaluationType` before the `RandomnessMode`
+				// that reveals it fails on a chain that was perfectly valid when it was exported.
+				// Ordering here rather than in the decompiler means a hand-written file is under no
+				// obligation to know this (plan-v3 E4-1).
+				auto PlanArguments = [&](bool bStaticSwitchPass)
 				{
-					const FInputSchema* InputSchema = Schema->FindInputByIdentifier(Argument.Name);
-					if (InputSchema == nullptr)
+					for (const FNamedArgument& Argument : Value.Arguments)
 					{
-						TArray<FString> Available;
-						for (const FInputSchema& Candidate : Schema->Inputs)
+						const FInputSchema* InputSchema = ResolveInput(*Schema, Argument);
+						if (InputSchema == nullptr)
 						{
-							Available.Add(ToInputIdentifier(Candidate.Name));
+							if (bStaticSwitchPass)
+							{
+								continue; // reported once, on the second pass
+							}
+							TArray<FString> Available;
+							for (const FInputSchema& Candidate : Schema->Inputs)
+							{
+								Available.Add(ToInputIdentifier(Candidate.Name));
+							}
+							Diagnostics.Error(TEXT("DFX3008"), Argument.Location,
+								FString::Printf(TEXT("Dynamic input '%s' has no input named '%s'. Available inputs: %s"),
+									*Value.Text, *Argument.Name,
+									Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(none)")));
+							bOk = false;
+							continue;
 						}
-						Diagnostics.Error(TEXT("DFX3008"), Argument.Location,
-							FString::Printf(TEXT("Dynamic input '%s' has no input named '%s'. Available inputs: %s"),
-								*Value.Text, *Argument.Name,
-								Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(none)")));
-						bOk = false;
-						continue;
-					}
 
-					if (Seen.Contains(InputSchema->Name))
-					{
-						Diagnostics.Error(TEXT("DFX4010"), Argument.Location,
-							FString::Printf(TEXT("Input '%s' is set more than once on dynamic input '%s'."),
-								*Argument.Name, *Value.Text));
-						bOk = false;
-						continue;
-					}
-					Seen.Add(InputSchema->Name);
+						if (InputSchema->bIsStaticSwitch != bStaticSwitchPass)
+						{
+							continue;
+						}
 
-					TArray<FName> ChildPath = Path;
-					ChildPath.Add(InputSchema->Name);
+						if (Seen.Contains(InputSchema->Name))
+						{
+							Diagnostics.Error(TEXT("DFX4010"), Argument.Location,
+								FString::Printf(TEXT("Input '%s' is set more than once on dynamic input '%s'."),
+									*Argument.Name, *Value.Text));
+							bOk = false;
+							continue;
+						}
+						Seen.Add(InputSchema->Name);
 
-					if (!Argument.Value.IsValid()
-						|| !PlanInputValue(*Argument.Value, InputSchema->Type, ChildPath,
-							FString::Printf(TEXT("%s.%s"), *Value.Text, *Argument.Name),
-							Context, Diagnostics, OutInputs, OutDependencies))
-					{
-						bOk = false;
+						TArray<FName> ChildPath = Path;
+						ChildPath.Add(InputSchema->Name);
+
+						if (!Argument.Value.IsValid()
+							|| !PlanInputValue(*Argument.Value, InputSchema->Type, ChildPath,
+								FString::Printf(TEXT("%s.%s"), *Value.Text, *Argument.Name),
+								Context, Diagnostics, OutInputs, OutDependencies))
+						{
+							bOk = false;
+						}
 					}
-				}
+				};
+
+				PlanArguments(/*bStaticSwitchPass=*/true);
+				PlanArguments(/*bStaticSwitchPass=*/false);
 				return bOk;
 			}
 
@@ -663,7 +926,7 @@ namespace UE::DreamFX::Editor
 		}
 
 		bool PlanStack(const FStack& Stack, const FStackContext& Context,
-			FDiagnosticSink& Diagnostics, FPlannedStack& OutStack, TArray<FString>& OutDependencies)
+			FDiagnosticSink& Diagnostics, FPlannedStack& OutStack, FDependencySet& OutDependencies)
 		{
 			FModuleLibrary& Modules = *Context.Modules;
 			const FString& DefaultRoot = Context.DefaultRoot;
@@ -764,6 +1027,7 @@ namespace UE::DreamFX::Editor
 					if (Writes.Num() > 0)
 					{
 						Parameter.Value = Writes[0].Value;
+						Parameter.DynamicInputVersion = Writes[0].DynamicInputVersion;
 						for (int32 Index = 1; Index < Writes.Num(); ++Index)
 						{
 							Parameter.NestedInputs.Add(Writes[Index]);
@@ -793,13 +1057,6 @@ namespace UE::DreamFX::Editor
 					continue;
 				}
 
-				if (!Statement.VersionPin.IsEmpty())
-				{
-					Diagnostics.Warning(TEXT("DFX5091"), Statement.Location,
-						FString::Printf(TEXT("Version pin '@%s' on module '%s' is parsed but not yet honoured; the latest version is used."),
-							*Statement.VersionPin, *Statement.Name));
-				}
-
 				FString Error;
 				UNiagaraScript* ModuleAsset = Modules.FindModule(Statement.Name, Error);
 				if (ModuleAsset == nullptr)
@@ -809,9 +1066,40 @@ namespace UE::DreamFX::Editor
 					continue;
 				}
 
+				// R7's `@version` pin, which as of R1b selects rather than merely checks. Resolved
+				// before anything is read, because the version decides what the module's inputs even
+				// are -- see the long note at the FPlannedModule assignment below.
+				FGuid PinnedVersion;
+				if (!Statement.VersionPin.IsEmpty())
+				{
+					const TArray<FScriptVersion> Available = FNiagaraAdapter::GetAvailableScriptVersions(ModuleAsset);
+
+					const FScriptVersion* Match = Available.FindByPredicate(
+						[&Statement](const FScriptVersion& Candidate) { return Candidate.ToLabel() == Statement.VersionPin; });
+
+					if (Match == nullptr)
+					{
+						TArray<FString> Labels;
+						for (const FScriptVersion& Candidate : Available)
+						{
+							Labels.AddUnique(Candidate.ToLabel());
+						}
+						Diagnostics.Error(TEXT("DFX3009"), Statement.Location,
+							FString::Printf(TEXT("'%s' is pinned to version %s, which its module asset does not offer. Available version(s): %s. Drop the '@%s' to build against the exposed version."),
+								*Statement.Name, *Statement.VersionPin,
+								Labels.Num() > 0 ? *FString::Join(Labels, TEXT(", ")) : TEXT("(this asset does not use versioning)"),
+								*Statement.VersionPin));
+						bOk = false;
+						continue;
+					}
+
+					PinnedVersion = Match->Guid;
+				}
+
 				// Stack-aware, not asset-level: inline edit conditions and static switches only exist on
 				// a live module, and both are things authors write every day.
-				const FModuleSchema* Schema = Modules.GetStackSchema(ModuleAsset, Stack.Kind, Error);
+				const FModuleSchema* Schema = Modules.GetStackSchema(ModuleAsset, Stack.Kind,
+					TArrayView<const TPair<FName, FInputValue>>(), PinnedVersion, Error);
 				if (Schema == nullptr)
 				{
 					Diagnostics.Error(TEXT("DFX3002"), Statement.Location,
@@ -820,62 +1108,161 @@ namespace UE::DreamFX::Editor
 					continue;
 				}
 
+				// plan-v5 R1. A module's input list is a function of its static switches, so the schema
+				// above -- read from a module whose switches sit at their defaults -- is only the
+				// signature of the *unconfigured* module. `SpriteSizeMode = Uniform` is what makes
+				// `UniformSpriteSize` exist at all, and checking that argument against the default
+				// configuration rejected it as a typo.
+				//
+				// So the switches this call sets are collected first and the schema re-read with them
+				// applied. A fixed point rather than one pass, because a switch can be revealed by
+				// another switch: each round can only see the switches the previous round's
+				// configuration exposed. Four rounds is far past anything in the engine's own modules,
+				// where the deepest nesting is two.
+				TArray<TPair<FName, FInputValue>> SwitchValues;
+				bool bSchemaFailed = false;
+				for (int32 Round = 0; Round < 4; ++Round)
+				{
+					TArray<TPair<FName, FInputValue>> Found;
+					for (const FNamedArgument& Argument : Statement.Arguments)
+					{
+						const FInputSchema* InputSchema = ResolveInput(*Schema, Argument);
+						if (InputSchema == nullptr || !InputSchema->bIsStaticSwitch || !Argument.Value.IsValid())
+						{
+							continue;
+						}
+
+						// Lowered into a scratch sink: a switch whose value does not type-check is not
+						// reported here but by the real pass below, which knows the display name and
+						// would otherwise say it twice.
+						FDiagnosticSink Scratch;
+						FInputValue Lowered;
+						if (FValueLowering::Lower(*Argument.Value, InputSchema->Type,
+							DescribeInput(Statement.Name, Argument.Name), Scratch, Lowered))
+						{
+							Found.Emplace(InputSchema->Name, MoveTemp(Lowered));
+						}
+					}
+
+					if (Found.Num() == SwitchValues.Num())
+					{
+						break; // nothing new became visible; this is the configuration the source describes
+					}
+
+					SwitchValues = MoveTemp(Found);
+
+					const FModuleSchema* Configured = Modules.GetStackSchema(ModuleAsset, Stack.Kind,
+						SwitchValues, PinnedVersion, Error);
+					if (Configured == nullptr)
+					{
+						Diagnostics.Error(TEXT("DFX3002"), Statement.Location,
+							FString::Printf(TEXT("Could not read the input schema of module '%s' with its static switches applied: %s"),
+								*Statement.Name, *Error));
+						bSchemaFailed = true;
+						break;
+					}
+					Schema = Configured;
+				}
+
+				// Checking the rest of the arguments against a schema that is known to describe the
+				// wrong configuration would bury the real failure under a list of invented typos.
+				if (bSchemaFailed)
+				{
+					bOk = false;
+					continue;
+				}
+
+				// plan-v2 W3 concluded a `@version` pin could never do more than record, because the
+				// external edit API has no version surface: AddModule takes a bare asset pointer and
+				// hardcodes the newest version. That is still true of the external API -- what changed
+				// is that the node it creates does have one, and rebinding it afterwards is a
+				// supported, exported operation (see the R1b block in the adapter header). A pinned
+				// module is added, moved to the pinned version, and only then written.
+				//
+				// Without this, a rebuild of any real content is a rebuild against different modules:
+				// the four content packs sit on module versions two and three revisions behind the
+				// engine's current assets, whose inputs have since been renamed and retyped.
 				FPlannedModule Planned;
 				Planned.SourceName = Statement.Name;
 				Planned.Asset = ModuleAsset;
 				Planned.Location = Statement.Location;
-				OutDependencies.AddUnique(ModuleAsset->GetPathName());
+				Planned.bDisabled = Statement.bDisabled;
+				Planned.VersionGuid = PinnedVersion;
+				OutDependencies.Add(ModuleAsset);
 
 				TSet<FName> Seen;
-				for (const FNamedArgument& Argument : Statement.Arguments)
+
+				// Static switches first, source order preserved within each group -- the same rule the
+				// dynamic input chains above already follow, and for the same reason: a switch decides
+				// which of its siblings are part of the graph at all, and SetStackInputData refuses a
+				// write to an input the current switch state hides. Before R1 the module path wrote in
+				// source order, so an export whose switch happened to come after the input it reveals
+				// failed at write time even once the type check passed.
+				auto PlanArguments = [&](bool bStaticSwitchPass)
 				{
-					const FInputSchema* InputSchema = Schema->FindInputByIdentifier(Argument.Name);
-					if (InputSchema == nullptr)
+					for (const FNamedArgument& Argument : Statement.Arguments)
 					{
-						// This is the Phase 1 acceptance case: a mistyped input name must point at the
-						// exact line and column of the argument, not at the module or the file.
-						const FString Suggestion = SuggestInputName(*Schema, Argument.Name);
-						TArray<FString> Available;
-						for (const FInputSchema& Candidate : Schema->Inputs)
+						const FInputSchema* InputSchema = ResolveInput(*Schema, Argument);
+						if (InputSchema == nullptr)
 						{
-							Available.Add(ToInputIdentifier(Candidate.Name));
+							if (bStaticSwitchPass)
+							{
+								continue; // reported once, on the second pass
+							}
+
+							// This is the Phase 1 acceptance case: a mistyped input name must point at
+							// the exact line and column of the argument, not at the module or the file.
+							const FString Suggestion = SuggestInputName(*Schema, Argument.Name);
+							TArray<FString> Available;
+							for (const FInputSchema& Candidate : Schema->Inputs)
+							{
+								Available.Add(ToInputIdentifier(Candidate.Name));
+							}
+							Diagnostics.Error(TEXT("DFX3003"), Argument.Location,
+								FString::Printf(TEXT("Module '%s' has no input named '%s'.%s Available inputs: %s"),
+									*Statement.Name, *Argument.Name,
+									Suggestion.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" Did you mean '%s'?"), *Suggestion),
+									Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(none)")));
+							bOk = false;
+							continue;
 						}
-						Diagnostics.Error(TEXT("DFX3003"), Argument.Location,
-							FString::Printf(TEXT("Module '%s' has no input named '%s'.%s Available inputs: %s"),
-								*Statement.Name, *Argument.Name,
-								Suggestion.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" Did you mean '%s'?"), *Suggestion),
-								Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(none)")));
-						bOk = false;
-						continue;
-					}
 
-					// Keyed on the resolved Niagara name, not the written identifier, so that
-					// `LoopDuration` and `Loop Duration` are recognised as the same input.
-					if (Seen.Contains(InputSchema->Name))
-					{
-						Diagnostics.Error(TEXT("DFX4010"), Argument.Location,
-							FString::Printf(TEXT("Input '%s' is set more than once on module '%s'."),
-								*Argument.Name, *Statement.Name));
-						bOk = false;
-						continue;
-					}
-					Seen.Add(InputSchema->Name);
+						if (InputSchema->bIsStaticSwitch != bStaticSwitchPass)
+						{
+							continue;
+						}
 
-					if (!Argument.Value.IsValid())
-					{
-						Diagnostics.Error(TEXT("DFX4005"), Argument.Location,
-							FString::Printf(TEXT("Input '%s' has no value."), *Argument.Name));
-						bOk = false;
-						continue;
-					}
+						// Keyed on the resolved Niagara name, not the written identifier, so that
+						// `LoopDuration` and `Loop Duration` are recognised as the same input.
+						if (Seen.Contains(InputSchema->Name))
+						{
+							Diagnostics.Error(TEXT("DFX4010"), Argument.Location,
+								FString::Printf(TEXT("Input '%s' is set more than once on module '%s'."),
+									*Argument.Name, *Statement.Name));
+							bOk = false;
+							continue;
+						}
+						Seen.Add(InputSchema->Name);
 
-					if (!PlanInputValue(*Argument.Value, InputSchema->Type, { InputSchema->Name },
-						DescribeInput(Statement.Name, Argument.Name), Context, Diagnostics,
-						Planned.Inputs, OutDependencies))
-					{
-						bOk = false;
+						if (!Argument.Value.IsValid())
+						{
+							Diagnostics.Error(TEXT("DFX4005"), Argument.Location,
+								FString::Printf(TEXT("Input '%s' has no value."), *Argument.Name));
+							bOk = false;
+							continue;
+						}
+
+						if (!PlanInputValue(*Argument.Value, InputSchema->Type, { InputSchema->Name },
+							DescribeInput(Statement.Name, Argument.Name), Context, Diagnostics,
+							Planned.Inputs, OutDependencies))
+						{
+							bOk = false;
+						}
 					}
-				}
+				};
+
+				PlanArguments(/*bStaticSwitchPass=*/true);
+				PlanArguments(/*bStaticSwitchPass=*/false);
 
 				OutStack.Modules.Add(MoveTemp(Planned));
 			}
@@ -900,10 +1287,17 @@ namespace UE::DreamFX::Editor
 
 			for (const FRendererBinding& Binding : Renderer.Bindings)
 			{
-				if (!FValueLowering::IsNamespacedName(Binding.Target))
+				// A dot, not a namespace from the known set. Niagara aliases an emitter's own
+				// parameters under the emitter's name -- `Grid3D_Gas_CONTROLS_Emitter001.Velocity` is
+				// how a renderer on that emitter names its Velocity -- and an emitter name is content,
+				// so no fixed list can ever contain it. Demanding a known namespace rejected 44
+				// bindings Niagara had written itself. What the check is for is the unqualified
+				// `Bind SpriteSize -> SpriteSize`, and requiring a dot still catches that.
+				int32 DotIndex = INDEX_NONE;
+				if (!Binding.Target.FindChar(TEXT('.'), DotIndex) || DotIndex == 0)
 				{
 					Diagnostics.Error(TEXT("DFX4026"), Binding.Location,
-						FString::Printf(TEXT("'Bind %s -> %s': the target must be a namespace-qualified parameter, e.g. Particles.SpriteSize."),
+						FString::Printf(TEXT("'Bind %s -> %s': the target must be a qualified parameter -- either a namespace such as Particles.SpriteSize, or an emitter's own alias such as MyEmitter.Velocity."),
 							*Binding.PropertyName, *Binding.Target));
 					bOk = false;
 					continue;
@@ -924,7 +1318,7 @@ namespace UE::DreamFX::Editor
 			}
 
 			TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
-			for (const FProperty& Property : Renderer.Properties)
+			for (const FPropertyEntry& Property : Renderer.Properties)
 			{
 				if (!Property.Value.IsValid())
 				{
@@ -936,6 +1330,39 @@ namespace UE::DreamFX::Editor
 					bOk = false;
 					continue;
 				}
+
+				// plan-v3 E4-3. `Meshes = ["/Engine/BasicShapes/Cube"]` is an array of paths in source
+				// and an array of element structs in the asset. Which field inside the element takes
+				// the reference is read off the class, so this stays right for renderers that do not
+				// exist yet.
+				if (Json.IsValid() && Json->Type == EJson::Array)
+				{
+					FString ReferenceField;
+					FString ElementDefaultsJson;
+					TArray<FString> ReferenceErrors;
+					if (FNiagaraAdapter::GetArrayElementReferenceField(
+						OutRenderer.Class, Property.Name, ReferenceField, ElementDefaultsJson, ReferenceErrors))
+					{
+						TArray<TSharedPtr<FJsonValue>> Wrapped;
+						bool bAllStrings = true;
+						for (const TSharedPtr<FJsonValue>& Element : Json->AsArray())
+						{
+							if (!Element.IsValid() || Element->Type != EJson::String)
+							{
+								bAllStrings = false;
+								break;
+							}
+							const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+							Object->SetField(ReferenceField, Element);
+							Wrapped.Add(MakeShared<FJsonValueObject>(Object));
+						}
+						if (bAllStrings && Wrapped.Num() > 0)
+						{
+							Json = MakeShared<FJsonValueArray>(Wrapped);
+						}
+					}
+				}
+
 				Properties->SetField(Property.Name, Json);
 			}
 
@@ -959,9 +1386,9 @@ namespace UE::DreamFX::Editor
 			OutMerged.Name = Override.Name;
 			OutMerged.Location = Override.Location;
 
-			for (const FProperty& Setting : Override.Settings)
+			for (const FPropertyEntry& Setting : Override.Settings)
 			{
-				FProperty* Existing = OutMerged.Settings.FindByPredicate([&Setting](const FProperty& Candidate)
+				FPropertyEntry* Existing = OutMerged.Settings.FindByPredicate([&Setting](const FPropertyEntry& Candidate)
 				{
 					return Candidate.Name.Equals(Setting.Name, ESearchCase::IgnoreCase);
 				});
@@ -1173,11 +1600,12 @@ namespace UE::DreamFX::Editor
 			StackContext.DefaultRoot = Document.Root;
 			StackContext.UserVariableTypes = &UserVariableTypes;
 			StackContext.DeclaredAttributes = &DeclaredAttributes;
+			StackContext.SystemPackageName = OutPlan.PackagePath / OutPlan.AssetName;
 
 			for (const FStack& Stack : Document.Stacks)
 			{
 				FPlannedStack Planned;
-				if (!PlanStack(Stack, StackContext, Diagnostics, Planned, OutPlan.ModuleDependencies))
+				if (!PlanStack(Stack, StackContext, Diagnostics, Planned, OutPlan.Dependencies))
 				{
 					bOk = false;
 				}
@@ -1281,7 +1709,7 @@ namespace UE::DreamFX::Editor
 						continue;
 					}
 					FPlannedStack PlannedStack;
-					if (!PlanStack(Stack, EmitterContext, Diagnostics, PlannedStack, OutPlan.ModuleDependencies))
+					if (!PlanStack(Stack, EmitterContext, Diagnostics, PlannedStack, OutPlan.Dependencies))
 					{
 						bOk = false;
 					}
@@ -1382,6 +1810,23 @@ namespace UE::DreamFX::Editor
 			return bOk;
 		}
 
+		/**
+		 * One planned write, taking the dynamic-input version route when the plan asked for one.
+		 *
+		 * A dynamic input is written by handing the adapter the script; the node the engine creates
+		 * for it lands on the newest version, so a pinned chain has to be rebound immediately after
+		 * (R1b). Every other value mode is an ordinary write.
+		 */
+		bool ApplyPlannedInput(const FStackAddress& InputAddress, const FPlannedInput& Input, TArray<FString>& OutErrors)
+		{
+			if (Input.Value.Mode == EInputValueMode::DynamicInput && Input.DynamicInputVersion.IsValid())
+			{
+				return FNiagaraAdapter::SetDynamicInputAtVersion(
+					InputAddress, Input.Value.DynamicInputAsset, Input.DynamicInputVersion, OutErrors);
+			}
+			return FNiagaraAdapter::SetInput(InputAddress, Input.Value, OutErrors);
+		}
+
 		bool ApplyStack(const FStackAddress& OwnerAddress, const FPlannedStack& Stack,
 			FDiagnosticSink& Diagnostics, TMap<FName, FSourceLocation>& OutModuleLocations)
 		{
@@ -1390,6 +1835,11 @@ namespace UE::DreamFX::Editor
 
 			for (const FPlannedModule& Module : Stack.Modules)
 			{
+				// Between modules, not inside one: the view-model debris each adapter call leaves
+				// behind is what grows the process, and one module is a small enough step to hold a
+				// ceiling without collecting while a write is half done.
+				FNiagaraAdapter::CollectIfHeavy();
+
 				TArray<FString> Errors;
 				// AddModule inserts after ModuleName when one is given, and appends otherwise. Chaining
 				// each new module after the previous one makes declaration order the stack order without
@@ -1427,8 +1877,13 @@ namespace UE::DreamFX::Editor
 					{
 						if (Parameter.Value.Mode != EInputValueMode::Literal && Parameter.Value.Mode != EInputValueMode::Enum)
 						{
+							FPlannedInput AsInput;
+							AsInput.Value = Parameter.Value;
+							AsInput.DynamicInputVersion = Parameter.DynamicInputVersion;
+							AsInput.Location = Parameter.Location;
+
 							Errors.Reset();
-							if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Parameter.Name), Parameter.Value, Errors))
+							if (!ApplyPlannedInput(ModuleAddress.WithInput(Parameter.Name), AsInput, Errors))
 							{
 								ReportAdapterErrors(Errors, TEXT("DFX5025"), Parameter.Location, Diagnostics);
 								bOk = false;
@@ -1439,7 +1894,7 @@ namespace UE::DreamFX::Editor
 						for (const FPlannedInput& Nested : Parameter.NestedInputs)
 						{
 							Errors.Reset();
-							if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInputPath(Nested.Path), Nested.Value, Errors))
+							if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Nested.Path), Nested, Errors))
 							{
 								ReportAdapterErrors(Errors, TEXT("DFX5025"), Nested.Location, Diagnostics);
 								bOk = false;
@@ -1459,12 +1914,40 @@ namespace UE::DreamFX::Editor
 				OutModuleLocations.Add(AddedName, Module.Location);
 
 				const FStackAddress ModuleAddress = OwnerAddress.WithScript(Stack.ScriptName).WithModule(AddedName);
+
+				// R1b: before any input is written, because the version decides which inputs exist.
+				// AddModule always lands on the asset's newest version, so a module the source pinned
+				// to an older one is the wrong module until this runs.
+				if (Module.VersionGuid.IsValid())
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::SetModuleScriptVersion(ModuleAddress, Module.VersionGuid, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5022"), Module.Location, Diagnostics);
+						bOk = false;
+						continue;
+					}
+				}
+
 				for (const FPlannedInput& Input : Module.Inputs)
 				{
 					Errors.Reset();
-					if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInputPath(Input.Path), Input.Value, Errors))
+					if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input.Path), Input, Errors))
 					{
 						ReportAdapterErrors(Errors, TEXT("DFX5021"), Input.Location, Diagnostics);
+						bOk = false;
+					}
+				}
+
+				// Disabling comes last, after every input is written: the inputs are what makes a parked
+				// module worth keeping, and Niagara has no reason to preserve them on a module that was
+				// switched off before they arrived.
+				if (Module.bDisabled)
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::SetModuleEnabled(ModuleAddress, /*bEnabled=*/false, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5029"), Module.Location, Diagnostics);
 						bOk = false;
 					}
 				}
@@ -1812,6 +2295,50 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	namespace
+	{
+		/**
+		 * plan-v4 V1-4. A source under the decompiled output directory may only build inside the
+		 * `Decompiled/` namespace.
+		 *
+		 * This is what replaced excluding that whole tree from discovery. The exclusion was safe and
+		 * silent in the worst way: editing an export and saving did nothing, reported nothing, and
+		 * looked exactly like a broken watcher. Now the tree is ordinary source, and the one thing
+		 * that must stay impossible -- an export overwriting the third-party asset it was read from --
+		 * is impossible because of where its `Name=` points, checked here.
+		 *
+		 * It fires on exports written before plan-v4, whose `Name=` still names the original. Refusing
+		 * them is the migration: re-export, and the file that replaces it is already correct.
+		 */
+		bool GuardDecompiledNamespace(const FDocument& Document, FDiagnosticSink& Diagnostics)
+		{
+			if (Document.SourceFilePath.IsEmpty() || !FDreamFXPaths::IsDecompiledExport(Document.SourceFilePath))
+			{
+				return true;
+			}
+
+			FString MountPoint;
+			FString MountError;
+			if (!FDreamFXPaths::ResolveRootMountPoint(Document.Root, MountPoint, MountError))
+			{
+				return true; // BuildPlan reports the unresolvable root itself, with the better message
+			}
+
+			FString Relative = Document.Name;
+			Relative.RemoveFromStart(TEXT("/"));
+
+			if (FDreamFXPaths::IsDecompiledNamespaceAsset(MountPoint / Relative))
+			{
+				return true;
+			}
+
+			Diagnostics.Error(TEXT("DFX8013"), Document.HeaderLocation, FString::Printf(
+				TEXT("This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name."),
+				*Document.Name, *(MountPoint / Relative), FDreamFXPaths::DecompiledNamespace));
+			return false;
+		}
+	}
+
 	FGenerateResult FGenerator::GenerateFromFile(const FString& FilePath, const FGenerateOptions& Options,
 		FDiagnosticSink& Diagnostics)
 	{
@@ -1829,25 +2356,31 @@ namespace UE::DreamFX::Editor
 		FGenerateResult Result;
 		Diagnostics.SetFile(Document.SourceFilePath);
 
+		if (!GuardDecompiledNamespace(Document, Diagnostics))
+		{
+			return Result;
+		}
+
 		if (Document.Kind == EDocumentKind::Module || Document.Kind == EDocumentKind::DynamicInput)
 		{
-			// Verified against this engine, not assumed. A .dfm lowers to a UNiagaraScript holding one
-			// UNiagaraNodeCustomHlsl, and nothing in NiagaraEditor's public surface can put HLSL text
-			// on that node: the class is UCLASS(MinimalAPI), SetCustomHlsl and
-			// InitAsCustomHlslDynamicInput carry no export macro, the CustomHlsl field is private, and
-			// a grep of every NIAGARAEDITOR_API declaration turns up no other entry point that takes
-			// HLSL source.
-			//
-			// The two ways round it are both worse than waiting. Writing a private field by reflection
-			// gives up every compile-time guarantee this adapter layer exists to provide, and patching
-			// the engine forfeits the ability to run on a prebuilt one -- which design principle 4
-			// names as the reason the principle exists.
-			//
-			// So .dfm files are parsed, validated and CI-gated, and generation says exactly why it
-			// stops. The language surface is settled; only the write path is missing.
-			Diagnostics.Error(TEXT("DFX5100"), Document.HeaderLocation,
-				FString::Printf(TEXT("'%s' is a %s. DreamFX cannot generate one on a stock engine: setting HLSL on a Niagara custom node needs UNiagaraNodeCustomHlsl::SetCustomHlsl, which the NiagaraEditor module does not export, and the field behind it is private. The file is still parsed and validated. Use an existing dynamic input asset, or an inline hlsl { } expression, until the engine exports a way in."),
-					*FPaths::GetCleanFilename(Document.SourceFilePath), LexDocumentKind(Document.Kind)));
+			// Lint first: a .dfm that is internally inconsistent should say so whether or not this build
+			// can generate one, and the generator below assumes the linter's invariants hold.
+			FLint::Run(Document, Diagnostics);
+			if (Diagnostics.HasErrors())
+			{
+				return Result;
+			}
+
+			// plan-v2 W1. Generation exists only where the engine exports a way to put HLSL on a custom
+			// node -- MoonEngine, detected by the Build.cs probe. Everywhere else the committed asset is
+			// still checked against its source; only the remedy differs.
+			const FModuleGenerateResult ModuleResult = FModuleGenerator::IsAvailable()
+				? FModuleGenerator::Generate(Document, Options, Diagnostics)
+				: FModuleGenerator::CheckWithoutGenerating(Document, Diagnostics);
+			Result.bSucceeded = ModuleResult.bSucceeded;
+			Result.bSkipped = ModuleResult.bSkipped;
+			Result.bDrifted = ModuleResult.bDrifted;
+			Result.AssetPath = ModuleResult.AssetPath;
 			return Result;
 		}
 
@@ -1864,7 +2397,7 @@ namespace UE::DreamFX::Editor
 		FLint::Run(Document, Diagnostics);
 
 		FModuleLibrary Modules;
-		if (const FProperty* ModulePaths = Document.FindSetting(TEXT("ModulePaths")))
+		if (const FPropertyEntry* ModulePaths = Document.FindSetting(TEXT("ModulePaths")))
 		{
 			TArray<FString> Paths;
 			if (ModulePaths->Value.IsValid() && ModulePaths->Value->Kind == EValueKind::Array)
@@ -1929,6 +2462,48 @@ namespace UE::DreamFX::Editor
 						*Plan.FullAssetPath, *Stamp.GeneratorVersion, FProvenance::GetGeneratorVersion()));
 			}
 
+			// R7. The stamp says which version of each module the asset was built against; the planner
+			// above has just resolved the same modules as they are now. A difference means the text is
+			// unchanged, the asset is unchanged, and the thing they both depend on moved -- the exact
+			// failure that is otherwise undetectable, because nothing in the source or the asset says
+			// anything about it.
+			if (bHasStamp)
+			{
+				for (const TPair<FString, FString>& Current : Plan.Dependencies.Versions)
+				{
+					const FString* Recorded = Stamp.ModuleVersions.Find(Current.Key);
+					if (Recorded == nullptr)
+					{
+						// A dependency the stamp never mentioned: either a source edit added it (which
+						// the hash check above already caught) or the stamp predates version recording.
+						continue;
+					}
+					if (*Recorded == Current.Value)
+					{
+						continue;
+					}
+
+					FScriptVersion Was;
+					FScriptVersion Now;
+					FScriptVersion::FromStampString(*Recorded, Was);
+					FScriptVersion::FromStampString(Current.Value, Now);
+
+					const FString Message = FString::Printf(
+						TEXT("Module '%s' was version %s when '%s' was built and is version %s now. The source did not change, so the asset was built against a different module than the one this build would use. Rebuild to adopt it, or pin the module with '@%s' to have the mismatch reported at the call site."),
+						*Current.Key, *Was.ToLabel(), *Plan.FullAssetPath, *Now.ToLabel(), *Was.ToLabel());
+
+					if (Options.bStrictVersions)
+					{
+						Diagnostics.Error(TEXT("DFX7005"), Document.HeaderLocation, Message);
+						Result.bDrifted = true;
+					}
+					else
+					{
+						Diagnostics.Warning(TEXT("DFX7005"), Document.HeaderLocation, Message);
+					}
+				}
+			}
+
 			Result.bSucceeded = !Result.bDrifted;
 			return Result;
 		}
@@ -1946,9 +2521,33 @@ namespace UE::DreamFX::Editor
 			return Result;
 		}
 
+		// Before the compile, because the compile is the first thing that reads them. A curve written
+		// through the data-interface JSON path has its keys but not the sample table those keys are
+		// baked into, and nothing in that path bakes it (see RefreshCurveLookupTables).
+		FNiagaraAdapter::RefreshCurveLookupTables(System);
+
+		// plan-v2 W4. A GPU emitter's real work is the compute shader, and WaitForCompilationComplete
+		// does not wait for it unless asked -- so without this a GPU system's build reports the VM
+		// scripts' status and finishes while the shader is still compiling. The gate would pass on a
+		// system whose shader had not been built, let alone succeeded.
+		bool bHasGpuEmitter = false;
+		for (const FEmitter& Emitter : Document.Emitters)
+		{
+			for (const FPropertyEntry& Setting : Emitter.Settings)
+			{
+				if (Setting.Name.Equals(TEXT("SimTarget"), ESearchCase::IgnoreCase)
+					&& Setting.Value.IsValid()
+					&& Setting.Value->Text.Equals(TEXT("GPU"), ESearchCase::IgnoreCase))
+				{
+					bHasGpuEmitter = true;
+					break;
+				}
+			}
+		}
+
 		FCompileStateInfo CompileState;
 		Errors.Reset();
-		const bool bCompiled = FNiagaraAdapter::CompileAndWait(System, CompileState, Errors);
+		const bool bCompiled = FNiagaraAdapter::CompileAndWait(System, bHasGpuEmitter, CompileState, Errors);
 		ReportAdapterErrors(Errors, TEXT("DFX6000"), Document.HeaderLocation, Diagnostics);
 		ReportNiagaraDiagnostics(System, CompileState, Plan, ModuleLocations, Diagnostics);
 
@@ -1964,7 +2563,8 @@ namespace UE::DreamFX::Editor
 		Stamp.SourceFullPath = Document.SourceFilePath;
 		Stamp.SourceHash = Document.SourceHash;
 		Stamp.GeneratorVersion = FProvenance::GetGeneratorVersion();
-		Stamp.ModuleDependencies = Plan.ModuleDependencies;
+		Stamp.ModuleDependencies = Plan.Dependencies.Paths;
+		Stamp.ModuleVersions = Plan.Dependencies.Versions;
 
 		FSourceRoot OwningRoot;
 		if (FDreamFXPaths::FindOwningRoot(Document.SourceFilePath, OwningRoot))
