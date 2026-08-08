@@ -131,14 +131,60 @@ namespace UE::DreamFX::Editor
 	/** The identifier an author writes for a given Niagara input name: "Loop Duration" -> "LoopDuration". */
 	FString ToInputIdentifier(FName InputName);
 
+	/**
+	 * A Niagara name as DreamFXLang source: bare when it is already an identifier, back-quoted when
+	 * the language has no other way to hold it.
+	 *
+	 * Niagara names come from a UI that allows anything. This project's own content has a user
+	 * parameter called `PillarPower(0~1)` and a module input called `Ring/DiscDistributionMode`;
+	 * written bare, either turns the export into a file that will not parse. Dots are left bare so
+	 * that `User.Speed` stays readable -- only a name that needs quoting gets it.
+	 */
+	FString ToNameToken(const FString& Name);
+
 	struct FModuleSchema
 	{
 		TArray<FInputSchema> Inputs;
+
+		/**
+		 * What the script writes. For a dynamic input there is exactly one, and its type is what
+		 * decides where the dynamic input may be plugged in -- which is what the E4-1 probe needs in
+		 * order to build a host for it.
+		 */
+		TArray<FInputSchema> Outputs;
 
 		const FInputSchema* FindInput(FName Name) const;
 
 		/** Exact match first, then the normalised comparison described above. */
 		const FInputSchema* FindInputByIdentifier(const FString& Identifier) const;
+
+		/**
+		 * Every input one written identifier could mean, best match first.
+		 *
+		 * Normalising spaces away is what lets an author write `LoopDuration` for `Loop Duration`, and
+		 * it is also what makes two different inputs collide: a value input `Scale RGB` and the inline
+		 * edit condition `ScaleRGB` that gates it are one identifier to the DSL. Picking the first is
+		 * a coin flip, and losing it means writing a Vector3 into a checkbox. The caller resolves the
+		 * ambiguity with what it knows and this does not: the value being assigned.
+		 */
+		void FindInputsByIdentifier(const FString& Identifier, TArray<const FInputSchema*>& OutMatches) const;
+	};
+
+	/** One level of a live dynamic input chain: what the stack really exposes, not what the asset declares. */
+	struct FDynamicInputChild
+	{
+		FName Name;
+		FNiagaraTypeDefinition Type;
+		bool bVisible = true;
+		bool bEditable = true;
+
+		/**
+		 * A compile-time switch on the dynamic input script.
+		 *
+		 * Only the live chain reports this -- the asset-level schema does not carry it at all, which
+		 * is why plan-v2 left `dynamic input static switch` as a coverage gap on 7 assets.
+		 */
+		bool bStaticSwitch = false;
 	};
 
 	/** Live per-input state on a module that has already been added to a stack. */
@@ -225,6 +271,30 @@ namespace UE::DreamFX::Editor
 		FString Description;
 	};
 
+	/**
+	 * A module or dynamic input asset's exposed version (R7).
+	 *
+	 * The GUID is what the provenance stamp compares, because major/minor are not unique: the same
+	 * version number can be authored on two branches and mean different things.
+	 */
+	struct FScriptVersion
+	{
+		int32 Major = 0;
+		int32 Minor = 0;
+		FGuid Guid;
+		/** False for an asset that never opted into versioning; its single version is implicit. */
+		bool bVersioningEnabled = false;
+
+		bool IsValid() const { return Guid.IsValid(); }
+
+		/** "1.2:0A1B..." -- the form the stamp stores. */
+		FString ToStampString() const;
+		static bool FromStampString(const FString& Text, FScriptVersion& OutVersion);
+
+		/** "1.2" -- the form an author writes after `@`. */
+		FString ToLabel() const { return FString::Printf(TEXT("%d.%d"), Major, Minor); }
+	};
+
 	class FNiagaraAdapter
 	{
 	public:
@@ -241,6 +311,73 @@ namespace UE::DreamFX::Editor
 			bool& bOutCreated, TArray<FString>& OutErrors);
 
 		static bool SaveSystem(UNiagaraSystem* System, TArray<FString>& OutErrors);
+
+		/**
+		 * Shares one edit context across a burst of reads of the same system.
+		 *
+		 * Every call into the external edit API constructs an `FNiagaraExternalEditContext`, and that
+		 * constructor builds a whole `FNiagaraSystemViewModel` -- the entire stack, as UObjects. It is
+		 * what a read actually costs: decompiling one third-party system spent minutes building and
+		 * discarding view models, and grew the process by about 120 MB per second doing it.
+		 *
+		 * Inside this scope the reads listed under "topology reads" and "value reads" share a single
+		 * context instead.
+		 *
+		 * **Only wrap code that does not mutate this system.** That is the entire soundness argument:
+		 * a shared view model is safe exactly as long as nothing changes underneath it. Mutating calls
+		 * always build their own context, so wrapping a mutation would not fail loudly -- it would
+		 * leave the shared view model describing a system that no longer exists that way. Reads of a
+		 * *different* system (the schema probe, for one) are unaffected; the sharing is per system.
+		 */
+		class FReadScope
+		{
+		public:
+			explicit FReadScope(UNiagaraSystem* InSystem);
+			~FReadScope();
+
+			FReadScope(const FReadScope&) = delete;
+			FReadScope& operator=(const FReadScope&) = delete;
+
+		private:
+			UNiagaraSystem* System = nullptr;
+			bool bOwns = false;
+		};
+
+		/**
+		 * Collects garbage when the process has grown past a threshold, and otherwise does nothing.
+		 *
+		 * Every call through the external edit API builds a stack view model out of UObjects, and in a
+		 * commandlet nothing collects them. The decompiler hit this first -- 120 MB/s, 38 GB on one
+		 * asset -- and R1b brought the same shape to the generate path: rebinding a module's script
+		 * version marks its graph for resynchronisation, so every following call rebuilds more of the
+		 * view model than it otherwise would. Measured on the four content packs before this call
+		 * existed: 5 GB per minute, still climbing at 30 GB.
+		 *
+		 * A memory threshold rather than a call counter is what keeps it free on the small systems
+		 * that never approach it: those finish before the first check ever trips.
+		 */
+		static void CollectIfHeavy();
+
+		/**
+		 * Regenerates the sample tables of every curve data interface the system owns.
+		 *
+		 * A curve is written the way every data interface is written -- a JSON blob through
+		 * SetStackInputData -- which sets the curve's keys and nothing else. But a curve DI is
+		 * evaluated from `ShaderLUT`, a table baked from those keys, and nothing in that write path
+		 * bakes it: the editor normally regenerates it from PostEditChangeProperty, which a
+		 * programmatic write never raises.
+		 *
+		 * The symptom is a log line rather than an error -- `CopyToInternal` regenerates the copy's
+		 * table, compares it against the source's, and says "Post CopyToInternal LUT generation is out
+		 * of sync. Please investigate." -- and it appeared only on DreamFX-built mirrors, never on the
+		 * hand-authored assets they were read from. Exactly the shape of bug an L1/L2 gate cannot see:
+		 * the asset builds, compiles and diffs clean, and the curve reads from a stale table.
+		 *
+		 * Called once after a system's writes are finished rather than per input, because the tables
+		 * only have to be right before anything reads them, and one sweep is cheaper than finding the
+		 * object behind every curve-valued input (which the external edit API has no read path for).
+		 */
+		static void RefreshCurveLookupTables(UNiagaraSystem* System);
 
 		// --- topology reads ------------------------------------------------------------------
 
@@ -269,6 +406,17 @@ namespace UE::DreamFX::Editor
 		 * a default stack would mean the text no longer describes the asset.
 		 */
 		static bool AddEmitter(UNiagaraSystem* System, FName EmitterName, TArray<FString>& OutErrors);
+
+		/**
+		 * Adds a copy of an existing emitter asset.
+		 *
+		 * The same call AddEmitter makes, with the caller's asset as the template instead of a blank
+		 * one. plan-v3 E2 uses it to give the decompiler a system to read a standalone
+		 * `UNiagaraEmitter` through -- there is no read path that takes a bare emitter, and the copy
+		 * lands in a transient system that is thrown away immediately after.
+		 */
+		static bool AddEmitterFromTemplate(UNiagaraSystem* System, UNiagaraEmitter* Template,
+			FName EmitterName, TArray<FString>& OutErrors);
 		static bool RemoveEmitter(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors);
 
 		/**
@@ -355,14 +503,15 @@ namespace UE::DreamFX::Editor
 			TArray<TTuple<FName, FInputValue>>& OutValues, TArray<FString>& OutErrors);
 
 		/**
-		 * One level of a dynamic-input chain: each direct input's name and whether it can be written.
+		 * One level of a dynamic-input chain: each direct input's name, type, editability and whether
+		 * it is a static switch.
 		 *
 		 * Editability matters to the decompiler as much as to the generator. An input whose
 		 * EditCondition is false is refused by SetStackInputData, so exporting it produces a file that
 		 * does not rebuild.
 		 */
 		static bool GetDynamicInputChildren(const FStackAddress& InputAddress,
-			TArray<TPair<FName, bool>>& OutChildren, TArray<FString>& OutErrors);
+			TArray<FDynamicInputChild>& OutChildren, TArray<FString>& OutErrors);
 
 		// --- schema --------------------------------------------------------------------------
 
@@ -383,7 +532,16 @@ namespace UE::DreamFX::Editor
 		 * ActiveCompilations), so it cannot distinguish success from "still running". The blocking
 		 * wait plus the reported status is the only sound gate.
 		 */
-		static bool CompileAndWait(UNiagaraSystem* System, FCompileStateInfo& OutState, TArray<FString>& OutErrors);
+		/**
+		 * @param bIncludingGpuShaders  also block until the compute shaders are built.
+		 *
+		 * Only a system with a GPU emitter needs the second wait, and it is not free -- so it is asked
+		 * for rather than assumed. Without it a GPU emitter's compile state is read while its compute
+		 * shader is still building, and the build reports success on a system that has not finished
+		 * compiling the half most likely to fail.
+		 */
+		static bool CompileAndWait(UNiagaraSystem* System, bool bIncludingGpuShaders,
+			FCompileStateInfo& OutState, TArray<FString>& OutErrors);
 
 		/**
 		 * False when stack issues cannot be read in this process.
@@ -400,6 +558,94 @@ namespace UE::DreamFX::Editor
 		// --- naming helpers ------------------------------------------------------------------
 
 		/**
+		 * R7. The version a module or dynamic input asset currently exposes.
+		 *
+		 * Read from UNiagaraScript, not from the external edit API: that API has no notion of versions
+		 * at all -- AddModule takes a bare asset pointer, no topology struct reports which version a
+		 * stack entry uses, and nothing in it selects one. So a version can be recorded and compared,
+		 * which is what detects the drift R7 is about, but not chosen. The plan-v2 W3 probe conclusion
+		 * is written up in Plan/plan-v2.md.
+		 *
+		 * UNiagaraScript::GetExposedVersion and IsVersioningEnabled are NIAGARA_API on the runtime type,
+		 * so this stays inside the portability boundary.
+		 */
+		static FScriptVersion GetScriptVersion(const UNiagaraScript* Asset);
+
+		// --- script version selection (plan-v5 R1b) ------------------------------------------
+		//
+		// The one place DreamFX steps outside the external edit API, and it is not optional.
+		//
+		// `UNiagaraExternalEditUtilities::AddModule` pins every module it adds to the asset's newest
+		// version: `Args.VersionGuid = ModuleAsset->GetLatestScriptData()->Version.VersionGuid;
+		// //TODO: allow old versions?`. Real content does not sit on the newest version -- a module
+		// revision renames inputs (`StartFrame` became `StartFrameOffset`) and changes their types
+		// (`Write Parameter Index 0` went from a bool to a six-entry enum), and content authored
+		// before the revision keeps the old signature forever. Measured on the four content packs:
+		// 895 of 1229 rebuild failures were one module, at one version, on each side.
+		//
+		// So a rebuild that can only ever add the newest version cannot reproduce the asset it was
+		// exported from -- not approximately, but structurally, and silently, because the newest
+		// version accepts a *different* set of inputs rather than failing.
+		//
+		// The three calls below read and set the version through UNiagaraNodeFunctionCall, whose
+		// SelectedScriptVersion is a public UPROPERTY and whose ChangeScriptVersion carries
+		// NIAGARAEDITOR_API -- both in NiagaraEditor's Public folder, which this module already
+		// depends on. No engine source is modified, which is what principle 4 actually requires; the
+		// audited-surface rule in this file's header gets these three entries added to it, with the
+		// justification above standing in for the upstream comparison.
+
+		/** Every version a script asset offers, in the order the asset lists them. */
+		static TArray<FScriptVersion> GetAvailableScriptVersions(const UNiagaraScript* Asset);
+
+		/**
+		 * The version a module already in a stack is bound to.
+		 *
+		 * Not the asset's exposed version: that is what a *new* module would get. This is what the
+		 * one being read is actually compiled against, and therefore what its input list means.
+		 */
+		static bool GetModuleScriptVersion(const FStackAddress& ModuleAddress, FScriptVersion& OutVersion,
+			TArray<FString>& OutErrors);
+
+		/**
+		 * Rebinds a module already in a stack to a different version of its own script.
+		 *
+		 * Runs the engine's own version-change path, with the Python upgrade scripts skipped: those
+		 * exist to migrate a user's authored values forward, and DreamFX is about to write every
+		 * input from source anyway. Override pins that the target version does not have are dropped
+		 * by the engine, which is what makes the following topology read describe the right module.
+		 */
+		static bool SetModuleScriptVersion(const FStackAddress& ModuleAddress, const FGuid& VersionGuid,
+			TArray<FString>& OutErrors);
+
+		/**
+		 * Writes a dynamic input into an input and binds the node it creates to a script version.
+		 *
+		 * Dynamic inputs are versioned exactly as modules are, and the revisions are just as
+		 * disruptive: `MakeFloatFromLinearColor`'s `Channel` moved from one enum asset to a different
+		 * one, so an authored `Channel = R` and a freshly created call's `Channel = Red` are not the
+		 * same input taking different spellings -- they are different types.
+		 *
+		 * The node is identified by what appeared: the graph's function-call nodes are counted before
+		 * the write and after, and the one that is new is the one this call made. That is exact even
+		 * when the same dynamic input already appears elsewhere in the graph, which name matching and
+		 * script matching are not.
+		 */
+		static bool SetDynamicInputAtVersion(const FStackAddress& InputAddress, UNiagaraScript* DynamicInput,
+			const FGuid& VersionGuid, TArray<FString>& OutErrors);
+
+		/**
+		 * The version the calls to a given dynamic input in this emitter's graph are bound to.
+		 *
+		 * Fails when they disagree rather than picking one. There is no read path from a chain address
+		 * to its node -- the external edit API reports a chain as values, not as graph nodes, and the
+		 * override-pin lookup that would resolve it is not exported -- so the answer is "what every
+		 * call to this script in this graph is using", and it is only an answer while that is one
+		 * thing. In authored content it is: the calls were all made at the same time.
+		 */
+		static bool GetDynamicInputScriptVersion(const FStackAddress& EmitterAddress,
+			const UNiagaraScript* DynamicInput, FScriptVersion& OutVersion, TArray<FString>& OutErrors);
+
+		/**
 		 * The FName spelling of an ENiagaraScriptUsage value, e.g. "ParticleUpdateScript".
 		 * Derived from reflection rather than hardcoded so it stays in lockstep with the API's own
 		 * ScriptUsageFromName lookup.
@@ -411,5 +657,23 @@ namespace UE::DreamFX::Editor
 		static UClass* FindRendererClass(const FString& TypeName);
 		/** Inverse of FindRendererClass, for the decompiler. */
 		static FString RendererTypeNameForClass(const UClass* Class);
+
+		/**
+		 * For an array-of-struct property such as `Meshes` or `OverrideMaterials`, the one field inside
+		 * each element that holds an asset reference, plus that element type's default JSON.
+		 *
+		 * plan-v3 E4-3. Found by reflection rather than by a per-property table: `Meshes` elements are
+		 * FNiagaraMeshRendererMeshProperties and `OverrideMaterials` elements are
+		 * FNiagaraMeshMaterialOverride, and each happens to carry exactly one object property -- but a
+		 * hard-coded pair of names would be wrong the first time a renderer adds a third such array.
+		 * Fails when the element carries zero or several object fields, because then "the reference"
+		 * is not a well-defined thing and guessing one would write the wrong field.
+		 *
+		 * @param JsonPropertyName  the JSON spelling, i.e. the UPROPERTY name with a lowercase initial
+		 * @param OutReferenceField the JSON spelling of the reference field, e.g. "mesh"
+		 * @param OutElementDefaults a default-constructed element, serialised, for gap detection
+		 */
+		static bool GetArrayElementReferenceField(const UClass* RendererClass, const FString& JsonPropertyName,
+			FString& OutReferenceField, FString& OutElementDefaultsJson, TArray<FString>& OutErrors);
 	};
 }

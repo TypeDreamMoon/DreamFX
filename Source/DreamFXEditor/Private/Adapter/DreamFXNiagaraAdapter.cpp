@@ -4,18 +4,28 @@
 
 #include "NiagaraCommon.h"
 #include "NiagaraDataInterface.h"
+#include "NiagaraDataInterfaceCurveBase.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraEmitterFactoryNew.h"
 #include "NiagaraExternalSystemEditorUtilities.h"
+#include "NiagaraGraph.h"
+#include "NiagaraNodeFunctionCall.h"
 #include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
+#include "NiagaraScriptSource.h"
 #include "NiagaraSystem.h"
 #include "NiagaraTypes.h"
 #include "NiagaraVariant.h"
+#include "UpgradeNiagaraScriptResults.h"
 
+#include "Dom/JsonObject.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/PlatformMemory.h"
+#include "JsonObjectConverter.h"
 #include "Misc/PackageName.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectIterator.h"
@@ -34,6 +44,45 @@ namespace UE::DreamFX::Editor
 			}
 			return !bHadErrors;
 		}
+
+		/**
+		 * The contexts open read scopes are sharing, by system.
+		 *
+		 * Empty except inside FNiagaraAdapter::FReadScope, so nothing changes for any caller that has
+		 * not asked for the sharing.
+		 */
+		TMap<UNiagaraSystem*, TSharedPtr<FNiagaraExternalEditContext>> GSharedReadContexts;
+
+		/** The shared context if this system has one open, otherwise a private one for this call. */
+		class FEditContext
+		{
+		public:
+			explicit FEditContext(UNiagaraSystem* System)
+			{
+				if (TSharedPtr<FNiagaraExternalEditContext>* Shared = GSharedReadContexts.Find(System))
+				{
+					if (Shared->IsValid())
+					{
+						Context = Shared->Get();
+
+						// Errors accumulate on a context and Drain does not clear them. A shared one
+						// has to start each call clean, or the first failure makes every later call
+						// report it too -- and return false.
+						Context->Errors.Reset();
+						return;
+					}
+				}
+
+				Owned = MakeUnique<FNiagaraExternalEditContext>(System);
+				Context = Owned.Get();
+			}
+
+			FNiagaraExternalEditContext& Get() { return *Context; }
+
+		private:
+			TUniquePtr<FNiagaraExternalEditContext> Owned;
+			FNiagaraExternalEditContext* Context = nullptr;
+		};
 
 		FNiagaraExt_StackItemReference ToReference(const FStackAddress& Address)
 		{
@@ -336,7 +385,51 @@ namespace UE::DreamFX::Editor
 		FString Result = InputName.ToString();
 		Result.ReplaceInline(TEXT(" "), TEXT(""), ESearchCase::CaseSensitive);
 		Result.RemoveFromStart(TEXT("Module."), ESearchCase::IgnoreCase);
-		return Result;
+		return ToNameToken(Result);
+	}
+
+	FString ToNameToken(const FString& Name)
+	{
+		if (Name.IsEmpty())
+		{
+			return Name;
+		}
+
+		// The lexer's own rule, segment by segment: a dotted name is bare only when every segment is.
+		auto IsBareSegment = [](const FString& Segment)
+		{
+			if (Segment.IsEmpty() || !(FChar::IsAlpha(Segment[0]) || Segment[0] == TEXT('_')))
+			{
+				return false;
+			}
+			for (const TCHAR Character : Segment)
+			{
+				if (!FChar::IsAlnum(Character) && Character != TEXT('_'))
+				{
+					return false;
+				}
+			}
+			return true;
+		};
+
+		TArray<FString> Segments;
+		Name.ParseIntoArray(Segments, TEXT("."), /*InCullEmpty=*/false);
+
+		bool bBare = Segments.Num() > 0;
+		for (const FString& Segment : Segments)
+		{
+			bBare = bBare && IsBareSegment(Segment);
+		}
+
+		if (bBare)
+		{
+			return Name;
+		}
+
+		// A name containing a back-quote has no representation at all; the escape would need an
+		// escape. Nothing in Niagara produces one, and inventing a rule for it now would be a rule
+		// nobody could check.
+		return FString::Printf(TEXT("`%s`"), *Name);
 	}
 
 	const FInputSchema* FModuleSchema::FindInput(FName Name) const
@@ -357,6 +450,29 @@ namespace UE::DreamFX::Editor
 		{
 			return NormalizeInputIdentifier(Input.Name.ToString()) == Normalized;
 		});
+	}
+
+	void FModuleSchema::FindInputsByIdentifier(const FString& Identifier, TArray<const FInputSchema*>& OutMatches) const
+	{
+		// Exact first, then the rest of the normalised matches, so a caller that takes the first entry
+		// gets what FindInputByIdentifier would have given it.
+		for (const FInputSchema& Input : Inputs)
+		{
+			if (Input.Name.ToString() == Identifier)
+			{
+				OutMatches.Add(&Input);
+			}
+		}
+
+		const FString Normalized = NormalizeInputIdentifier(Identifier);
+		for (const FInputSchema& Input : Inputs)
+		{
+			if (Input.Name.ToString() != Identifier
+				&& NormalizeInputIdentifier(Input.Name.ToString()) == Normalized)
+			{
+				OutMatches.Add(&Input);
+			}
+		}
 	}
 
 	const FInputInfo* FModuleInfo::FindInput(FName Name) const
@@ -419,6 +535,26 @@ namespace UE::DreamFX::Editor
 		return System;
 	}
 
+	FNiagaraAdapter::FReadScope::FReadScope(UNiagaraSystem* InSystem)
+		: System(InSystem)
+	{
+		// Nested scopes on one system are harmless and the inner one simply defers to the outer: only
+		// the scope that created the context removes it.
+		if (System != nullptr && !GSharedReadContexts.Contains(System))
+		{
+			GSharedReadContexts.Add(System, MakeShared<FNiagaraExternalEditContext>(System));
+			bOwns = true;
+		}
+	}
+
+	FNiagaraAdapter::FReadScope::~FReadScope()
+	{
+		if (bOwns)
+		{
+			GSharedReadContexts.Remove(System);
+		}
+	}
+
 	bool FNiagaraAdapter::SaveSystem(UNiagaraSystem* System, TArray<FString>& OutErrors)
 	{
 		if (System == nullptr)
@@ -456,7 +592,8 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(System);
+		FEditContext ContextHolder(System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_SystemSummary Summary;
 		UNiagaraExternalEditUtilities::GetSystemSummary(System, Summary, Context);
 
@@ -469,7 +606,8 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetEmitterInfo(const FStackAddress& EmitterAddress, FEmitterInfo& OutInfo, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(EmitterAddress.System);
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_EmitterTopology Topology;
 		UNiagaraExternalEditUtilities::GetEmitterTopology(ToReference(EmitterAddress), Topology, Context);
 
@@ -522,7 +660,8 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetScriptStackInfo(const FStackAddress& ScriptAddress, FScriptStackInfo& OutInfo, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(ScriptAddress.System);
+		FEditContext ContextHolder(ScriptAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ScriptStackTopology Topology;
 		UNiagaraExternalEditUtilities::GetScriptStackTopology(ToReference(ScriptAddress), Topology, Context);
 
@@ -553,7 +692,8 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetModuleInfo(const FStackAddress& ModuleAddress, FModuleInfo& OutInfo, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(ModuleAddress.System);
+		FEditContext ContextHolder(ModuleAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ModuleTopology Topology;
 		UNiagaraExternalEditUtilities::GetModuleTopology(ToReference(ModuleAddress), Topology, Context);
 
@@ -584,7 +724,8 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(System);
+		FEditContext ContextHolder(System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_UserVariables Variables;
 		UNiagaraExternalEditUtilities::GetUserVariables(System, Variables, Context);
 
@@ -664,6 +805,23 @@ namespace UE::DreamFX::Editor
 			GetTransientPackage(), MakeUniqueObjectName(GetTransientPackage(), UNiagaraEmitter::StaticClass(),
 				TEXT("DreamFXTemplateEmitter")), RF_Transactional);
 		UNiagaraEmitterFactoryNew::InitializeEmitter(Template, /*bAddDefaultModulesAndRenderers=*/false);
+
+		return AddEmitterFromTemplate(System, Template, EmitterName, OutErrors);
+	}
+
+	bool FNiagaraAdapter::AddEmitterFromTemplate(UNiagaraSystem* System, UNiagaraEmitter* Template,
+		FName EmitterName, TArray<FString>& OutErrors)
+	{
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot add an emitter to a null system."));
+			return false;
+		}
+		if (Template == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot add an emitter from a null template."));
+			return false;
+		}
 
 		FNiagaraExternalEditContext Context(System);
 		FNiagaraExt_EmitterTopology Topology;
@@ -1136,7 +1294,8 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetInput(const FStackAddress& InputAddress, FInputValue& OutValue, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(InputAddress.System);
+		FEditContext ContextHolder(InputAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_StackInputValue StackValue;
 		UNiagaraExternalEditUtilities::GetStackInputData(ToReference(InputAddress), StackValue, Context);
 		FromStackInputValue(StackValue, OutValue);
@@ -1145,7 +1304,8 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetRendererProperties(const FStackAddress& RendererAddress, FString& OutJson, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(RendererAddress.System);
+		FEditContext ContextHolder(RendererAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_RendererData Data;
 		UNiagaraExternalEditUtilities::GetRendererData(ToReference(RendererAddress), Data, Context);
 		OutJson = Data.PropertyValues;
@@ -1154,7 +1314,8 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetEmitterProperties(const FStackAddress& EmitterAddress, FString& OutJson, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(EmitterAddress.System);
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_EmitterData Data;
 		UNiagaraExternalEditUtilities::GetEmitterData(ToReference(EmitterAddress), Data, Context);
 		OutJson = Data.PropertyValues;
@@ -1169,7 +1330,8 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(System);
+		FEditContext ContextHolder(System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_SystemData Data;
 		UNiagaraExternalEditUtilities::GetSystemData(System, Data, Context);
 		OutJson = Data.PropertyValues;
@@ -1179,7 +1341,8 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::GetModuleInputValues(const FStackAddress& ModuleAddress,
 		TArray<TTuple<FName, FInputValue>>& OutValues, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(ModuleAddress.System);
+		FEditContext ContextHolder(ModuleAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ModuleInputValues Values;
 		UNiagaraExternalEditUtilities::GetModuleInputValues(ToReference(ModuleAddress), Values, Context);
 
@@ -1194,9 +1357,10 @@ namespace UE::DreamFX::Editor
 	}
 
 	bool FNiagaraAdapter::GetDynamicInputChildren(const FStackAddress& InputAddress,
-		TArray<TPair<FName, bool>>& OutChildren, TArray<FString>& OutErrors)
+		TArray<FDynamicInputChild>& OutChildren, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(InputAddress.System);
+		FEditContext ContextHolder(InputAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_DynamicInputChainRef ChainRef;
 		UNiagaraExternalEditUtilities::GetDynamicInputChain(ToReference(InputAddress), ChainRef, Context);
 
@@ -1209,7 +1373,14 @@ namespace UE::DreamFX::Editor
 		for (const FNiagaraExt_DynamicInputChainRef& ChildRef : Chain.Inputs)
 		{
 			const FNiagaraExt_DynamicInputChain& Child = ChildRef.Get();
-			OutChildren.Emplace(Child.Name, Child.bIsVisible && Child.bIsEditable);
+
+			FDynamicInputChild Out;
+			Out.Name = Child.Name;
+			Out.Type = Child.Type;
+			Out.bVisible = Child.bIsVisible;
+			Out.bEditable = Child.bIsEditable;
+			Out.bStaticSwitch = Child.bIsStaticSwitch;
+			OutChildren.Add(MoveTemp(Out));
 		}
 		return Drain(Context, OutErrors);
 	}
@@ -1238,6 +1409,16 @@ namespace UE::DreamFX::Editor
 				Schema.bIsStaticSwitch = false;
 				Out.Inputs.Add(MoveTemp(Schema));
 			}
+
+			// The output is what says where a dynamic input may be plugged in, and therefore what type
+			// of host the E4-1 probe has to build in order to see the live chain.
+			for (const FNiagaraExt_Variable& Output : In.Outputs)
+			{
+				FInputSchema Schema;
+				Schema.Name = Output.Name;
+				Schema.Type = Output.Type;
+				Out.Outputs.Add(MoveTemp(Schema));
+			}
 		}
 	}
 
@@ -1258,7 +1439,8 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::GetInputSchema(const FStackAddress& InputAddress, FInputSchema& OutSchema, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(InputAddress.System);
+		FEditContext ContextHolder(InputAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_StackInputSchema Schema;
 		UNiagaraExternalEditUtilities::GetStackInputSchema(ToReference(InputAddress), Schema, Context);
 
@@ -1295,7 +1477,8 @@ namespace UE::DreamFX::Editor
 	// Compile + diagnostics
 	// -------------------------------------------------------------------------------------------
 
-	bool FNiagaraAdapter::CompileAndWait(UNiagaraSystem* System, FCompileStateInfo& OutState, TArray<FString>& OutErrors)
+	bool FNiagaraAdapter::CompileAndWait(UNiagaraSystem* System, bool bIncludingGpuShaders,
+		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
 	{
 		if (System == nullptr)
 		{
@@ -1304,7 +1487,7 @@ namespace UE::DreamFX::Editor
 		}
 
 		System->RequestCompile(/*bForce=*/false);
-		System->WaitForCompilationComplete(/*bIncludingGPUShaders=*/false, /*bShowProgress=*/false);
+		System->WaitForCompilationComplete(bIncludingGpuShaders, /*bShowProgress=*/false);
 
 		FNiagaraExternalEditContext Context(System);
 		FNiagaraExt_SystemCompileState State;
@@ -1414,6 +1597,421 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	FString FScriptVersion::ToStampString() const
+	{
+		return FString::Printf(TEXT("%d.%d:%s"), Major, Minor, *Guid.ToString(EGuidFormats::Digits));
+	}
+
+	bool FScriptVersion::FromStampString(const FString& Text, FScriptVersion& OutVersion)
+	{
+		FString Numbers;
+		FString GuidText;
+		if (!Text.Split(TEXT(":"), &Numbers, &GuidText))
+		{
+			return false;
+		}
+
+		FString MajorText;
+		FString MinorText;
+		if (!Numbers.Split(TEXT("."), &MajorText, &MinorText))
+		{
+			return false;
+		}
+
+		OutVersion.Major = FCString::Atoi(*MajorText);
+		OutVersion.Minor = FCString::Atoi(*MinorText);
+		return FGuid::ParseExact(GuidText, EGuidFormats::Digits, OutVersion.Guid);
+	}
+
+	FScriptVersion FNiagaraAdapter::GetScriptVersion(const UNiagaraScript* Asset)
+	{
+		FScriptVersion Version;
+		if (Asset == nullptr)
+		{
+			return Version;
+		}
+
+		const FNiagaraAssetVersion Exposed = Asset->GetExposedVersion();
+		Version.Major = Exposed.MajorVersion;
+		Version.Minor = Exposed.MinorVersion;
+		Version.Guid = Exposed.VersionGuid;
+		Version.bVersioningEnabled = Asset->IsVersioningEnabled();
+		return Version;
+	}
+
+	namespace
+	{
+		/** The one graph an emitter's (or the system's) stacks are all built out of. */
+		UNiagaraGraph* GraphForAddress(const FStackAddress& Address)
+		{
+			if (Address.System == nullptr)
+			{
+				return nullptr;
+			}
+
+			UNiagaraScriptSourceBase* SourceBase = nullptr;
+			if (Address.EmitterName.IsNone())
+			{
+				// Both system-scope stacks live in the system script's source.
+				if (UNiagaraScript* SystemScript = Address.System->GetSystemSpawnScript())
+				{
+					SourceBase = SystemScript->GetLatestSource();
+				}
+			}
+			else
+			{
+				for (const FNiagaraEmitterHandle& Handle : Address.System->GetEmitterHandles())
+				{
+					if (Handle.GetName() != Address.EmitterName)
+					{
+						continue;
+					}
+					if (const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData())
+					{
+						SourceBase = Data->GraphSource;
+					}
+					break;
+				}
+			}
+
+			UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(SourceBase);
+			return Source != nullptr ? Source->NodeGraph : nullptr;
+		}
+
+		/**
+		 * The function-call node a module reference addresses.
+		 *
+		 * Matched on GetFunctionName(), which is the same comparison the external edit API makes when
+		 * it resolves a FNiagaraExt_StackItemReference -- so a name that addressed a module there
+		 * addresses the same node here. Names are unique within a graph (Niagara appends 001, 002 to
+		 * keep them so), which is why a whole-graph scan needs no stack ordering.
+		 */
+		UNiagaraNodeFunctionCall* FindModuleNode(const FStackAddress& ModuleAddress)
+		{
+			UNiagaraGraph* Graph = GraphForAddress(ModuleAddress);
+			if (Graph == nullptr || ModuleAddress.ModuleName.IsNone())
+			{
+				return nullptr;
+			}
+
+			const FString Wanted = ModuleAddress.ModuleName.ToString();
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				UNiagaraNodeFunctionCall* Call = Cast<UNiagaraNodeFunctionCall>(Node);
+				if (Call != nullptr && Call->GetFunctionName() == Wanted)
+				{
+					return Call;
+				}
+			}
+			return nullptr;
+		}
+
+		FScriptVersion ToScriptVersion(const FNiagaraAssetVersion& Version, bool bVersioningEnabled)
+		{
+			FScriptVersion Out;
+			Out.Major = Version.MajorVersion;
+			Out.Minor = Version.MinorVersion;
+			Out.Guid = Version.VersionGuid;
+			Out.bVersioningEnabled = bVersioningEnabled;
+			return Out;
+		}
+	}
+
+	void FNiagaraAdapter::CollectIfHeavy()
+	{
+		constexpr uint64 CollectAboveBytes = 6ull * 1024 * 1024 * 1024;
+		constexpr uint64 GrowthSinceLastCollectBytes = 2ull * 1024 * 1024 * 1024;
+
+		// What the last collection left behind. The threshold alone is not a stopping condition: a
+		// build of the four content packs sits at roughly 8 GB of live, reachable assets, so it is
+		// permanently over any fixed threshold and collected on every single call -- a full purge per
+		// module, which turned a rebuild into hours of `Compacting FUObjectHashTables`. Collecting
+		// again only after the process has grown *since the last collection* is what makes this a
+		// ceiling rather than a treadmill.
+		static uint64 UsedAfterLastCollect = 0;
+
+		const uint64 Used = FPlatformMemory::GetStats().UsedPhysical;
+		if (Used <= CollectAboveBytes)
+		{
+			return;
+		}
+		if (UsedAfterLastCollect != 0 && Used < UsedAfterLastCollect + GrowthSinceLastCollectBytes)
+		{
+			return;
+		}
+
+		// What goes is exactly the view-model debris: the assets being read or written are reachable
+		// from their packages, and the schema probe holds its own root.
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, /*bPerformFullPurge=*/true);
+		UsedAfterLastCollect = FPlatformMemory::GetStats().UsedPhysical;
+	}
+
+	void FNiagaraAdapter::RefreshCurveLookupTables(UNiagaraSystem* System)
+	{
+#if WITH_EDITORONLY_DATA
+		if (System == nullptr)
+		{
+			return;
+		}
+
+		int32 Refreshed = 0;
+		ForEachObjectWithOuter(System->GetOutermost(),
+			[&Refreshed](UObject* Object)
+			{
+				if (UNiagaraDataInterfaceCurveBase* Curve = Cast<UNiagaraDataInterfaceCurveBase>(Object))
+				{
+					Curve->UpdateLUT();
+					++Refreshed;
+				}
+			},
+			EGetObjectsFlags::IncludeNestedObjects);
+
+		if (Refreshed > 0)
+		{
+			UE_LOG(LogDreamFX, Verbose, TEXT("  rebaked %d curve lookup table(s) on '%s'"),
+				Refreshed, *System->GetName());
+		}
+#endif
+	}
+
+	TArray<FScriptVersion> FNiagaraAdapter::GetAvailableScriptVersions(const UNiagaraScript* Asset)
+	{
+		TArray<FScriptVersion> Versions;
+		if (Asset == nullptr)
+		{
+			return Versions;
+		}
+
+		const bool bVersioningEnabled = Asset->IsVersioningEnabled();
+		for (const FNiagaraAssetVersion& Version : Asset->GetAllAvailableVersions())
+		{
+			Versions.Add(ToScriptVersion(Version, bVersioningEnabled));
+		}
+		return Versions;
+	}
+
+	bool FNiagaraAdapter::GetModuleScriptVersion(const FStackAddress& ModuleAddress, FScriptVersion& OutVersion,
+		TArray<FString>& OutErrors)
+	{
+		UNiagaraNodeFunctionCall* Node = FindModuleNode(ModuleAddress);
+		if (Node == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("No module node named '%s' was found in the graph."),
+				*ModuleAddress.ModuleName.ToString()));
+			return false;
+		}
+
+		UNiagaraScript* Script = Node->FunctionScript;
+		if (Script == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Module '%s' has no script asset."),
+				*ModuleAddress.ModuleName.ToString()));
+			return false;
+		}
+
+		// An asset that never opted into versioning has one implicit version and a node that carries
+		// no guid for it. Reporting the exposed version keeps every caller on one code path.
+		if (!Script->IsVersioningEnabled() || !Node->SelectedScriptVersion.IsValid())
+		{
+			OutVersion = GetScriptVersion(Script);
+			return true;
+		}
+
+		const FVersionedNiagaraScriptData* Data = Script->GetScriptData(Node->SelectedScriptVersion);
+		if (Data == nullptr)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Module '%s' is bound to a script version that '%s' no longer offers."),
+				*ModuleAddress.ModuleName.ToString(), *Script->GetName()));
+			return false;
+		}
+
+		OutVersion = ToScriptVersion(Data->Version, /*bVersioningEnabled=*/true);
+		return true;
+	}
+
+	bool FNiagaraAdapter::SetModuleScriptVersion(const FStackAddress& ModuleAddress, const FGuid& VersionGuid,
+		TArray<FString>& OutErrors)
+	{
+		UNiagaraNodeFunctionCall* Node = FindModuleNode(ModuleAddress);
+		if (Node == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("No module node named '%s' was found in the graph."),
+				*ModuleAddress.ModuleName.ToString()));
+			return false;
+		}
+
+		if (Node->FunctionScript == nullptr || Node->FunctionScript->GetScriptData(VersionGuid) == nullptr)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Module '%s' cannot be moved to that script version: its asset does not offer one with that identity."),
+				*ModuleAddress.ModuleName.ToString()));
+			return false;
+		}
+
+		if (Node->SelectedScriptVersion == VersionGuid)
+		{
+			return true;
+		}
+
+		// The graph-side sequence, not the stack-side one: FNiagaraFunctionCallNodeDetails::
+		// SwitchToVersion is the same situation as this -- a version changed on the node rather than
+		// through a stack view model -- and it skips the Python upgrade scripts for the same reason
+		// DreamFX must ("we don't need to remap any inputs"): every input is written from source
+		// immediately afterwards, so remapping produces work that is then overwritten.
+		FNiagaraScriptVersionUpgradeContext UpgradeContext;
+		UpgradeContext.bSkipPythonScript = true;
+
+		Node->ChangeScriptVersion(VersionGuid, UpgradeContext, /*bShowNotesInStack=*/false);
+
+		// Load-bearing, and the reason the first attempt at this reported a module with no static
+		// switch selectors and two pins called `ScaleRGB`: ChangeScriptVersion records the choice and
+		// drops override pins, but the node's own pin set is still the one it derived from the version
+		// it had. Refreshing is what re-derives it, and until it runs every topology read describes a
+		// module that is half one version and half the other.
+		Node->RefreshFromExternalChanges();
+		return true;
+	}
+
+	bool FNiagaraAdapter::SetDynamicInputAtVersion(const FStackAddress& InputAddress, UNiagaraScript* DynamicInput,
+		const FGuid& VersionGuid, TArray<FString>& OutErrors)
+	{
+		if (DynamicInput == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot write a null dynamic input."));
+			return false;
+		}
+
+		UNiagaraGraph* Graph = GraphForAddress(InputAddress);
+		if (Graph == nullptr || !VersionGuid.IsValid())
+		{
+			// No graph to inspect, or nothing to pin: an ordinary write, which is what an unversioned
+			// dynamic input and a hand-written call both want.
+			return SetInput(InputAddress, FInputValue::MakeDynamicInput(DynamicInput), OutErrors);
+		}
+
+		TSet<const UEdGraphNode*> Before;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			Before.Add(Node);
+		}
+
+		if (!SetInput(InputAddress, FInputValue::MakeDynamicInput(DynamicInput), OutErrors))
+		{
+			return false;
+		}
+
+		UNiagaraNodeFunctionCall* Created = nullptr;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Before.Contains(Node))
+			{
+				continue;
+			}
+			UNiagaraNodeFunctionCall* Call = Cast<UNiagaraNodeFunctionCall>(Node);
+			if (Call != nullptr && Call->FunctionScript == DynamicInput)
+			{
+				Created = Call;
+				break;
+			}
+		}
+
+		if (Created == nullptr)
+		{
+			// The write succeeded but nothing new calls this script, which happens when the input
+			// already held this very dynamic input. Reported rather than silently ignored: the caller
+			// asked for a version and did not get one.
+			OutErrors.Add(FString::Printf(
+				TEXT("Wrote dynamic input '%s', but no new call node appeared, so its script version could not be set."),
+				*DynamicInput->GetName()));
+			return false;
+		}
+
+		if (Created->FunctionScript->GetScriptData(VersionGuid) == nullptr)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Dynamic input '%s' does not offer a script version with that identity."),
+				*DynamicInput->GetName()));
+			return false;
+		}
+
+		FNiagaraScriptVersionUpgradeContext UpgradeContext;
+		UpgradeContext.bSkipPythonScript = true;
+		Created->ChangeScriptVersion(VersionGuid, UpgradeContext, /*bShowNotesInStack=*/false);
+		Created->RefreshFromExternalChanges();
+		return true;
+	}
+
+	bool FNiagaraAdapter::GetDynamicInputScriptVersion(const FStackAddress& EmitterAddress,
+		const UNiagaraScript* DynamicInput, FScriptVersion& OutVersion, TArray<FString>& OutErrors)
+	{
+		if (DynamicInput == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot read the version of a null dynamic input."));
+			return false;
+		}
+
+		if (!DynamicInput->IsVersioningEnabled())
+		{
+			OutVersion = GetScriptVersion(DynamicInput);
+			return true;
+		}
+
+		UNiagaraGraph* Graph = GraphForAddress(EmitterAddress);
+		if (Graph == nullptr)
+		{
+			OutErrors.Add(TEXT("No graph to read dynamic input versions from."));
+			return false;
+		}
+
+		bool bFound = false;
+		FGuid Agreed;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			const UNiagaraNodeFunctionCall* Call = Cast<UNiagaraNodeFunctionCall>(Node);
+			if (Call == nullptr || Call->FunctionScript.Get() != DynamicInput)
+			{
+				continue;
+			}
+
+			const FGuid Selected = Call->SelectedScriptVersion.IsValid()
+				? Call->SelectedScriptVersion
+				: DynamicInput->GetExposedVersion().VersionGuid;
+
+			if (!bFound)
+			{
+				Agreed = Selected;
+				bFound = true;
+				continue;
+			}
+			if (Agreed != Selected)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("'%s' is called at more than one script version in this emitter, so no single version describes it."),
+					*DynamicInput->GetName()));
+				return false;
+			}
+		}
+
+		if (!bFound)
+		{
+			OutErrors.Add(FString::Printf(TEXT("No call to '%s' was found in this emitter's graph."),
+				*DynamicInput->GetName()));
+			return false;
+		}
+
+		const FVersionedNiagaraScriptData* Data = DynamicInput->GetScriptData(Agreed);
+		if (Data == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("'%s' is bound to a script version it no longer offers."),
+				*DynamicInput->GetName()));
+			return false;
+		}
+
+		OutVersion = ToScriptVersion(Data->Version, /*bVersioningEnabled=*/true);
+		return true;
+	}
+
 	FName FNiagaraAdapter::ScriptNameForStack(EStackKind Kind)
 	{
 		ENiagaraScriptUsage Usage;
@@ -1504,5 +2102,92 @@ namespace UE::DreamFX::Editor
 		Name.RemoveFromStart(TEXT("Niagara"), ESearchCase::CaseSensitive);
 		Name.RemoveFromEnd(TEXT("Properties"), ESearchCase::CaseSensitive);
 		return Name;
+	}
+
+	bool FNiagaraAdapter::GetArrayElementReferenceField(const UClass* RendererClass,
+		const FString& JsonPropertyName, FString& OutReferenceField, FString& OutElementDefaultsJson,
+		TArray<FString>& OutErrors)
+	{
+		if (RendererClass == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot inspect a property on a null renderer class."));
+			return false;
+		}
+
+		// The blob's keys are UE's JSON spelling of the UPROPERTY name -- first character lowercased,
+		// the rest untouched, which is why "LODMode" arrives as "lODMode". Comparing case-insensitively
+		// is exact enough here because two UPROPERTYs on one struct cannot differ only by case.
+		const FArrayProperty* ArrayProperty = nullptr;
+		for (TFieldIterator<FProperty> It(RendererClass); It; ++It)
+		{
+			if (It->GetName().Equals(JsonPropertyName, ESearchCase::IgnoreCase))
+			{
+				ArrayProperty = CastField<FArrayProperty>(*It);
+				break;
+			}
+		}
+
+		if (ArrayProperty == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("'%s' is not an array property on %s."),
+				*JsonPropertyName, *RendererClass->GetName()));
+			return false;
+		}
+
+		const FStructProperty* ElementProperty = CastField<FStructProperty>(ArrayProperty->Inner);
+		if (ElementProperty == nullptr || ElementProperty->Struct == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("'%s' is not an array of structs."), *JsonPropertyName));
+			return false;
+		}
+
+		UScriptStruct* ElementStruct = ElementProperty->Struct;
+
+		const FObjectPropertyBase* ReferenceProperty = nullptr;
+		int32 ReferenceCount = 0;
+		for (TFieldIterator<FProperty> It(ElementStruct); It; ++It)
+		{
+			if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(*It))
+			{
+				ReferenceProperty = ObjectProperty;
+				++ReferenceCount;
+			}
+		}
+
+		if (ReferenceCount != 1)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("'%s' elements (%s) carry %d asset reference field(s); exactly one is required to represent an element as a path."),
+				*JsonPropertyName, *ElementStruct->GetName(), ReferenceCount));
+			return false;
+		}
+
+		FString FieldName = ReferenceProperty->GetName();
+		FieldName[0] = FChar::ToLower(FieldName[0]);
+		OutReferenceField = FieldName;
+
+		// A default-constructed element, serialised the same way the property blob is, so the
+		// decompiler can tell "just a mesh" from "a mesh with a custom pivot" without a table of
+		// per-field defaults.
+		TArray<uint8> Storage;
+		Storage.SetNumZeroed(ElementStruct->GetStructureSize());
+		ElementStruct->InitializeStruct(Storage.GetData());
+
+		const TSharedRef<FJsonObject> DefaultsObject = MakeShared<FJsonObject>();
+		const bool bSerialized = FJsonObjectConverter::UStructToJsonObject(
+			ElementStruct, Storage.GetData(), DefaultsObject, /*CheckFlags=*/0, /*SkipFlags=*/0);
+
+		ElementStruct->DestroyStruct(Storage.GetData());
+
+		if (!bSerialized)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Could not serialise a default '%s' element."), *ElementStruct->GetName()));
+			return false;
+		}
+
+		const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&OutElementDefaultsJson);
+		FJsonSerializer::Serialize(DefaultsObject, Writer);
+		return true;
 	}
 }
