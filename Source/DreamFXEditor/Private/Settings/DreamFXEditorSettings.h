@@ -40,4 +40,19 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Decompiler",
 		meta = (DisplayName = "Decompiled Output Directory"))
 	FString DecompiledOutputDirectory = TEXT("DFX/Decompiled");
+
+	/**
+	 * How many files a *startup* batch may hold before the watcher stops building it automatically.
+	 *
+	 * The directory watcher reports everything that changed while the editor was shut down, all at
+	 * once, as if it had just been saved. After a re-export that is the whole source tree: 24 systems
+	 * rebuilt concurrently put 237 jobs in the Niagara compile queue and the editor did not survive
+	 * it. Past this many, the watcher offers the rebuild instead of starting it.
+	 *
+	 * Only the startup backlog is gated. Saving a file while the editor is open still rebuilds
+	 * immediately however many files the save touches, which is what makes the iteration loop work.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Workspace", meta = (ClampMin = "1",
+		DisplayName = "Startup Rebuild Threshold"))
+	int32 StartupRebuildThreshold = 8;
 };

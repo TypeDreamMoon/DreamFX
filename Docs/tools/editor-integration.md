@@ -116,6 +116,27 @@ Decompiled exports are included, like any other source. See [Export vs Adopt](#e
 The **Open in VSCode** link jumps to the first error's file, line and column. The diagnostic has
 carried a position all along; before this it only reached the log.
 
+### The startup backlog
+
+The directory watcher reports everything that changed while the editor was shut down as soon as it
+registers, in one delivery that looks exactly like a very large save. After re-exporting a content
+pack that is the whole source tree at once: 24 systems rebuilding concurrently put 237 jobs into the
+Niagara compile queue, and the editor did not survive it.
+
+So a batch arriving within 30 seconds of startup and holding more than **Startup Rebuild Threshold**
+files (Project Settings → Plugins → DreamFX, default 8) is offered rather than built:
+
+> DreamFX: *N* source files changed while the editor was closed. Rebuilding them all at once would
+> queue hundreds of Niagara compiles. — **Rebuild them now**
+
+The files are kept, not dropped: dropping them would leave the assets stale with nothing to notice
+it, which is the same failure the gate exists to prevent, only quieter. If the toast expires, *Tools
+→ DreamFX → Rebuild DFX* does the same thing.
+
+Only the startup backlog is gated. Saving while the editor is open still rebuilds immediately,
+however many files the save touches — that path is the iteration loop and is left alone. An explicit
+*Rebuild DFX* is never gated either: it was asked for.
+
 ### Verify DFX
 
 Runs the generator in verify mode over every source. Nothing is written — not the asset, not the

@@ -4,6 +4,7 @@
 #include "DreamFXModule.h"
 #include "DreamFXParser.h"
 #include "Generation/DreamFXGenerator.h"
+#include "Settings/DreamFXEditorSettings.h"
 #include "SourceFiles/DreamFXPaths.h"
 #include "Workspace/DreamFXWorkspaceService.h"
 
@@ -27,10 +28,26 @@ namespace UE::DreamFX::Editor
 		 */
 		constexpr float DebounceSeconds = 0.75f;
 
+		/**
+		 * How long after registering a change still counts as the shutdown backlog rather than a save.
+		 *
+		 * The directory watcher replays everything that changed while the editor was closed as soon as
+		 * it is registered, in one delivery, indistinguishable from a save except by when it arrives.
+		 * Generous because the replay lands behind the rest of editor startup, and harmless if it is
+		 * too generous: the window only decides whether a *large* batch is built or offered.
+		 */
+		constexpr double StartupReplayWindowSeconds = 30.0;
+
 		TMap<FString, FDelegateHandle> GWatchHandles;
 		FTSTicker::FDelegateHandle GTickerHandle;
 		TSet<FString> GPendingFiles;
 		double GLastChangeTime = 0.0;
+
+		/** When the watch began, for the startup window above. */
+		double GWatchStartTime = 0.0;
+
+		/** A startup backlog too large to build unasked. Held until the author says so. */
+		TSet<FString> GDeferredStartupFiles;
 
 		/** Set by an explicit command; a plain save leaves it false and stays quiet when it worked. */
 		bool GAnnounceSuccess = false;
@@ -212,6 +229,46 @@ namespace UE::DreamFX::Editor
 			ReportBatch(Batch, bAnnounceSuccess);
 		}
 
+		/**
+		 * Offers a startup backlog instead of building it.
+		 *
+		 * The files are kept rather than dropped: dropping them would leave the assets stale with no
+		 * way to notice, which is the failure this is meant to prevent, just quieter.
+		 */
+		void OfferDeferredStartupBatch()
+		{
+			FNotificationInfo Info(FText::Format(
+				LOCTEXT("DreamFXStartupBacklog",
+					"DreamFX: {0} source files changed while the editor was closed. Rebuilding them all "
+					"at once would queue hundreds of Niagara compiles."),
+				FText::AsNumber(GDeferredStartupFiles.Num())));
+			Info.ExpireDuration = 30.0f;
+			Info.bFireAndForget = true;
+
+			Info.Hyperlink = FSimpleDelegate::CreateLambda([]()
+			{
+				GPendingFiles.Append(GDeferredStartupFiles);
+				GDeferredStartupFiles.Reset();
+
+				// Say so when it finishes, and skip the debounce: the author just asked for this, so
+				// waiting another three quarters of a second only makes the click feel broken.
+				GAnnounceSuccess = true;
+				GLastChangeTime = 0.0;
+			});
+			Info.HyperlinkText = LOCTEXT("DreamFXRebuildBacklog", "Rebuild them now");
+
+			const TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
+			if (Notification.IsValid())
+			{
+				Notification->SetCompletionState(SNotificationItem::CS_None);
+			}
+
+			UE_LOG(LogDreamFX, Display,
+				TEXT("%d source file(s) changed while the editor was closed. Not building automatically -- ")
+				TEXT("use the notification, or Tools > DreamFX > Rebuild DFX."),
+				GDeferredStartupFiles.Num());
+		}
+
 		bool Tick(float /*DeltaTime*/)
 		{
 			if (GPendingFiles.Num() == 0)
@@ -221,6 +278,22 @@ namespace UE::DreamFX::Editor
 
 			if (FPlatformTime::Seconds() - GLastChangeTime < DebounceSeconds)
 			{
+				return true;
+			}
+
+			// plan-v6 P2. A large batch this soon after startup is the shutdown backlog, not something
+			// anyone just saved, and building it concurrently is what killed the editor after a
+			// re-export. An explicit command (GAnnounceSuccess) is exempt: it was asked for.
+			const UDreamFXEditorSettings* Settings = GetDefault<UDreamFXEditorSettings>();
+			const int32 Threshold = Settings ? Settings->StartupRebuildThreshold : 8;
+
+			if (!GAnnounceSuccess
+				&& GPendingFiles.Num() > Threshold
+				&& FPlatformTime::Seconds() - GWatchStartTime < StartupReplayWindowSeconds)
+			{
+				GDeferredStartupFiles.Append(GPendingFiles);
+				GPendingFiles.Reset();
+				OfferDeferredStartupBatch();
 				return true;
 			}
 
@@ -256,6 +329,8 @@ namespace UE::DreamFX::Editor
 
 	void FSourceWatcher::Register()
 	{
+		GWatchStartTime = FPlatformTime::Seconds();
+
 		FDirectoryWatcherModule& Module = FModuleManager::LoadModuleChecked<FDirectoryWatcherModule>(
 			TEXT("DirectoryWatcher"));
 		IDirectoryWatcher* Watcher = Module.Get();
