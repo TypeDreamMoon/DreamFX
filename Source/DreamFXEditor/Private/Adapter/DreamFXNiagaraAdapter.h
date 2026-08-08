@@ -344,6 +344,75 @@ namespace UE::DreamFX::Editor
 		};
 
 		/**
+		 * Shares one edit context across a burst of *writes* to the same system, in structural epochs.
+		 *
+		 * FReadScope above cannot be reused for this, and its comment says why: a shared view model is
+		 * sound only while nothing changes underneath it. But that argument is about *structure*, not
+		 * about change in general. Writing a value into an input that already exists does not move any
+		 * stack entry -- the view model still describes this system correctly -- so the warning does
+		 * not apply to it, and value writes are where the cost is.
+		 *
+		 * So the scope divides an ApplyPlan into epochs. Adding a module, adding an emitter, adding a
+		 * renderer, rebinding a script version, flipping a static switch: each changes which entries
+		 * exist, ends the epoch, and the next call builds a fresh context. Every value write in
+		 * between shares one. That takes the cost from O(inputs x system size) to
+		 * O(structural operations x system size), and there are far fewer modules than inputs.
+		 *
+		 * Refreshing in place instead was measured and rejected: FNiagaraSystemViewModel::RefreshAll
+		 * is the only exported refresh, and it calls CompileSystem -- so refreshing at every boundary
+		 * would compile the system once per module. ResetStack routes through RefreshAll too. Dropping
+		 * the context and letting the next call rebuild is both cheaper and simpler to reason about.
+		 *
+		 * The two scopes must not overlap on one system: TNiagaraViewModelManager refuses to register
+		 * a second live view model for the same system, so the check below is an assert rather than a
+		 * convention.
+		 */
+		class FWriteScope
+		{
+		public:
+			explicit FWriteScope(UNiagaraSystem* InSystem);
+			~FWriteScope();
+
+			FWriteScope(const FWriteScope&) = delete;
+			FWriteScope& operator=(const FWriteScope&) = delete;
+
+		private:
+			UNiagaraSystem* System = nullptr;
+			bool bOwns = false;
+		};
+
+		/**
+		 * Ends the current structural epoch on this system.
+		 *
+		 * Every mutator in this file that changes the shape of the stack calls it already. It is
+		 * public for the one case the adapter cannot see on its own: writing a static switch changes
+		 * which *other* inputs are visible, and only the caller knows from the module schema that a
+		 * given input is one. Harmless outside a write scope.
+		 */
+		static void EndStructuralEpoch(UNiagaraSystem* System);
+
+		/**
+		 * Turns the write scope off, so every write builds its own context as it did before P1.
+		 *
+		 * It exists to be measured against. A before-and-after taken from two different binaries also
+		 * varies by whatever else changed between them; this way the comparison is one build, one
+		 * machine, one asset, one flag. `dfx.ps1 build -NoWriteScope` sets it.
+		 */
+		static void SetWriteScopeEnabled(bool bEnabled);
+
+		/** Zeroes the counters reported by ReportStats. */
+		static void ResetStats();
+
+		/**
+		 * One line naming what the run cost: contexts built (each is a whole system view model),
+		 * structural versus value calls, and epoch boundaries crossed.
+		 *
+		 * Contexts-built is the number that matters. Before the write scope it tracked the call count;
+		 * with it, it should track the module count.
+		 */
+		static FString ReportStats();
+
+		/**
 		 * Collects garbage when the process has grown past a threshold, and otherwise does nothing.
 		 *
 		 * Every call through the external edit API builds a stack view model out of UObjects, and in a

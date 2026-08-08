@@ -17,6 +17,11 @@
 
     Exit code is the commandlet's own: 0 when there were no errors, otherwise the error count.
 
+    Any command that writes assets -- `build` above all -- wants the editor CLOSED. Both processes
+    save the same packages otherwise, and the one that saves second silently wins. The run warns when
+    it sees an editor running; it cannot tell which project that editor has open, so it is a warning
+    and not a refusal.
+
 .EXAMPLE
     ./dfx.ps1 build DFX/Samples/NS_Spark.dfs -Force
 
@@ -60,6 +65,10 @@ param(
 
     # Build in memory without writing packages.
     [switch]$NoSave,
+
+    # build: rebuild the edit context for every write, as the generator did before the write scope.
+    # Slower by design -- it exists so a benchmark can measure both halves on one binary.
+    [switch]$NoWriteScope,
 
     # list: show dynamic inputs instead of modules.
     [switch]$DynamicInputs,
@@ -231,6 +240,7 @@ switch ($Command) {
         }
         if ($Force) { $arguments += '-Force' }
         if ($NoSave) { $arguments += '-NoSave' }
+        if ($NoWriteScope) { $arguments += '-NoWriteScope' }
     }
     'verify' {
         if (-not $All) {

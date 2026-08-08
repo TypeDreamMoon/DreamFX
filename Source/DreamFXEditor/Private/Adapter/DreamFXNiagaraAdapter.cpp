@@ -46,12 +46,40 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
-		 * The contexts open read scopes are sharing, by system.
+		 * The contexts open scopes are sharing, by system.
 		 *
-		 * Empty except inside FNiagaraAdapter::FReadScope, so nothing changes for any caller that has
-		 * not asked for the sharing.
+		 * Empty except inside FNiagaraAdapter::FReadScope or FWriteScope, so nothing changes for any
+		 * caller that has not asked for the sharing.
 		 */
-		TMap<UNiagaraSystem*, TSharedPtr<FNiagaraExternalEditContext>> GSharedReadContexts;
+		TMap<UNiagaraSystem*, TSharedPtr<FNiagaraExternalEditContext>> GSharedContexts;
+
+		/**
+		 * Systems with an open FWriteScope.
+		 *
+		 * Separate from the map above because a write scope outlives the contexts it hands out: a
+		 * structural operation drops the shared context and the next call builds the epoch's new one,
+		 * so "sharing is enabled" and "a context exists right now" are two different facts.
+		 */
+		TSet<UNiagaraSystem*> GWriteScopedSystems;
+
+		/** Systems with an open FReadScope, for the both-at-once guard. */
+		TSet<UNiagaraSystem*> GReadScopedSystems;
+
+		/** False restores the pre-P1 behaviour: one context per call. See SetWriteScopeEnabled. */
+		bool GWriteScopeEnabled = true;
+
+		/** One-shot counters for the build's summary line (plan-v6 P0). */
+		struct FAdapterStats
+		{
+			int32 ContextsBuilt = 0;
+			int32 StructuralCalls = 0;
+			int32 ValueCalls = 0;
+			int32 EpochBoundaries = 0;
+
+			/** Of the structural calls, the ones that were a static switch write. */
+			int32 StaticSwitchCalls = 0;
+		};
+		FAdapterStats GStats;
 
 		/** The shared context if this system has one open, otherwise a private one for this call. */
 		class FEditContext
@@ -59,7 +87,7 @@ namespace UE::DreamFX::Editor
 		public:
 			explicit FEditContext(UNiagaraSystem* System)
 			{
-				if (TSharedPtr<FNiagaraExternalEditContext>* Shared = GSharedReadContexts.Find(System))
+				if (TSharedPtr<FNiagaraExternalEditContext>* Shared = GSharedContexts.Find(System))
 				{
 					if (Shared->IsValid())
 					{
@@ -73,6 +101,18 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
+				++GStats.ContextsBuilt;
+
+				// Inside a write scope the epoch's context is built on first use rather than at the
+				// boundary, so a structural operation that is never followed by a write costs nothing.
+				if (GWriteScopedSystems.Contains(System))
+				{
+					TSharedPtr<FNiagaraExternalEditContext> Fresh = MakeShared<FNiagaraExternalEditContext>(System);
+					Context = Fresh.Get();
+					GSharedContexts.Add(System, MoveTemp(Fresh));
+					return;
+				}
+
 				Owned = MakeUnique<FNiagaraExternalEditContext>(System);
 				Context = Owned.Get();
 			}
@@ -82,6 +122,48 @@ namespace UE::DreamFX::Editor
 		private:
 			TUniquePtr<FNiagaraExternalEditContext> Owned;
 			FNiagaraExternalEditContext* Context = nullptr;
+		};
+
+		/**
+		 * Ends the current structural epoch: the shared context, if any, is dropped.
+		 *
+		 * Called after an operation that changes which stack entries exist. The next FEditContext on
+		 * this system builds a fresh view model, so nothing ever reads entries that describe the
+		 * system as it was before the operation.
+		 *
+		 * Cheap and idempotent outside a write scope, which is what lets every structural mutator call
+		 * it unconditionally instead of asking first.
+		 */
+		void EndEpoch(UNiagaraSystem* System)
+		{
+			++GStats.StructuralCalls;
+
+			// Only a write scope has epochs. Guarding on it keeps a structural call made while a read
+			// scope happens to be open -- the decompiler builds a host system for a standalone emitter
+			// this way -- from quietly dropping that scope's context and costing it the sharing.
+			if (System != nullptr && GWriteScopedSystems.Contains(System)
+				&& GSharedContexts.Remove(System) > 0)
+			{
+				++GStats.EpochBoundaries;
+			}
+		}
+
+		/**
+		 * Ends the epoch when the enclosing call returns, by whichever of its paths.
+		 *
+		 * Declare it *before* the FEditContext it accompanies. Destruction runs in reverse, so the
+		 * context holder is released first and this then drops the shared context -- rather than
+		 * destroying the context out from under a holder that still points at it.
+		 */
+		struct FEpochGuard
+		{
+			explicit FEpochGuard(UNiagaraSystem* InSystem) : System(InSystem) {}
+			~FEpochGuard() { EndEpoch(System); }
+
+			FEpochGuard(const FEpochGuard&) = delete;
+			FEpochGuard& operator=(const FEpochGuard&) = delete;
+
+			UNiagaraSystem* System = nullptr;
 		};
 
 		FNiagaraExt_StackItemReference ToReference(const FStackAddress& Address)
@@ -540,9 +622,15 @@ namespace UE::DreamFX::Editor
 	{
 		// Nested scopes on one system are harmless and the inner one simply defers to the outer: only
 		// the scope that created the context removes it.
-		if (System != nullptr && !GSharedReadContexts.Contains(System))
+		if (System != nullptr && !GSharedContexts.Contains(System))
 		{
-			GSharedReadContexts.Add(System, MakeShared<FNiagaraExternalEditContext>(System));
+			checkf(!GWriteScopedSystems.Contains(System),
+				TEXT("DreamFX: opening a read scope on a system that already has a write scope open. ")
+				TEXT("TNiagaraViewModelManager refuses a second live view model for one system."));
+
+			++GStats.ContextsBuilt;
+			GSharedContexts.Add(System, MakeShared<FNiagaraExternalEditContext>(System));
+			GReadScopedSystems.Add(System);
 			bOwns = true;
 		}
 	}
@@ -551,8 +639,61 @@ namespace UE::DreamFX::Editor
 	{
 		if (bOwns)
 		{
-			GSharedReadContexts.Remove(System);
+			GSharedContexts.Remove(System);
+			GReadScopedSystems.Remove(System);
 		}
+	}
+
+	FNiagaraAdapter::FWriteScope::FWriteScope(UNiagaraSystem* InSystem)
+		: System(InSystem)
+	{
+		if (System != nullptr && GWriteScopeEnabled && !GWriteScopedSystems.Contains(System))
+		{
+			checkf(!GReadScopedSystems.Contains(System),
+				TEXT("DreamFX: opening a write scope inside a read scope on the same system. The read ")
+				TEXT("scope's view model would go stale at the first structural write."));
+
+			// Only the enabling flag is set here. The epoch's context is built on first use, so a
+			// scope that turns out to write nothing costs nothing.
+			GWriteScopedSystems.Add(System);
+			bOwns = true;
+		}
+	}
+
+	FNiagaraAdapter::FWriteScope::~FWriteScope()
+	{
+		if (bOwns)
+		{
+			GSharedContexts.Remove(System);
+			GWriteScopedSystems.Remove(System);
+		}
+	}
+
+	void FNiagaraAdapter::EndStructuralEpoch(UNiagaraSystem* System)
+	{
+		// The generator calls this for exactly one reason -- a static switch write -- so counting here
+		// is what separates that population from the Add/Remove operations.
+		++GStats.StaticSwitchCalls;
+		EndEpoch(System);
+	}
+
+	void FNiagaraAdapter::SetWriteScopeEnabled(bool bEnabled)
+	{
+		GWriteScopeEnabled = bEnabled;
+	}
+
+	void FNiagaraAdapter::ResetStats()
+	{
+		GStats = FAdapterStats();
+	}
+
+	FString FNiagaraAdapter::ReportStats()
+	{
+		return FString::Printf(
+			TEXT("adapter: %d view model(s) built, %d structural (%d static switch) + %d value call(s), ")
+			TEXT("%d epoch boundary(ies)"),
+			GStats.ContextsBuilt, GStats.StructuralCalls, GStats.StaticSwitchCalls, GStats.ValueCalls,
+			GStats.EpochBoundaries);
 	}
 
 	bool FNiagaraAdapter::SaveSystem(UNiagaraSystem* System, TArray<FString>& OutErrors)
@@ -756,7 +897,9 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(System);
+		FEpochGuard Epoch(System);
+		FEditContext ContextHolder(System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 
 		FNiagaraExt_UserVariable Variable;
 		Variable.Name = Name;
@@ -781,7 +924,9 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(System);
+		FEpochGuard Epoch(System);
+		FEditContext ContextHolder(System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_Variable Variable;
 		Variable.Name = Name;
 		Variable.Type = Type;
@@ -823,7 +968,9 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(System);
+		FEpochGuard Epoch(System);
+		FEditContext ContextHolder(System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_EmitterTopology Topology;
 		UNiagaraExternalEditUtilities::AddEmitter(Template, EmitterName, Topology, Context);
 
@@ -846,7 +993,9 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::RemoveEmitter(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(EmitterAddress.System);
+		FEpochGuard Epoch(EmitterAddress.System);
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		UNiagaraExternalEditUtilities::RemoveEmitter(ToReference(EmitterAddress), Context);
 		return Drain(Context, OutErrors);
 	}
@@ -884,6 +1033,10 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
+		// An emitter name is the key every stack address is written in terms of, so a rename ages every
+		// cached entry even though nothing here goes through an edit context.
+		FEpochGuard Epoch(System);
+
 		System->Modify();
 		Target->SetName(NewName, *System);
 
@@ -905,7 +1058,9 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(StackAddress.System);
+		FEpochGuard Epoch(StackAddress.System);
+		FEditContext ContextHolder(StackAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ModuleTopology Topology;
 		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context);
 
@@ -924,14 +1079,18 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::RemoveModule(const FStackAddress& ModuleAddress, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(ModuleAddress.System);
+		FEpochGuard Epoch(ModuleAddress.System);
+		FEditContext ContextHolder(ModuleAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		UNiagaraExternalEditUtilities::RemoveModule(ToReference(ModuleAddress), Context);
 		return Drain(Context, OutErrors);
 	}
 
 	bool FNiagaraAdapter::SetModuleEnabled(const FStackAddress& ModuleAddress, bool bEnabled, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(ModuleAddress.System);
+		FEpochGuard Epoch(ModuleAddress.System);
+		FEditContext ContextHolder(ModuleAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		UNiagaraExternalEditUtilities::SetModuleEnabled(ToReference(ModuleAddress), bEnabled, Context);
 		return Drain(Context, OutErrors);
 	}
@@ -965,7 +1124,9 @@ namespace UE::DreamFX::Editor
 			Parameters.Add(MoveTemp(Parameter));
 		}
 
-		FNiagaraExternalEditContext Context(StackAddress.System);
+		FEpochGuard Epoch(StackAddress.System);
+		FEditContext ContextHolder(StackAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_ModuleTopology Topology;
 		UNiagaraExternalEditUtilities::AddSetParametersModule(ToReference(StackAddress), Parameters, Topology, Context);
 
@@ -991,7 +1152,9 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(EmitterAddress.System);
+		FEpochGuard Epoch(EmitterAddress.System);
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_RendererRef Ref;
 		UNiagaraExternalEditUtilities::AddRenderer(ToReference(EmitterAddress), RendererClass, Ref, Context);
 
@@ -1010,7 +1173,9 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::RemoveRenderer(const FStackAddress& RendererAddress, TArray<FString>& OutErrors)
 	{
-		FNiagaraExternalEditContext Context(RendererAddress.System);
+		FEpochGuard Epoch(RendererAddress.System);
+		FEditContext ContextHolder(RendererAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		UNiagaraExternalEditUtilities::RemoveRenderer(ToReference(RendererAddress), Context);
 		return Drain(Context, OutErrors);
 	}
@@ -1027,9 +1192,36 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraExternalEditContext Context(InputAddress.System);
-		UNiagaraExternalEditUtilities::SetStackInputData(ToReference(InputAddress), StackValue, Context);
-		return Drain(Context, OutErrors);
+		// The classification the write scope turns on. A dynamic input or a data interface is written
+		// by creating a node, which gives the input children a later write may address, so it ends the
+		// epoch. A literal, enum, link or HLSL expression lands on an entry that already exists and
+		// leaves the shape of the stack alone -- and those are the overwhelming majority, which is
+		// what makes the sharing worth having.
+		//
+		// A static switch is the case this cannot see: it changes which *other* inputs are visible,
+		// and only the caller knows from the module schema that an input is one. The generator calls
+		// EndStructuralEpoch for it.
+		const bool bStructural = Value.Mode == EInputValueMode::DynamicInput
+			|| Value.Mode == EInputValueMode::DataInterface;
+
+		bool bResult = false;
+		{
+			FEditContext ContextHolder(InputAddress.System);
+			FNiagaraExternalEditContext& Context = ContextHolder.Get();
+			UNiagaraExternalEditUtilities::SetStackInputData(ToReference(InputAddress), StackValue, Context);
+			bResult = Drain(Context, OutErrors);
+		}
+
+		// After the holder is gone, so the context is not destroyed while it still points at one.
+		if (bStructural)
+		{
+			EndEpoch(InputAddress.System);
+		}
+		else
+		{
+			++GStats.ValueCalls;
+		}
+		return bResult;
 	}
 
 	bool FNiagaraAdapter::SetRendererProperties(const FStackAddress& RendererAddress, const FString& PropertiesJson,
@@ -1040,7 +1232,11 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
-		FNiagaraExternalEditContext Context(RendererAddress.System);
+		// A renderer is addressed by index and its properties add no stack entries, so this is a value
+		// write: the epoch survives it.
+		++GStats.ValueCalls;
+		FEditContext ContextHolder(RendererAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_RendererData Data;
 		Data.PropertyValues = PropertiesJson;
 		UNiagaraExternalEditUtilities::SetRendererData(ToReference(RendererAddress), Data, Context);
@@ -1267,7 +1463,11 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
-		FNiagaraExternalEditContext Context(EmitterAddress.System);
+		// Structural: SimTarget lives in here, and moving an emitter between CPU and GPU changes which
+		// script stacks it has at all.
+		FEpochGuard Epoch(EmitterAddress.System);
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_EmitterData Data;
 		Data.PropertyValues = PropertiesJson;
 		UNiagaraExternalEditUtilities::SetEmitterData(ToReference(EmitterAddress), Data, Context);
@@ -1281,7 +1481,9 @@ namespace UE::DreamFX::Editor
 			return System != nullptr;
 		}
 
-		FNiagaraExternalEditContext Context(System);
+		FEpochGuard Epoch(System);
+		FEditContext ContextHolder(System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_SystemData Data;
 		Data.PropertyValues = PropertiesJson;
 		UNiagaraExternalEditUtilities::SetSystemData(System, Data, Context);
@@ -1854,6 +2056,11 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
+		// Structural, and about as structural as it gets: a version change is exactly a change to
+		// which inputs the module has. Placed after the early-outs above so a no-op rebind does not
+		// throw away a perfectly good epoch.
+		FEpochGuard Epoch(ModuleAddress.System);
+
 		// The graph-side sequence, not the stack-side one: FNiagaraFunctionCallNodeDetails::
 		// SwitchToVersion is the same situation as this -- a version changed on the node rather than
 		// through a stack view model -- and it skips the Python upgrade scripts for the same reason
@@ -1889,6 +2096,12 @@ namespace UE::DreamFX::Editor
 			// dynamic input and a hand-written call both want.
 			return SetInput(InputAddress, FInputValue::MakeDynamicInput(DynamicInput), OutErrors);
 		}
+
+		// The inner SetInput ends the epoch on its own (a dynamic input write creates a node), but this
+		// function keeps mutating afterwards -- ChangeScriptVersion re-derives the new node's pins. The
+		// guard covers that tail as well, so the epoch ends when the whole operation is finished
+		// rather than in the middle of it.
+		FEpochGuard Epoch(InputAddress.System);
 
 		TSet<const UEdGraphNode*> Before;
 		for (UEdGraphNode* Node : Graph->Nodes)

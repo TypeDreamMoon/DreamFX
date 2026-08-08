@@ -13,6 +13,7 @@
 #include "AssetRegistry/ARFilter.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
@@ -763,6 +764,17 @@ UDreamFXCommandlet::UDreamFXCommandlet()
 
 int32 UDreamFXCommandlet::Main(const FString& Params)
 {
+	// plan-v6 P2. An editor open on this project writes the same packages this run is about to write,
+	// and the loser of that race is whichever one saves second. A warning rather than a refusal: this
+	// cannot tell *which* project the editor has open, and being wrong about that should cost a line
+	// of log rather than a refused build.
+	if (FPlatformProcess::IsApplicationRunning(TEXT("UnrealEditor.exe")))
+	{
+		UE_LOG(LogDreamFX, Warning,
+			TEXT("An Unreal editor is running. If it has this project open, it and this run will fight ")
+			TEXT("over the same package files -- close it before a full build."));
+	}
+
 	FString SchemaQuery;
 	if (FParse::Value(*Params, TEXT("Schema="), SchemaQuery))
 	{
@@ -837,6 +849,12 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	Options.bStrictVersions = FParse::Param(*Params, TEXT("StrictVersions"));
 	Options.bForce = FParse::Param(*Params, TEXT("Force"));
 	Options.bSave = !FParse::Param(*Params, TEXT("NoSave")) && !Options.bVerifyOnly;
+
+	// plan-v6 P0: the baseline half of the benchmark. Off, every write builds its own system view
+	// model again, which is what the numbers before P1 were measured on.
+	const bool bNoWriteScope = FParse::Param(*Params, TEXT("NoWriteScope"));
+	FNiagaraAdapter::SetWriteScopeEnabled(!bNoWriteScope);
+	FNiagaraAdapter::ResetStats();
 
 	FString SingleFile;
 	FParse::Value(*Params, TEXT("File="), SingleFile);
@@ -959,6 +977,13 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 		TEXT("=== DreamFX done: %d %s, %d up to date, %d failed | %d error(s), %d warning(s) ==="),
 		Built, Options.bVerifyOnly ? TEXT("verified") : TEXT("built"),
 		Skipped, Failed, TotalErrors, TotalWarnings);
+
+	if (!Options.bVerifyOnly && !bLintOnly)
+	{
+		UE_LOG(LogDreamFX, Display, TEXT("=== %s%s ==="),
+			*FNiagaraAdapter::ReportStats(),
+			bNoWriteScope ? TEXT(" [write scope OFF]") : TEXT(""));
+	}
 
 	return TotalErrors;
 }

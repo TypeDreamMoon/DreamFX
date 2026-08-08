@@ -66,7 +66,35 @@ namespace UE::DreamFX::Editor
 
 			/** For a dynamic input write, the script version its node is rebound to (R1b). */
 			FGuid DynamicInputVersion;
+
+			/**
+			 * Whether this write is a static switch (plan-v6 P1).
+			 *
+			 * Recorded here because this is where it is known: the module schema is in hand while
+			 * planning and gone by the time the write happens. Writing a switch changes which *other*
+			 * inputs exist, so it ends the write scope's structural epoch -- the same reason the
+			 * switch pass runs before the value pass a few lines below.
+			 */
+			bool bIsStaticSwitch = false;
 		};
+
+		/**
+		 * Flags everything one argument planned as a static switch write.
+		 *
+		 * A range rather than a single entry because one argument can plan several writes, and the
+		 * caller records the start index before planning so it does not have to know how many.
+		 */
+		void MarkStaticSwitch(TArray<FPlannedInput>& Inputs, int32 FirstIndex, bool bIsStaticSwitch)
+		{
+			if (!bIsStaticSwitch)
+			{
+				return;
+			}
+			for (int32 Index = FirstIndex; Index < Inputs.Num(); ++Index)
+			{
+				Inputs[Index].bIsStaticSwitch = true;
+			}
+		}
 
 		/** One entry of a folded Set Parameters module (L2). */
 		struct FPlannedSetParameter
@@ -897,6 +925,8 @@ namespace UE::DreamFX::Editor
 						TArray<FName> ChildPath = Path;
 						ChildPath.Add(InputSchema->Name);
 
+						const int32 FirstPlanned = OutInputs.Num();
+
 						if (!Argument.Value.IsValid()
 							|| !PlanInputValue(*Argument.Value, InputSchema->Type, ChildPath,
 								FString::Printf(TEXT("%s.%s"), *Value.Text, *Argument.Name),
@@ -904,6 +934,8 @@ namespace UE::DreamFX::Editor
 						{
 							bOk = false;
 						}
+
+						MarkStaticSwitch(OutInputs, FirstPlanned, InputSchema->bIsStaticSwitch);
 					}
 				};
 
@@ -1252,12 +1284,16 @@ namespace UE::DreamFX::Editor
 							continue;
 						}
 
+						const int32 FirstPlanned = Planned.Inputs.Num();
+
 						if (!PlanInputValue(*Argument.Value, InputSchema->Type, { InputSchema->Name },
 							DescribeInput(Statement.Name, Argument.Name), Context, Diagnostics,
 							Planned.Inputs, OutDependencies))
 						{
 							bOk = false;
 						}
+
+						MarkStaticSwitch(Planned.Inputs, FirstPlanned, InputSchema->bIsStaticSwitch);
 					}
 				};
 
@@ -1819,6 +1855,18 @@ namespace UE::DreamFX::Editor
 		 */
 		bool ApplyPlannedInput(const FStackAddress& InputAddress, const FPlannedInput& Input, TArray<FString>& OutErrors)
 		{
+			// Writing a static switch changes which other inputs are visible, so the shared edit
+			// context stops describing this module the moment it lands. The adapter cannot tell -- a
+			// switch write looks like any other literal from there -- so the epoch is ended here, where
+			// the module schema said so at plan time. Nothing happens outside a write scope.
+			ON_SCOPE_EXIT
+			{
+				if (Input.bIsStaticSwitch)
+				{
+					FNiagaraAdapter::EndStructuralEpoch(InputAddress.System);
+				}
+			};
+
 			if (Input.Value.Mode == EInputValueMode::DynamicInput && Input.DynamicInputVersion.IsValid())
 			{
 				return FNiagaraAdapter::SetDynamicInputAtVersion(
@@ -1959,6 +2007,12 @@ namespace UE::DreamFX::Editor
 		bool ApplyPlan(UNiagaraSystem* System, const FPlan& Plan, FDiagnosticSink& Diagnostics,
 			TMap<FName, FSourceLocation>& OutModuleLocations)
 		{
+			// plan-v6 P1. Every write below shares one edit context until something changes the shape
+			// of the stack, at which point the next call builds a fresh one. Without this each write
+			// built an entire system view model of its own, which made the cost of applying a plan
+			// quadratic in its size -- the largest system in this project spent minutes on it.
+			FNiagaraAdapter::FWriteScope WriteScope(System);
+
 			const FStackAddress SystemAddress(System);
 			TArray<FString> Errors;
 
