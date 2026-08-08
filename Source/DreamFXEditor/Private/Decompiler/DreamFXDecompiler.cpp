@@ -1295,12 +1295,19 @@ namespace UE::DreamFX::Editor
 						const FInputInfo* InputInfo = Module.FindInput(Entry.Get<0>());
 						const FNiagaraTypeDefinition Type = InputInfo ? InputInfo->Type : FNiagaraTypeDefinition();
 
-						// Only a literal lets the type be inferred on re-import. Anything else
-						// needs the type written out, or the export will not compile.
-						const bool bNeedsType = Entry.Get<1>().Mode != EInputValueMode::Literal
-							&& Entry.Get<1>().Mode != EInputValueMode::Enum
-							&& Type.IsValid();
-						const FString Prefix = bNeedsType
+						// The declared type is always written when it is known. It used to be omitted
+						// for literals, on the theory that a literal lets the type be inferred on
+						// re-import -- which is not true, because the interesting literals are
+						// ambiguous. A four component tuple is a Vector4f, a LinearColor or a Quat; a
+						// three component one is a Vector or a Position. `Emitter.ccC = (1.0, 0.43,
+						// 0.3, 1.0)` came back as a Vector4f, was linked into HueShiftLinearColor's
+						// LinearColor input, and the rebuild failed with DFX4027 on a link the
+						// original asset makes happily.
+						//
+						// Inference could be taught which literals are ambiguous, but there is no
+						// reason to: the real type is in hand right here, and writing it costs one
+						// word and removes the whole class of bug.
+						const FString Prefix = Type.IsValid()
 							? FValueLowering::DescribeDeclaredType(Type) + TEXT(" ")
 							: FString();
 
