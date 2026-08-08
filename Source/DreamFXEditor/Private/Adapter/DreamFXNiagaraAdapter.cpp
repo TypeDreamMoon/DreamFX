@@ -358,6 +358,38 @@ namespace UE::DreamFX::Editor
 			OutValue = FInputValue();
 		}
 
+		/**
+		 * Inverse of ToVariableValue.
+		 *
+		 * Separate from FromStackInputValue because the two carry different payload structs even
+		 * though both descend from FNiagaraExt_InstancedValue: a stack input can be a link, an HLSL
+		 * expression or a dynamic input chain, and a variable value never is.
+		 */
+		void FromVariableValue(const FNiagaraExt_VariableValue& In, FInputValue& OutValue)
+		{
+			if (const FNiagaraExt_VariableValue_Enum* Data = In.GetPtr<FNiagaraExt_VariableValue_Enum>())
+			{
+				OutValue = FInputValue::MakeEnum(Data->Enum, Data->EnumName);
+				return;
+			}
+			if (const FNiagaraExt_VariableValue_DataInterface* Data = In.GetPtr<FNiagaraExt_VariableValue_DataInterface>())
+			{
+				OutValue = FInputValue::MakeDataInterface(nullptr, FString());
+				return;
+			}
+			if (In.GetPtr<FNiagaraExt_VariableValue_Object>() != nullptr)
+			{
+				OutValue = FInputValue();
+				return;
+			}
+			if (In.IsValid())
+			{
+				OutValue = FInputValue::MakeLiteral(In.GetScriptStruct(), In.GetMemory());
+				return;
+			}
+			OutValue = FInputValue();
+		}
+
 		/** Builds the FNiagaraVariant that FNiagaraExt_VariableValue::Set expects for a user variable. */
 		bool ToVariableValue(const FInputValue& Value, const FNiagaraTypeDefinition& Type,
 			FNiagaraExt_VariableValue& OutValue, TArray<FString>& OutErrors)
@@ -877,6 +909,81 @@ namespace UE::DreamFX::Editor
 		{
 			OutNames.Add(Emitter.EmitterName);
 		}
+		return Drain(Context, OutErrors);
+	}
+
+	namespace
+	{
+		FParameterDefault::EMode FromNiagaraDefaultMode(ENiagaraDefaultMode Mode)
+		{
+			switch (Mode)
+			{
+			case ENiagaraDefaultMode::Value:   return FParameterDefault::EMode::Value;
+			case ENiagaraDefaultMode::Binding: return FParameterDefault::EMode::Binding;
+			case ENiagaraDefaultMode::Custom:  return FParameterDefault::EMode::Custom;
+			default:                           return FParameterDefault::EMode::Fail;
+			}
+		}
+
+		ENiagaraDefaultMode ToNiagaraDefaultMode(FParameterDefault::EMode Mode)
+		{
+			switch (Mode)
+			{
+			case FParameterDefault::EMode::Value:   return ENiagaraDefaultMode::Value;
+			case FParameterDefault::EMode::Binding: return ENiagaraDefaultMode::Binding;
+			case FParameterDefault::EMode::Custom:  return ENiagaraDefaultMode::Custom;
+			default:                                return ENiagaraDefaultMode::FailIfPreviouslyNotSet;
+			}
+		}
+	}
+
+	bool FNiagaraAdapter::GetParameterDefaults(const FStackAddress& EmitterAddress,
+		TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("read: GetParameterDefaults"));
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
+
+		TArray<FNiagaraExt_ParameterDefault> Defaults;
+		UNiagaraExternalEditUtilities::GetEmitterParameterDefaults(ToReference(EmitterAddress), Defaults, Context);
+
+		for (const FNiagaraExt_ParameterDefault& Entry : Defaults)
+		{
+			FParameterDefault& Out = OutDefaults.AddDefaulted_GetRef();
+			Out.Variable = FNiagaraVariableBase(Entry.Variable.Type, Entry.Variable.Name);
+			Out.Mode = FromNiagaraDefaultMode(Entry.Mode);
+			Out.Binding = Entry.Binding;
+			if (Out.Mode == FParameterDefault::EMode::Value)
+			{
+				FromVariableValue(Entry.Value, Out.Value);
+			}
+		}
+		return Drain(Context, OutErrors);
+	}
+
+	bool FNiagaraAdapter::SetParameterDefault(const FStackAddress& EmitterAddress,
+		const FParameterDefault& Default, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("SetParameterDefault"));
+
+		// Structural: this creates the graph parameter when it is not there, and changes which pins
+		// the map-get node carries. Nothing in the engine refreshes for it, so the epoch ends.
+		FEpochGuard Epoch(EmitterAddress.System);
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
+
+		FNiagaraExt_ParameterDefault Entry;
+		Entry.Variable.Name = Default.Variable.GetName();
+		Entry.Variable.Type = Default.Variable.GetType();
+		Entry.Mode = ToNiagaraDefaultMode(Default.Mode);
+		Entry.Binding = Default.Binding;
+		if (Default.Mode == FParameterDefault::EMode::Value && Default.Value.IsSet()
+			&& !ToVariableValue(Default.Value, Default.Variable.GetType(), Entry.Value, OutErrors))
+		{
+			return false;
+		}
+
+		UNiagaraExternalEditUtilities::SetEmitterParameterDefault(ToReference(EmitterAddress), Entry, Context);
 		return Drain(Context, OutErrors);
 	}
 

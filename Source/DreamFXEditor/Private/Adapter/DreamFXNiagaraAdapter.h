@@ -231,6 +231,27 @@ namespace UE::DreamFX::Editor
 		const FScriptStackInfo* FindStack(FName ScriptName) const;
 	};
 
+	/**
+	 * What a read of a parameter produces when nothing set it earlier in the stack.
+	 *
+	 * Not a property of any module: it lives on the emitter's own graph, and until the external edit
+	 * API grew a surface for it a round trip silently turned every defaulted attribute into one that
+	 * fails to compile when read. `Particles.MySize` in NS_Spawn_Ground_Root was exactly that.
+	 */
+	struct FParameterDefault
+	{
+		FNiagaraVariableBase Variable;
+
+		/** Mirrors ENiagaraDefaultMode. Fail is the "nobody chose" value and is never exported. */
+		enum class EMode : uint8 { Value, Binding, Custom, Fail } Mode = EMode::Fail;
+
+		/** Set when Mode is Binding. */
+		FName Binding;
+
+		/** Set when Mode is Value. */
+		FInputValue Value;
+	};
+
 	struct FCompileEventInfo
 	{
 		/** 0 Log, 1 Display, 2 Warning, 3 Error -- mirrors ENiagaraExt_CompileEventSeverity. */
@@ -473,6 +494,14 @@ namespace UE::DreamFX::Editor
 
 		static bool GetEmitterNames(UNiagaraSystem* System, TArray<FName>& OutNames, TArray<FString>& OutErrors);
 		static bool GetEmitterInfo(const FStackAddress& EmitterAddress, FEmitterInfo& OutInfo, TArray<FString>& OutErrors);
+
+		/** The emitter's graph-level parameter defaults; empty when every parameter uses Fail. */
+		static bool GetParameterDefaults(const FStackAddress& EmitterAddress,
+			TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors);
+
+		/** Applies one parameter default, creating the graph parameter if it is not there yet. */
+		static bool SetParameterDefault(const FStackAddress& EmitterAddress,
+			const FParameterDefault& Default, TArray<FString>& OutErrors);
 
 		/**
 		 * One script stack's modules in execution order. Needed for the two system-scope stacks, which

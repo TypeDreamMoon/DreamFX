@@ -1062,6 +1062,29 @@ namespace UE::DreamFX
 					Lexer.Next();
 					ParseSettingsBlock(OutEmitter.Settings);
 				}
+				else if (Keyword == TEXT("Defaults"))
+				{
+					// Reuses the stack block wholesale: a default is an assignment, and giving it its
+					// own statement grammar would only mean two places to keep in step.
+					Lexer.Next();
+					FStack DefaultsBlock;
+					DefaultsBlock.Location = Token.Location;
+					if (ParseStackBlock(DefaultsBlock))
+					{
+						for (FStatement& Statement : DefaultsBlock.Statements)
+						{
+							if (Statement.Kind != EStatementKind::Assignment)
+							{
+								Diagnostics.Error(TEXT("DFX2016"), Statement.Location,
+									TEXT("A Defaults block holds assignments only: a default says what "
+									     "reading a parameter produces when nothing set it, so there is "
+									     "nothing for a module call to mean here."));
+								continue;
+							}
+							OutEmitter.Defaults.Add(MoveTemp(Statement));
+						}
+					}
+				}
 				else if (Keyword == TEXT("Stage") || Keyword == TEXT("OnEvent"))
 				{
 					// Reserved by L1 / section 7. Parsed so the syntax stays stable, then rejected --
@@ -1116,7 +1139,7 @@ namespace UE::DreamFX
 					else
 					{
 						ErrorAtCurrent(TEXT("DFX2014"),
-							FString::Printf(TEXT("Unknown emitter section '%s'. Expected Settings, EmitterSpawn, EmitterUpdate, ParticleSpawn, ParticleUpdate or a renderer declaration."),
+							FString::Printf(TEXT("Unknown emitter section '%s'. Expected Settings, Defaults, EmitterSpawn, EmitterUpdate, ParticleSpawn, ParticleUpdate or a renderer declaration."),
 								*Keyword));
 						Lexer.Next();
 						if (Lexer.Peek().IsSymbol(TEXT("=")))

@@ -278,6 +278,18 @@ namespace UE::DreamFX
 		FSourceLocation FromLocation;
 
 		TArray<FPropertyEntry> Settings;
+
+		/**
+		 * `Defaults = { float Particles.MySize = 1.0; }` -- what a read of a parameter produces when
+		 * nothing set it earlier in the stack.
+		 *
+		 * Assignment statements, the same shape the stacks use, because that is what they are: the
+		 * difference is only *when* they apply. Without them a round trip turns every defaulted
+		 * attribute into one Niagara refuses to compile a read of, which is where four of the
+		 * remaining rebuild failures came from.
+		 */
+		TArray<FStatement> Defaults;
+
 		TArray<FStack> Stacks;
 		TArray<FRenderer> Renderers;
 		FSourceLocation Location;

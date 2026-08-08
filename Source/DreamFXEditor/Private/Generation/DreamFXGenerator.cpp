@@ -152,11 +152,22 @@ namespace UE::DreamFX::Editor
 			FSourceLocation Location;
 		};
 
+		/** One `Defaults = { … }` entry: what reading this parameter produces when nothing set it. */
+		struct FPlannedParameterDefault
+		{
+			FNiagaraVariableBase Variable;
+			FParameterDefault::EMode Mode = FParameterDefault::EMode::Value;
+			FName Binding;
+			FInputValue Value;
+			FSourceLocation Location;
+		};
+
 		struct FPlannedEmitter
 		{
 			FName Name;
 			TArray<FPlannedStack> Stacks;
 			TArray<FPlannedRenderer> Renderers;
+			TArray<FPlannedParameterDefault> ParameterDefaults;
 			FString PropertiesJson;
 			FSourceLocation Location;
 		};
@@ -1821,6 +1832,78 @@ namespace UE::DreamFX::Editor
 				FStackContext EmitterContext = StackContext;
 				EmitterContext.DeclaredAttributes = &EmitterAttributes;
 
+				// `Defaults = { … }`. Deliberately not routed through PlanInputValue: a default is a
+				// value on a graph parameter, not an input on a module, so a dynamic input chain has
+				// nowhere to hang. A literal, an enum or a link to another parameter is all it can be.
+				for (const FStatement& Statement : Source->Defaults)
+				{
+					if (!FValueLowering::IsNamespacedName(Statement.Name))
+					{
+						Diagnostics.Error(TEXT("DFX4025"), Statement.Location,
+							FString::Printf(TEXT("'%s' is not a valid default target. Parameter names are namespace-qualified, e.g. Particles.MyValue."),
+								*Statement.Name));
+						bOk = false;
+						continue;
+					}
+					if (Statement.TypeName.IsEmpty())
+					{
+						Diagnostics.Error(TEXT("DFX4028"), Statement.Location,
+							FString::Printf(TEXT("Default for '%s' needs a declared type. A default has no module signature to infer one from, so write it: `float %s = …`."),
+								*Statement.Name, *Statement.Name));
+						bOk = false;
+						continue;
+					}
+
+					FParameterDecl AsDeclaration;
+					AsDeclaration.TypeName = Statement.TypeName;
+					AsDeclaration.InnerTypeName = Statement.InnerTypeName;
+					AsDeclaration.Name = Statement.Name;
+					AsDeclaration.Location = Statement.Location;
+
+					FNiagaraTypeDefinition TargetType;
+					bool bIsDataInterface = false;
+					if (!FValueLowering::ResolveDeclaredType(AsDeclaration, Diagnostics, TargetType, bIsDataInterface))
+					{
+						bOk = false;
+						continue;
+					}
+
+					FPlannedParameterDefault Default;
+					Default.Variable = FNiagaraVariableBase(TargetType, FName(*Statement.Name));
+					Default.Location = Statement.Location;
+
+					TArray<FPlannedInput> Writes;
+					if (!Statement.Value.IsValid()
+						|| !PlanInputValue(*Statement.Value, TargetType, { FName(*Statement.Name) },
+							Statement.Name, EmitterContext, Diagnostics, Writes, OutPlan.Dependencies)
+						|| Writes.Num() == 0)
+					{
+						bOk = false;
+						continue;
+					}
+
+					if (Writes.Num() > 1 || Writes[0].Value.Mode == EInputValueMode::DynamicInput)
+					{
+						Diagnostics.Error(TEXT("DFX4029"), Statement.Location,
+							FString::Printf(TEXT("Default for '%s' must be a literal, an enum or another parameter. A dynamic input computes a value per particle, which a default cannot do."),
+								*Statement.Name));
+						bOk = false;
+						continue;
+					}
+
+					if (Writes[0].Value.Mode == EInputValueMode::Linked)
+					{
+						Default.Mode = FParameterDefault::EMode::Binding;
+						Default.Binding = Writes[0].Value.LinkedVariable.GetName();
+					}
+					else
+					{
+						Default.Mode = FParameterDefault::EMode::Value;
+						Default.Value = Writes[0].Value;
+					}
+					Planned.ParameterDefaults.Add(MoveTemp(Default));
+				}
+
 				for (const FStack& Stack : Source->Stacks)
 				{
 					if (Stack.Kind == EStackKind::SimulationStage || Stack.Kind == EStackKind::EventHandler)
@@ -2292,6 +2375,24 @@ namespace UE::DreamFX::Editor
 					if (!FNiagaraAdapter::SetEmitterProperties(EmitterAddress, Emitter.PropertiesJson, Errors))
 					{
 						ReportAdapterErrors(Errors, TEXT("DFX5026"), Emitter.Location, Diagnostics);
+						return false;
+					}
+				}
+
+				// Parameter defaults go on before the stacks too, and for the same kind of reason: a
+				// module that reads the parameter is only legal once reading it is.
+				for (const FPlannedParameterDefault& Default : Emitter.ParameterDefaults)
+				{
+					FParameterDefault Applied;
+					Applied.Variable = Default.Variable;
+					Applied.Mode = Default.Mode;
+					Applied.Binding = Default.Binding;
+					Applied.Value = Default.Value;
+
+					Errors.Reset();
+					if (!FNiagaraAdapter::SetParameterDefault(EmitterAddress, Applied, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5027"), Default.Location, Diagnostics);
 						return false;
 					}
 				}

@@ -6,7 +6,9 @@
 #include "Schema/DreamFXModuleLibrary.h"
 #include "SourceFiles/DreamFXPaths.h"
 
+#include "AssetRegistry/IAssetRegistry.h"
 #include "Dom/JsonObject.h"
+#include "Misc/PackageName.h"
 #include "HAL/PlatformMemory.h"
 #include "NiagaraDataInterfaceCurve.h"
 #include "NiagaraEmitter.h"
@@ -1165,6 +1167,89 @@ namespace UE::DreamFX::Editor
 		};
 
 		/**
+		 * Names the content roots this asset depends on that are not mounted in this process.
+		 *
+		 * A module whose script will not resolve is reported as "scratch pad or missing reference",
+		 * which is true and was still misleading enough to send two rounds of diagnosis after a
+		 * scratch-pad materialiser. The 17 unresolvable modules in NS_Spawn_Ninja_Root are
+		 * `/NiagaraFluids/Modules/Grid3D/*`, and NiagaraFluids is simply not enabled in this project:
+		 * nothing was embedded in the asset and nothing needs extracting, the plugin is off.
+		 *
+		 * Read from the asset registry rather than the linker, deliberately. The registry is built
+		 * from on-disk headers, so it still knows a dependency whose package cannot be loaded --
+		 * which is exactly the case being diagnosed -- and UNiagaraNodeFunctionCall's own
+		 * FunctionScriptAssetObjectPath is Transient, so it is empty for anything loaded from disk.
+		 */
+		TArray<FString> FindUnmountedDependencyRoots(const UObject* Asset)
+		{
+			TArray<FString> Roots;
+			if (Asset == nullptr)
+			{
+				return Roots;
+			}
+
+			const IAssetRegistry* Registry = IAssetRegistry::Get();
+			if (Registry == nullptr)
+			{
+				return Roots;
+			}
+
+			TArray<FName> Dependencies;
+			Registry->GetDependencies(FName(*Asset->GetOutermost()->GetName()), Dependencies,
+				UE::AssetRegistry::EDependencyCategory::Package);
+
+			for (const FName& Dependency : Dependencies)
+			{
+				const FString PackageName = Dependency.ToString();
+				if (!FPackageName::IsValidLongPackageName(PackageName))
+				{
+					continue;
+				}
+				// A mount point of "" means no content root by that name is registered, which for a
+				// plugin's content means the plugin is not enabled.
+				if (!FPackageName::GetPackageMountPoint(PackageName).IsNone())
+				{
+					continue;
+				}
+
+				FString Root;
+				FString Remainder;
+				PackageName.RightChop(1).Split(TEXT("/"), &Root, &Remainder);
+				Roots.AddUnique(Root.IsEmpty() ? PackageName : TEXT("/") + Root);
+			}
+
+			Roots.Sort();
+			return Roots;
+		}
+
+		/**
+		 * Adds one gap line naming the disabled content roots, when there is one to name.
+		 *
+		 * Deliberately only when the export already lost something: an asset that depends on an
+		 * unmounted root but exported cleanly did not need it, and saying so would be noise.
+		 */
+		void NoteUnmountedDependencies(const UObject* Asset, TArray<FString>& UnsupportedFeatures)
+		{
+			if (UnsupportedFeatures.Num() == 0)
+			{
+				return;
+			}
+
+			const TArray<FString> Roots = FindUnmountedDependencyRoots(Asset);
+			if (Roots.Num() == 0)
+			{
+				return;
+			}
+
+			UnsupportedFeatures.AddUnique(FString::Printf(
+				TEXT("^ some of the above may be none of DreamFX's doing: this asset depends on %s, ")
+				TEXT("which %s not mounted in this project. Enable the plugin that provides %s and export again."),
+				*FString::Join(Roots, TEXT(", ")),
+				Roots.Num() == 1 ? TEXT("is") : TEXT("are"),
+				Roots.Num() == 1 ? TEXT("it") : TEXT("them")));
+		}
+
+		/**
 		 * The comment block every export opens with, including what the export could not carry.
 		 *
 		 * plan-v3 E4-0. Until now an unrepresentable feature was a warning in a commandlet log, which
@@ -1286,6 +1371,63 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
+		// What a read of a parameter produces when nothing set it earlier in the stack. Written after
+		// Settings and before the stacks because that is the order it applies in.
+		{
+			TArray<FParameterDefault> ParameterDefaults;
+			Errors.Reset();
+			if (FNiagaraAdapter::GetParameterDefaults(EmitterAddress, ParameterDefaults, Errors)
+				&& ParameterDefaults.Num() > 0)
+			{
+				TArray<FString> Lines;
+				for (const FParameterDefault& Default : ParameterDefaults)
+				{
+					const FString Name = ToNameToken(Default.Variable.GetName().ToString());
+					const FString TypeName = FValueLowering::DescribeDeclaredType(Default.Variable.GetType());
+
+					if (Default.Mode == FParameterDefault::EMode::Binding)
+					{
+						Lines.Add(FString::Printf(TEXT("%s %s = %s;"), *TypeName, *Name,
+							*ToNameToken(Default.Binding.ToString())));
+						continue;
+					}
+					if (Default.Mode != FParameterDefault::EMode::Value)
+					{
+						// Custom means a sub-graph computes the default, which has no text form.
+						Result.UnsupportedFeatures.AddUnique(FString::Printf(
+							TEXT("custom (sub-graph) default for parameter '%s'"),
+							*Default.Variable.GetName().ToString()));
+						continue;
+					}
+
+					const FString ValueSource = ValueToSource(Context,
+						EmitterAddress, Default.Value, Default.Variable.GetType(), 0);
+					if (ValueSource.IsEmpty())
+					{
+						Result.UnsupportedFeatures.AddUnique(FString::Printf(
+							TEXT("default value for parameter '%s'"), *Default.Variable.GetName().ToString()));
+						continue;
+					}
+					Lines.Add(FString::Printf(TEXT("%s %s = %s;"), *TypeName, *Name, *ValueSource));
+				}
+
+				if (Lines.Num() > 0)
+				{
+					Lines.Sort();
+					Writer.Line(TEXT("Defaults = {"));
+					Writer.Push();
+					for (const FString& Line : Lines)
+					{
+						Writer.Line(Line);
+					}
+					Writer.Pop();
+					Writer.Line(TEXT("}"));
+					Writer.Blank();
+				}
+
+		}
+	}
+
 		for (const FScriptStackInfo& Stack : Info.Stacks)
 		{
 			if (Stack.Modules.Num() == 0)
@@ -1352,7 +1494,17 @@ namespace UE::DreamFX::Editor
 							ModuleAddress.WithInput(Entry.Get<0>()), Entry.Get<1>(), Type, 0);
 						if (AssignedSource.IsEmpty())
 						{
-							continue; // no source form; the gap is already recorded in the header
+							// This used to `continue` on the claim that the gap was already in the
+							// header. That is only true when ValueToSource recorded one, and a dropped
+							// *assignment* is the one loss that cannot be allowed to go unrecorded:
+							// every later read of the parameter becomes "read before set", which
+							// Niagara refuses to compile, and the export gives no clue why. Record it
+							// here so the claim is enforced rather than assumed.
+							Result.UnsupportedFeatures.AddUnique(FString::Printf(
+								TEXT("assignment to '%s' in %s (no source form for its value; anything "
+								     "reading it later will not compile)"),
+								*Entry.Get<0>().ToString(), *Module.ModuleName.ToString()));
+							continue;
 						}
 
 						Writer.Line(FString::Printf(TEXT("%s%s = %s;"),
@@ -1711,6 +1863,7 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
+
 		// --- system-scope stacks --------------------------------------------------------------
 		//
 		// These have no owning emitter, so GetEmitterInfo cannot reach them -- which is exactly why
@@ -1781,6 +1934,8 @@ namespace UE::DreamFX::Editor
 
 		Writer.Pop();
 		Writer.Line(TEXT("}"));
+
+		NoteUnmountedDependencies(System, Result.UnsupportedFeatures);
 
 		Result.Source = FormatHeader(System->GetPathName(), TEXT("asset"), Result.UnsupportedFeatures,
 			Options.bDecompiledNamespace ? Context.RootMountPoint / DocumentName : FString())
@@ -1884,6 +2039,8 @@ namespace UE::DreamFX::Editor
 			FString::Printf(TEXT("Emitter(Name=\"%s\", Root=\"%s\")"),
 				*DocumentName, *RootToken),
 			Context, Modules, EmitterAddress, Info, Result, Diagnostics);
+
+		NoteUnmountedDependencies(Emitter, Result.UnsupportedFeatures);
 
 		Result.Source = FormatHeader(Emitter->GetPathName(), TEXT("emitter"), Result.UnsupportedFeatures,
 			Options.bDecompiledNamespace ? Context.RootMountPoint / DocumentName : FString())
