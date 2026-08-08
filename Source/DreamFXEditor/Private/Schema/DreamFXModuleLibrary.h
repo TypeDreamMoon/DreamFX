@@ -112,6 +112,19 @@ namespace UE::DreamFX::Editor
 		const TMap<FName, FInputValue>* GetStackDefaults(UNiagaraScript* Module, EStackKind Stack,
 			const FGuid& VersionGuid, FString& OutError);
 
+		/**
+		 * The same baseline again, taken with the static switches the module being read actually has.
+		 *
+		 * Same argument as the switch-aware GetStackSchema above, and it is not academic: a pristine
+		 * EmitterState has `LoopBehavior` at its own default, and an input that only exists under a
+		 * *different* branch has nothing to compare against. It then reads as "differs from default"
+		 * and gets printed, so a mirror gains `LoopDuration = 5.0` on a module the original left
+		 * alone -- harmless to run, and a text difference that made L1 fail.
+		 */
+		const TMap<FName, FInputValue>* GetStackDefaults(UNiagaraScript* Module, EStackKind Stack,
+			TArrayView<const TPair<FName, FInputValue>> SwitchValues, const FGuid& VersionGuid,
+			FString& OutError);
+
 		/** Property JSON a renderer class has when freshly added, for the same default-suppression job. */
 		const FString* GetRendererDefaults(UClass* RendererClass, FString& OutError);
 

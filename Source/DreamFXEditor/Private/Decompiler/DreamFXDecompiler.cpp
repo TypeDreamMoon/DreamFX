@@ -1552,11 +1552,25 @@ namespace UE::DreamFX::Editor
 				const bool bVersionDrifted = bHasLiveVersion && LiveVersion.bVersioningEnabled
 					&& LiveVersion.Guid.IsValid() && LiveVersion.Guid != ExposedVersion.Guid;
 
+				// The static switches this module is actually on. Gathered before the baseline is
+				// asked for, because the baseline has to be the same branch of the same module: an
+				// input that only exists under the branch the asset chose has nothing to compare
+				// against on the default branch, so it reads as "differs" and gets printed.
+				TArray<TPair<FName, FInputValue>> SwitchValues;
+				for (const TTuple<FName, FInputValue>& Entry : Values)
+				{
+					const FInputInfo* SwitchInfo = Module.FindInput(Entry.Get<0>());
+					if (SwitchInfo != nullptr && SwitchInfo->bStaticSwitch && Entry.Get<1>().IsSet())
+					{
+						SwitchValues.Emplace(Entry.Get<0>(), Entry.Get<1>());
+					}
+				}
+
 				// R8: only inputs that differ from a pristine instance of the same module are
 				// printed. Without this every module dumps its entire input list.
 				FString DefaultsError;
 				const TMap<FName, FInputValue>* Defaults = Module.Script
-					? Modules.GetStackDefaults(Module.Script, StackKind,
+					? Modules.GetStackDefaults(Module.Script, StackKind, SwitchValues,
 						bVersionDrifted ? LiveVersion.Guid : FGuid(), DefaultsError)
 					: nullptr;
 
