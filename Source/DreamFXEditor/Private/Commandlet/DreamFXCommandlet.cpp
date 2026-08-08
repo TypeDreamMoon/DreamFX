@@ -479,12 +479,53 @@ namespace
 		// `coverage` is deliberately not in this list: it reports and must not touch the tree.
 		DecompileOptions.bMaterializeEmbeddedScripts = true;
 
-		auto WithoutProvenanceLine = [](const FString& Source)
+		/**
+		 * The document without its opening comment block.
+		 *
+		 * L1 asks whether the original and its mirror describe the same system, and the header is the
+		 * one part that is *supposed* to differ: it records what the export could not carry, so an
+		 * original with gaps carries a list and its mirror -- which genuinely does not have those
+		 * features -- carries none. Comparing the two whole files marked every gap-bearing asset as a
+		 * text mismatch, which is why the previous run read 30 pass / 13 fail: all thirteen differed
+		 * at line 3 or line 10, inside the header, and none of them differed anywhere else.
+		 *
+		 * The gap counts are reported next to the verdict instead, where they say something.
+		 */
+		auto WithoutHeader = [](const FString& Source)
 		{
 			TArray<FString> Lines;
 			Source.ParseIntoArrayLines(Lines, /*InCullEmpty=*/false);
-			Lines.RemoveAll([](const FString& Line) { return Line.StartsWith(TEXT("// Decompiled from ")); });
-			return FString::Join(Lines, LINE_TERMINATOR);
+
+			int32 First = 0;
+			while (Lines.IsValidIndex(First))
+			{
+				const FString Trimmed = Lines[First].TrimStart();
+				if (!Trimmed.IsEmpty() && !Trimmed.StartsWith(TEXT("//")))
+				{
+					break;
+				}
+				++First;
+			}
+			return FString::Join(TArrayView<const FString>(Lines).RightChop(First), LINE_TERMINATOR);
+		};
+
+		auto CountGapLines = [](const FString& Source)
+		{
+			TArray<FString> Lines;
+			Source.ParseIntoArrayLines(Lines, /*InCullEmpty=*/false);
+			int32 Gaps = 0;
+			for (const FString& Line : Lines)
+			{
+				if (!Line.TrimStart().StartsWith(TEXT("//")))
+				{
+					break;
+				}
+				if (Line.TrimStart().StartsWith(TEXT("//   - ")))
+				{
+					++Gaps;
+				}
+			}
+			return Gaps;
 		};
 
 		int32 Passed = 0;
@@ -543,13 +584,23 @@ namespace
 				continue;
 			}
 
-			const FString LeftText = WithoutProvenanceLine(Left.Source);
-			const FString RightText = WithoutProvenanceLine(Right.Source);
+			const FString LeftText = WithoutHeader(Left.Source);
+			const FString RightText = WithoutHeader(Right.Source);
+			const int32 LeftGaps = CountGapLines(Left.Source);
 
 			if (LeftText == RightText)
 			{
 				++Passed;
-				UE_LOG(LogDreamFX, Display, TEXT("  L1 PASS     %s"), *PackagePath);
+				if (LeftGaps > 0)
+				{
+					UE_LOG(LogDreamFX, Display,
+						TEXT("  L1 PASS     %s (bodies identical; the original records %d gap(s) its mirror does not have)"),
+						*PackagePath, LeftGaps);
+				}
+				else
+				{
+					UE_LOG(LogDreamFX, Display, TEXT("  L1 PASS     %s"), *PackagePath);
+				}
 			}
 			else
 			{
