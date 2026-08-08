@@ -276,19 +276,11 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
-		// `DI<SkeletalMesh>` names a data interface. A bare name may be one too -- the asset shorthands
-		// have always been accepted -- but it is tried as a UObject parameter first.
-		//
-		// The comment that used to sit here said Niagara has no raw-UObject parameter type and that a
-		// texture always reaches a system through a Texture data interface. That is not true:
-		// FNiagaraTypeDefinition::IsUObject() exists, the parameter store has a SetUObject branch for
-		// it, and `_ArrowTex` in NS_LevelUp_Ascend_Root is one. The decompiler already spells the two
-		// apart -- `DI<Texture>` for the interface, bare `Texture` for the object -- so resolving both
-		// spellings to the interface quietly retyped every object parameter on re-import.
-		const bool bExplicitDataInterface = Declaration.TypeName.Equals(TEXT("DI"), ESearchCase::IgnoreCase);
-
+		// `DI<SkeletalMesh>` and the asset shorthands both land on a data interface class. Niagara has
+		// no raw-UObject parameter type: a texture reaches a system through a Texture data interface,
+		// not a bare UTexture2D.
 		FString DataInterfaceName;
-		if (bExplicitDataInterface)
+		if (Declaration.TypeName.Equals(TEXT("DI"), ESearchCase::IgnoreCase))
 		{
 			if (Declaration.InnerTypeName.IsEmpty())
 			{
@@ -302,34 +294,6 @@ namespace UE::DreamFX::Editor
 		else
 		{
 			DataInterfaceName = Declaration.TypeName;
-
-			// Matched by reflection for the same reason as the data interface search below: a UObject
-			// parameter type from another plugin should not need a DreamFX change.
-			for (TObjectIterator<UClass> ClassIterator; ClassIterator; ++ClassIterator)
-			{
-				UClass* Class = *ClassIterator;
-
-				// Abstract is *not* excluded here, unlike the data interface search below. A data
-				// interface has to be instantiated, so an abstract one is useless; a parameter only
-				// holds a reference, and the type it holds is routinely an abstract base -- `UTexture`
-				// is one, and it is exactly the type `Texture _ArrowTex;` means.
-				if (Class->IsChildOf(UNiagaraDataInterface::StaticClass())
-					|| Class->HasAnyClassFlags(CLASS_Deprecated | CLASS_NewerVersionExists))
-				{
-					continue;
-				}
-				if (!Class->GetName().Equals(Declaration.TypeName, ESearchCase::IgnoreCase))
-				{
-					continue;
-				}
-
-				const FNiagaraTypeDefinition ObjectType(Class);
-				if (ObjectType.IsUObject())
-				{
-					OutType = ObjectType;
-					return true;
-				}
-			}
 		}
 
 		// Matched by reflection rather than a fixed table so data interfaces from other plugins work
