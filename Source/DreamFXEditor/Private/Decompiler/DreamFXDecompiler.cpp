@@ -1194,28 +1194,42 @@ namespace UE::DreamFX::Editor
 				return Roots;
 			}
 
+			const FString AssetPackageName = Asset->GetOutermost()->GetName();
+
+			// The registry's discovery is asynchronous and a commandlet does not wait for it, so
+			// asking straight away returns nothing and reads as "this asset depends on nothing".
+			// Scanning the one directory is enough and costs a fraction of WaitForCompletion.
+			FString AssetFileName;
+			if (FPackageName::DoesPackageExist(AssetPackageName, &AssetFileName))
+			{
+				const_cast<IAssetRegistry*>(Registry)->ScanFilesSynchronous({ AssetFileName }, /*bForceRescan=*/false);
+			}
+
 			TArray<FName> Dependencies;
-			Registry->GetDependencies(FName(*Asset->GetOutermost()->GetName()), Dependencies,
+			Registry->GetDependencies(FName(*AssetPackageName), Dependencies,
 				UE::AssetRegistry::EDependencyCategory::Package);
 
 			for (const FName& Dependency : Dependencies)
 			{
 				const FString PackageName = Dependency.ToString();
-				if (!FPackageName::IsValidLongPackageName(PackageName))
+
+				// Deliberately NOT guarded by IsValidLongPackageName: that validates the root against
+				// the registered ones, so it rejects exactly the packages being looked for here and
+				// the whole check silently found nothing.
+				FString Root;
+				FString Remainder;
+				if (!PackageName.StartsWith(TEXT("/")) || !PackageName.RightChop(1).Split(TEXT("/"), &Root, &Remainder))
 				{
 					continue;
 				}
+
 				// A mount point of "" means no content root by that name is registered, which for a
 				// plugin's content means the plugin is not enabled.
 				if (!FPackageName::GetPackageMountPoint(PackageName).IsNone())
 				{
 					continue;
 				}
-
-				FString Root;
-				FString Remainder;
-				PackageName.RightChop(1).Split(TEXT("/"), &Root, &Remainder);
-				Roots.AddUnique(Root.IsEmpty() ? PackageName : TEXT("/") + Root);
+				Roots.AddUnique(TEXT("/") + Root);
 			}
 
 			Roots.Sort();
