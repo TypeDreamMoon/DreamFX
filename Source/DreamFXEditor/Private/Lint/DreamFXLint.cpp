@@ -4,17 +4,17 @@ namespace UE::DreamFX::Editor
 {
 	namespace
 	{
-		const FProperty* FindSetting(const TArray<FProperty>& Settings, const TCHAR* Name)
+		const FPropertyEntry* FindSetting(const TArray<FPropertyEntry>& Settings, const TCHAR* Name)
 		{
-			return Settings.FindByPredicate([Name](const FProperty& Setting)
+			return Settings.FindByPredicate([Name](const FPropertyEntry& Setting)
 			{
 				return Setting.Name.Equals(Name, ESearchCase::IgnoreCase);
 			});
 		}
 
-		bool SettingEquals(const TArray<FProperty>& Settings, const TCHAR* Name, const TCHAR* ExpectedValue)
+		bool SettingEquals(const TArray<FPropertyEntry>& Settings, const TCHAR* Name, const TCHAR* ExpectedValue)
 		{
-			const FProperty* Setting = FindSetting(Settings, Name);
+			const FPropertyEntry* Setting = FindSetting(Settings, Name);
 			if (Setting == nullptr || !Setting->Value.IsValid())
 			{
 				return false;
@@ -126,7 +126,7 @@ namespace UE::DreamFX::Editor
 			if (SettingEquals(Emitter.Settings, TEXT("SimTarget"), TEXT("GPU"))
 				&& FindSetting(Emitter.Settings, TEXT("FixedBounds")) == nullptr)
 			{
-				const FProperty* SimTarget = FindSetting(Emitter.Settings, TEXT("SimTarget"));
+				const FPropertyEntry* SimTarget = FindSetting(Emitter.Settings, TEXT("SimTarget"));
 				Diagnostics.Warning(TEXT("DFX7101"), SimTarget ? SimTarget->Location : Emitter.Location,
 					FString::Printf(TEXT("Emitter '%s' simulates on the GPU but declares no FixedBounds. GPU emitters cannot compute their own bounds, so it will use a default box and may be culled unexpectedly."),
 						*Emitter.Name));
@@ -170,7 +170,7 @@ namespace UE::DreamFX::Editor
 		 */
 		void LintModuleDocument(const FDocument& Document, FDiagnosticSink& Diagnostics)
 		{
-			const FProperty* Usage = Document.FindSetting(TEXT("Usage"));
+			const FPropertyEntry* Usage = Document.FindSetting(TEXT("Usage"));
 			if (Usage == nullptr)
 			{
 				Diagnostics.Error(TEXT("DFX3030"), Document.HeaderLocation,

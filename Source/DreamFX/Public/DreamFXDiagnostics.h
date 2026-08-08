@@ -97,4 +97,13 @@ namespace UE::DreamFX
 		int32 ErrorCount = 0;
 		int32 WarningCount = 0;
 	};
+
+	/**
+	 * Echoes a sink to LogDreamFX at each message's own severity.
+	 *
+	 * Shared rather than copied per caller: every entry point -- commandlet, watcher, menu command --
+	 * has to log the same way, or the same failure reads as an error headlessly and as a Display line
+	 * in the editor, and the log stops being usable as evidence.
+	 */
+	DREAMFX_API void LogDiagnostics(const FDiagnosticSink& Diagnostics);
 }

@@ -161,6 +161,45 @@ namespace UE::DreamFX
 			return Token;
 		}
 
+		// A back-quoted name is an identifier whose spelling the language could not otherwise hold.
+		//
+		// Niagara names are authored in a UI with no such restriction: this project's own content has
+		// a user parameter called `PillarPower(0~1)` and a module input called
+		// `Ring/DiscDistributionMode`. Before this, decompiling either produced a file that could not
+		// be parsed back -- which made the export of a whole third-party pack worthless.
+		//
+		// Deliberately one token, not a quoted segment: `User.PillarPower(0~1)` is written
+		// `` `User.PillarPower(0~1)` `` and reaches the parser as a single identifier, so every rule
+		// that already accepts a name accepts this with no further change.
+		if (Character == TEXT('`'))
+		{
+			Advance();
+			const int32 Start = Position;
+			while (!AtEnd() && Current() != TEXT('`') && Current() != TEXT('\n'))
+			{
+				Advance();
+			}
+
+			if (AtEnd() || Current() != TEXT('`'))
+			{
+				Diagnostics.Error(TEXT("DFX1005"), Token.Location,
+					TEXT("Unterminated back-quoted name. A `name` must close on the same line."));
+				Token.Kind = ETokenKind::Identifier;
+				Token.Text = Source.Mid(Start, Position - Start);
+				return Token;
+			}
+
+			Token.Kind = ETokenKind::Identifier;
+			Token.Text = Source.Mid(Start, Position - Start);
+			Advance(); // closing back-quote
+
+			if (Token.Text.IsEmpty())
+			{
+				Diagnostics.Error(TEXT("DFX1005"), Token.Location, TEXT("An empty back-quoted name is not a name."));
+			}
+			return Token;
+		}
+
 		// A number never starts with '-' here: unary minus is an operator, so that `A-1` does not
 		// silently lex as `A` followed by the literal `-1` and lose the subtraction.
 		if (FChar::IsDigit(Character) || (Character == TEXT('.') && FChar::IsDigit(Lookahead(1))))

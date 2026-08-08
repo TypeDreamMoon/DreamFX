@@ -1,5 +1,7 @@
 #include "DreamFXDiagnostics.h"
 
+#include "DreamFXModule.h"
+
 namespace UE::DreamFX
 {
 	namespace
@@ -83,5 +85,24 @@ namespace UE::DreamFX
 			Lines.Add(Diagnostic.Format());
 		}
 		return FString::Join(Lines, TEXT("\n"));
+	}
+
+	void LogDiagnostics(const FDiagnosticSink& Diagnostics)
+	{
+		for (const FDiagnostic& Diagnostic : Diagnostics.GetDiagnostics())
+		{
+			switch (Diagnostic.Severity)
+			{
+			case EDiagnosticSeverity::Error:
+				UE_LOG(LogDreamFX, Error, TEXT("%s"), *Diagnostic.Format());
+				break;
+			case EDiagnosticSeverity::Warning:
+				UE_LOG(LogDreamFX, Warning, TEXT("%s"), *Diagnostic.Format());
+				break;
+			default:
+				UE_LOG(LogDreamFX, Display, TEXT("%s"), *Diagnostic.Format());
+				break;
+			}
+		}
 	}
 }

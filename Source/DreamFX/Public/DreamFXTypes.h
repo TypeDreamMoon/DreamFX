@@ -113,6 +113,17 @@ namespace UE::DreamFX
 		/** Named call arguments. */
 		TArray<FNamedArgument> Arguments;
 
+		/**
+		 * `MakeFloatFromLinearColor@1.0(...)`: which version of a dynamic input script to call.
+		 *
+		 * The same pin a module statement carries, for the same reason (plan-v5 R1b): a dynamic input
+		 * is versioned too, and a revision can move an input to a different enum entirely -- the
+		 * `Channel` of MakeFloatFromLinearColor went from ENiagaraLinearColor_Channels (`R`, `G`, `B`)
+		 * to ENiagaraFloatFromLinearColorOptions (`Red`, `Green`, `Blue`). Empty means "whichever
+		 * version the asset exposes", which is what a hand-written call wants.
+		 */
+		FString VersionPin;
+
 		/** Curve literal keys. */
 		TArray<FCurveKey> CurveKeys;
 
@@ -142,7 +153,7 @@ namespace UE::DreamFX
 	};
 
 	/** `Key = Value;` inside Settings or a renderer block. */
-	struct FProperty
+	struct FPropertyEntry
 	{
 		FString Name;
 		FValuePtr Value;
@@ -199,6 +210,17 @@ namespace UE::DreamFX
 		/** R7 `ModuleName@Version` pin. Empty when unpinned. */
 		FString VersionPin;
 
+		/**
+		 * `disabled GravityForce(...)` -- the module is in the stack but does not run (plan-v3 E4-2).
+		 *
+		 * Niagara's own "keep it but turn it off" state, which authors use to park an experiment
+		 * without losing its inputs. Without a spelling for it the decompiler had to drop the flag,
+		 * and a re-import silently switched six third-party modules back on.
+		 *
+		 * ModuleCall statements only.
+		 */
+		bool bDisabled = false;
+
 		/** ModuleCall inputs. */
 		TArray<FNamedArgument> Arguments;
 
@@ -223,10 +245,10 @@ namespace UE::DreamFX
 		FString TypeName;
 		/** Optional author-facing label. Not persisted to the asset -- renderers are addressed by index. */
 		FString Name;
-		TArray<FProperty> Properties;
+		TArray<FPropertyEntry> Properties;
 		TArray<FRendererBinding> Bindings;
 		/** Reserved `MaterialParam X = V;` entries (L8). Parsed, rejected at lowering in v1. */
-		TArray<FProperty> MaterialParameters;
+		TArray<FPropertyEntry> MaterialParameters;
 		FSourceLocation Location;
 	};
 
@@ -255,7 +277,7 @@ namespace UE::DreamFX
 		FString FromPath;
 		FSourceLocation FromLocation;
 
-		TArray<FProperty> Settings;
+		TArray<FPropertyEntry> Settings;
 		TArray<FStack> Stacks;
 		TArray<FRenderer> Renderers;
 		FSourceLocation Location;
@@ -288,7 +310,7 @@ namespace UE::DreamFX
 		/** Hash of the source text, for the 4.6 provenance stamp. */
 		FString SourceHash;
 
-		TArray<FProperty> Settings;
+		TArray<FPropertyEntry> Settings;
 
 		/** `Properties = {}` for a system, `Inputs = {}` for a module / dynamic input. */
 		TArray<FParameterDecl> Parameters;
@@ -306,7 +328,7 @@ namespace UE::DreamFX
 		FString Body;
 		FSourceLocation BodyLocation;
 
-		DREAMFX_API const FProperty* FindSetting(const TCHAR* SettingName) const;
+		DREAMFX_API const FPropertyEntry* FindSetting(const TCHAR* SettingName) const;
 		DREAMFX_API const FStack* FindStack(EStackKind InKind) const;
 	};
 

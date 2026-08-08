@@ -41,7 +41,7 @@ namespace UE::DreamFX
 			bool ParseEmitterBody(FEmitter& OutEmitter, bool bAllowRenderers);
 			bool ParseModuleBody(FDocument& OutDocument);
 
-			bool ParseSettingsBlock(TArray<FProperty>& OutProperties);
+			bool ParseSettingsBlock(TArray<FPropertyEntry>& OutProperties);
 			bool ParseParameterBlock(TArray<FParameterDecl>& OutParameters);
 			bool ParseStackBlock(FStack& OutStack);
 			bool ParseEmitterDeclaration(FEmitter& OutEmitter);
@@ -441,15 +441,41 @@ namespace UE::DreamFX
 					return nullptr;
 				}
 
+				// `MakeFloatFromLinearColor@1.0(...)` -- the dynamic input answer to a module's version
+				// pin. Read before the '(' for the same reason it is written there: the version is
+				// part of naming the thing being called, not one of its arguments.
+				FString VersionPin;
+				if (Lexer.Peek().IsSymbol(TEXT("@")))
+				{
+					Lexer.Next();
+					const FToken Version = Lexer.Next();
+					if (Version.Kind != ETokenKind::Identifier && Version.Kind != ETokenKind::Number)
+					{
+						Diagnostics.Error(TEXT("DFX2007"), Version.Location,
+							TEXT("Expected a version after '@'."));
+						return nullptr;
+					}
+					VersionPin = Version.Text;
+				}
+
 				if (Lexer.Peek().IsSymbol(TEXT("(")))
 				{
 					FValuePtr Node = FValue::Make(EValueKind::Call, Location);
 					Node->Text = Name;
+					Node->VersionPin = VersionPin;
 					if (!ParseArgumentList(Node->Arguments, Node->Elements))
 					{
 						return nullptr;
 					}
 					return Node;
+				}
+
+				if (!VersionPin.IsEmpty())
+				{
+					Diagnostics.Error(TEXT("DFX2007"), Location,
+						FString::Printf(TEXT("'%s@%s' is not a call. A version pin only means something on a dynamic input call, e.g. %s@%s(...)."),
+							*Name, *VersionPin, *Name, *VersionPin));
+					return nullptr;
 				}
 
 				return FValue::MakeName(Name, Location);
@@ -650,7 +676,7 @@ namespace UE::DreamFX
 		// Blocks
 		// -------------------------------------------------------------------------------------
 
-		bool FParserImpl::ParseSettingsBlock(TArray<FProperty>& OutProperties)
+		bool FParserImpl::ParseSettingsBlock(TArray<FPropertyEntry>& OutProperties)
 		{
 			if (!Expect(TEXT("=")) || !Expect(TEXT("{")))
 			{
@@ -659,7 +685,7 @@ namespace UE::DreamFX
 
 			while (!Lexer.Peek().IsEnd() && !Lexer.Peek().IsSymbol(TEXT("}")))
 			{
-				FProperty Property;
+				FPropertyEntry Property;
 				Property.Location = Lexer.Peek().Location;
 				if (!ExpectIdentifier(Property.Name))
 				{
@@ -774,10 +800,32 @@ namespace UE::DreamFX
 			Statement.Location = Token.Location;
 			Statement.Region = RegionStack.Num() > 0 ? RegionStack.Last() : FString();
 
+			// `disabled GravityForce(...)`. Consumed before the type rule below, which would otherwise
+			// read `disabled` as the type of a declaration. Requiring a name after it keeps a
+			// parameter that happens to be called `disabled` working: `disabled = false;` is an
+			// assignment, and only `disabled <name>` is the prefix.
+			//
+			// The name may also start with '/', because a module can be written as a full asset path --
+			// and one always is when it has no short name to resolve by. Without the second case the
+			// prefix was not consumed at all and `disabled /Game/FX/X()` parsed as a single module
+			// named `disabled/Game/FX/X`, which then failed to resolve (plan-v5 R3).
+			const FSourceLocation DisabledLocation = Token.Location;
+			if (Token.IsIdentifier(TEXT("disabled"))
+				&& (Lexer.Peek(1).Kind == ETokenKind::Identifier || Lexer.Peek(1).IsSymbol(TEXT("/"))))
+			{
+				Lexer.Next();
+				Statement.bDisabled = true;
+				Statement.Location = Lexer.Peek().Location;
+			}
+
+			// Peek() hands back a reference into the lexer's queue, which Next() above has just
+			// reshuffled, so re-read rather than reusing `Token` from here on.
+			const FToken& Head = Lexer.Peek();
+
 			// `float Particles.X = ...` -- a type followed by a name. Unambiguous inside a stack: a
 			// module call is followed by '(' and a bare assignment by '.' or '=', never by another
 			// identifier. `DI<X> Name` is picked up by the '<' too.
-			if (Token.Kind == ETokenKind::Identifier
+			if (Head.Kind == ETokenKind::Identifier
 				&& (Lexer.Peek(1).Kind == ETokenKind::Identifier || Lexer.Peek(1).IsSymbol(TEXT("<"))))
 			{
 				if (!ParseTypeName(Statement.TypeName, Statement.InnerTypeName))
@@ -851,6 +899,17 @@ namespace UE::DreamFX
 			{
 				Diagnostics.Error(TEXT("DFX2023"), Statement.Location,
 					FString::Printf(TEXT("'%s' is a module call, so it cannot be given a type. Types are written only on assignments."),
+						*Statement.Name));
+				return false;
+			}
+
+			if (Statement.bDisabled && Statement.Kind != EStatementKind::ModuleCall)
+			{
+				// An assignment has nothing to disable -- it is written into the stack's own Set
+				// Parameters module, and turning that off would silently drop every other assignment
+				// beside it.
+				Diagnostics.Error(TEXT("DFX2024"), DisabledLocation,
+					FString::Printf(TEXT("'disabled' can only prefix a module call, and '%s' is an assignment."),
 						*Statement.Name));
 				return false;
 			}
@@ -931,7 +990,7 @@ namespace UE::DreamFX
 				}
 				else if (Token.IsIdentifier(TEXT("MaterialParam")))
 				{
-					FProperty Parameter;
+					FPropertyEntry Parameter;
 					Parameter.Location = Token.Location;
 					Lexer.Next();
 					if (!ExpectIdentifier(Parameter.Name) || !Expect(TEXT("=")))
@@ -950,7 +1009,7 @@ namespace UE::DreamFX
 				}
 				else
 				{
-					FProperty Property;
+					FPropertyEntry Property;
 					Property.Location = Token.Location;
 					if (!ExpectIdentifier(Property.Name) || !Expect(TEXT("=")))
 					{

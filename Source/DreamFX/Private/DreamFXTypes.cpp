@@ -219,9 +219,9 @@ namespace UE::DreamFX
 		return Stacks.FindByPredicate([Kind](const FStack& Stack) { return Stack.Kind == Kind; });
 	}
 
-	const FProperty* FDocument::FindSetting(const TCHAR* SettingName) const
+	const FPropertyEntry* FDocument::FindSetting(const TCHAR* SettingName) const
 	{
-		return Settings.FindByPredicate([SettingName](const FProperty& Property)
+		return Settings.FindByPredicate([SettingName](const FPropertyEntry& Property)
 		{
 			return Property.Name.Equals(SettingName, ESearchCase::IgnoreCase);
 		});
