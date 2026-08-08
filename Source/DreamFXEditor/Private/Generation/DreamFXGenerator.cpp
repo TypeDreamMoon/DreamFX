@@ -1955,30 +1955,17 @@ namespace UE::DreamFX::Editor
 		bool ClearStack(const FStackAddress& OwnerAddress, FName ScriptName, FDiagnosticSink& Diagnostics,
 			const FSourceLocation& Location)
 		{
+			// One call, not one per module. RemoveModule refreshes the whole group after each
+			// removal, so clearing n modules that way rebuilt the group n times to reach a state
+			// that is empty either way -- and this runs on four stacks of every emitter of every
+			// asset built from a template.
 			TArray<FString> Errors;
-			FScriptStackInfo Info;
-			if (!FNiagaraAdapter::GetScriptStackInfo(OwnerAddress.WithScript(ScriptName), Info, Errors))
+			if (!FNiagaraAdapter::ClearScriptStack(OwnerAddress.WithScript(ScriptName), Errors))
 			{
-				ReportAdapterErrors(Errors, TEXT("DFX5010"), Location, Diagnostics);
+				ReportAdapterErrors(Errors, TEXT("DFX5011"), Location, Diagnostics);
 				return false;
 			}
-
-			bool bOk = true;
-			// Remove back to front: RemoveModule reindexes the stack, and walking forward while
-			// mutating would skip every other module.
-			for (int32 Index = Info.Modules.Num() - 1; Index >= 0; --Index)
-			{
-				Errors.Reset();
-				const FStackAddress ModuleAddress = OwnerAddress
-					.WithScript(ScriptName)
-					.WithModule(Info.Modules[Index].ModuleName);
-				if (!FNiagaraAdapter::RemoveModule(ModuleAddress, Errors))
-				{
-					ReportAdapterErrors(Errors, TEXT("DFX5011"), Location, Diagnostics);
-					bOk = false;
-				}
-			}
-			return bOk;
+			return true;
 		}
 
 		/** Empties an existing emitter so it can be rebuilt in place, keeping its handle GUID. */

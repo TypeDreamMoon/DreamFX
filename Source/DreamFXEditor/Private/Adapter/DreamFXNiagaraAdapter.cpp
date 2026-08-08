@@ -937,6 +937,19 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	bool FNiagaraAdapter::ClearScriptStack(const FStackAddress& ScriptAddress, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("ClearScriptStack"));
+
+		// Same classification as RemoveModule: the engine refreshes the group it emptied before
+		// returning, so the context still describes the system accurately.
+		FEpochGuard Epoch(ScriptAddress.System, EStructuralKind::RefreshedInPlace);
+		FEditContext ContextHolder(ScriptAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
+		UNiagaraExternalEditUtilities::ClearScriptStack(ToReference(ScriptAddress), Context);
+		return Drain(Context, OutErrors);
+	}
+
 	bool FNiagaraAdapter::GetParameterDefaults(const FStackAddress& EmitterAddress,
 		TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors)
 	{

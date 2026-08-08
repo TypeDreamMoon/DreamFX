@@ -495,6 +495,14 @@ namespace UE::DreamFX::Editor
 		static bool GetEmitterNames(UNiagaraSystem* System, TArray<FName>& OutNames, TArray<FString>& OutErrors);
 		static bool GetEmitterInfo(const FStackAddress& EmitterAddress, FEmitterInfo& OutInfo, TArray<FString>& OutErrors);
 
+		/**
+		 * Removes every module from one script stack in a single pass.
+		 *
+		 * RemoveModule refreshes the whole group after each removal, so clearing n modules one at a
+		 * time rebuilds the group n times to reach the same empty state.
+		 */
+		static bool ClearScriptStack(const FStackAddress& ScriptAddress, TArray<FString>& OutErrors);
+
 		/** The emitter's graph-level parameter defaults; empty when every parameter uses Fail. */
 		static bool GetParameterDefaults(const FStackAddress& EmitterAddress,
 			TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors);
