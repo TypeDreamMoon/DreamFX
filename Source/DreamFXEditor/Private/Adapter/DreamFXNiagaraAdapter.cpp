@@ -1041,6 +1041,19 @@ namespace UE::DreamFX::Editor
 		return Drain(Context, OutErrors) && bOk;
 	}
 
+	bool FNiagaraAdapter::CleanUpStaleParameters(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("CleanUpStaleParameters"));
+
+		// Structural: it removes parameters from the scripts the stack view models describe, so a
+		// context built before it no longer matches what is there.
+		FEpochGuard Epoch(EmitterAddress.System);
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
+		UNiagaraExternalEditUtilities::CleanUpStaleEmitterParameters(ToReference(EmitterAddress), Context);
+		return Drain(Context, OutErrors);
+	}
+
 	bool FNiagaraAdapter::GetEmitterInfo(const FStackAddress& EmitterAddress, FEmitterInfo& OutInfo, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("read: GetEmitterInfo"));

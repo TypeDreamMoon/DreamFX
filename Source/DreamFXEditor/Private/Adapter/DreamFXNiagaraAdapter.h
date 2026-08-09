@@ -523,6 +523,17 @@ namespace UE::DreamFX::Editor
 			TArrayView<const FParameterDefault> Defaults, TArray<FString>& OutErrors);
 
 		/**
+		 * Drops the constants of modules that are no longer in this emitter's stacks.
+		 *
+		 * A build reuses the emitter handle rather than replacing it -- that is what keeps its GUID,
+		 * and with it cook diffs and external references, stable. The cost is that clearing a stack
+		 * does not touch the rapid-iteration parameters of the modules it removed, so they pile up
+		 * across rebuilds. Measured: the in-place mirror of N_MagicRuneCast_2 carried 18 constants a
+		 * fresh-path build of the same source did not, and its MainRune emitted nothing.
+		 */
+		static bool CleanUpStaleParameters(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors);
+
+		/**
 		 * One script stack's modules in execution order. Needed for the two system-scope stacks, which
 		 * GetEmitterInfo cannot reach because they have no owning emitter.
 		 */

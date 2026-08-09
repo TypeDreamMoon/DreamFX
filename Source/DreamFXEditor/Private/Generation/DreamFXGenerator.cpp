@@ -2564,6 +2564,22 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
+				// Before the stacks, because the stacks are what put the parameters back. Clearing a
+				// stack does not touch the rapid-iteration constants of the modules it removed, nor
+				// of inputs that are simply no longer written, so they accumulate over rebuilds --
+				// and an emitter carrying enough of them stops behaving like the same emitter built
+				// fresh. Emptying here and letting the rebuild repopulate is what makes an in-place
+				// build produce the same asset as a build to a new path. Not fatal: an emitter with
+				// residue is the state every build before this one produced.
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::CleanUpStaleParameters(EmitterAddress, Errors))
+					{
+						UE_LOG(LogDreamFX, Warning, TEXT("emitter '%s': could not clear stale parameters: %s"),
+							*Emitter.Name.ToString(), *FString::Join(Errors, TEXT(" | ")));
+					}
+				}
+
 				for (const FPlannedStack& Stack : Emitter.Stacks)
 				{
 					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations))
