@@ -239,6 +239,16 @@ namespace UE::DreamFX::Editor
 			return FString::Printf(TEXT("DI<%s>"), *Name);
 		}
 
+		// A plain UObject parameter. Printed with its own spelling because the bare name is the
+		// data-interface shorthand, and `Texture` names both -- writing the bare form here is what
+		// turned an object-typed _ArrowTex into a Texture data interface on every round trip.
+		if (Type.IsUObject() && Type.GetClass() != nullptr)
+		{
+			FString Name = Type.GetClass()->GetName();
+			Name.RemoveFromStart(TEXT("U"), ESearchCase::CaseSensitive);
+			return FString::Printf(TEXT("Object<%s>"), *Name);
+		}
+
 		// Enums have no DSL keyword of their own; a user parameter of enum type is out of scope for
 		// the Properties block, so the engine name is the honest thing to print.
 		return DescribeType(Type);
@@ -283,9 +293,60 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
-		// `DI<SkeletalMesh>` and the asset shorthands both land on a data interface class. Niagara has
-		// no raw-UObject parameter type: a texture reaches a system through a Texture data interface,
-		// not a bare UTexture2D.
+		// `Object<Texture>` is a plain UObject parameter, which Niagara does have -- contrary to what
+		// this function used to assert. FNiagaraExt_VariableValue::Set has an IsUObject() branch next
+		// to its data-interface one, and UNiagaraNodeParameterMapGet::CreateDefaultPin tests for it
+		// alongside IsDataInterface(). Content in this project uses them: `_ArrowTex` on the
+		// _LevelUpSpawn systems is an object-typed UTexture, and with no way to say so an export
+		// round-tripped it into a Texture data interface and changed the asset.
+		//
+		// It needs its own spelling because a bare name cannot carry the distinction: `Texture`,
+		// `SkeletalMesh` and `StaticMesh` all name both a data interface and a UObject class, and the
+		// bare form was already taken by the data-interface shorthand.
+		if (Declaration.TypeName.Equals(TEXT("Object"), ESearchCase::IgnoreCase))
+		{
+			if (Declaration.InnerTypeName.IsEmpty())
+			{
+				Diagnostics.Error(TEXT("DFX4020"), Declaration.Location,
+					FString::Printf(TEXT("Parameter '%s': 'Object' needs an inner type, e.g. Object<Texture>."),
+						*Declaration.Name));
+				return false;
+			}
+
+			// Same reflection lookup as the data interfaces below, so an object type from any plugin
+			// works without a DreamFX change. Both the bare name and a U-prefixed one are accepted
+			// because the engine's own class names carry the prefix and the export does not.
+			//
+			// Abstract classes are NOT excluded here, unlike the data-interface lookup below. A data
+			// interface gets instantiated, so an abstract one is useless; an object parameter is a
+			// slot that holds a reference, and its declared type is routinely an abstract base --
+			// `UTexture` is exactly that, and excluding it made every `Object<Texture>` this export
+			// had just written fail to re-import with "no UObject class named 'Texture'".
+			const FString Bare = Declaration.InnerTypeName;
+			const FString Prefixed = FString::Printf(TEXT("U%s"), *Bare);
+			for (TObjectIterator<UClass> ClassIterator; ClassIterator; ++ClassIterator)
+			{
+				UClass* Class = *ClassIterator;
+				if (Class->IsChildOf(UNiagaraDataInterface::StaticClass())
+					|| Class->HasAnyClassFlags(CLASS_Deprecated | CLASS_NewerVersionExists))
+				{
+					continue;
+				}
+				const FString ClassName = Class->GetName();
+				if (ClassName.Equals(Bare, ESearchCase::IgnoreCase) || ClassName.Equals(Prefixed, ESearchCase::IgnoreCase))
+				{
+					OutType = FNiagaraTypeDefinition(Class);
+					return true;
+				}
+			}
+
+			Diagnostics.Error(TEXT("DFX4021"), Declaration.Location,
+				FString::Printf(TEXT("Parameter '%s': no UObject class named '%s'. Object<> takes a class name such as Object<Texture> or Object<StaticMesh>."),
+					*Declaration.Name, *Declaration.InnerTypeName));
+			return false;
+		}
+
+		// `DI<SkeletalMesh>` and the asset shorthands both land on a data interface class.
 		FString DataInterfaceName;
 		if (Declaration.TypeName.Equals(TEXT("DI"), ESearchCase::IgnoreCase))
 		{
@@ -326,7 +387,7 @@ namespace UE::DreamFX::Editor
 		}
 
 		Diagnostics.Error(TEXT("DFX4021"), Declaration.Location,
-			FString::Printf(TEXT("Parameter '%s' has unknown type '%s'. Expected float, int, bool, Vector2, Vector, Vector4, Color, Position, Quat, or a data interface written as DI<Name>."),
+			FString::Printf(TEXT("Parameter '%s' has unknown type '%s'. Expected float, int, bool, Vector2, Vector, Vector4, Color, Position, Quat, a data interface written as DI<Name>, or an object written as Object<Name>."),
 				*Declaration.Name, *Declaration.TypeName));
 		return false;
 	}
