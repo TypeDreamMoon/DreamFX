@@ -27,8 +27,18 @@ step it one pair per call (see the note above l3_begin for why the loop cannot b
 
     B=.claude/skills/unreal-bridge/scripts/bridge.py
     python $B --no-preflight exec-file "Plugins/DreamFX/.skill/l3_equivalence.py"
-    for i in $(seq 0 44); do python $B --no-preflight exec "l3_step($i)"; done
+    for i in $(seq 0 44); do
+      python $B --no-preflight exec "l3_side_a($i)"
+      python $B --no-preflight exec "l3_side_b($i)"
+      python $B --no-preflight exec "l3_side_c($i)"
+    done
     python $B --no-preflight exec "l3_report()"
+
+One system per call, never both sides of a pair in one. Measuring a pair in a single call reports
+identical systems as different -- that is what the note above l3_side_a is about.
+
+The first system measured after the editor starts reads all zeros. Step one pair and discard it,
+then l3_begin() to reset, before trusting anything.
 
 GPU emitters report zero here even in the editor -- there is no readback of their particle buffer on
 this path. That is symmetric between the two sides of every pair, so it costs coverage, not
@@ -157,41 +167,80 @@ def _compare(left, right):
 
 
 # --------------------------------------------------------------------------------------------
-# Driving this one pair at a time is not a style choice.
+# Driving this ONE SYSTEM at a time is not a style choice.
 #
 # Every bridge exec runs to completion on the GameThread, so no frame boundary occurs inside one.
 # DestroyComponent only *marks* a component for destruction and CollectGarbage is documented as
 # "queued and happen at the end of the frame" -- neither takes effect until the frame ends. Running
 # all 45 pairs in one call therefore left ~90 live Niagara systems simulating in the level at once,
-# and the results were contaminated: NS_Spawn_Ground_Root was reported as "emitter set differs" and,
-# re-measured on its own, has the identical 9 emitters on both sides.
+# and the results were contaminated.
 #
-# So the loop lives in the caller, one pair per call, and the frames between calls are what actually
-# releases the previous pair. State survives because the bridge interpreter is persistent.
+# Measuring one PAIR per call was not enough, and believing it was cost a long detour. It still put
+# both sides of the pair in one exec, so the original was still simulating while the mirror was
+# measured. That produced 11 "differ" verdicts -- all 10 N_MagicRuneCast_* and Teleport_Root -- for
+# systems that are in fact identical: measured one system per call, N_MagicRuneCast_1 gives
+# MainRune 24 / SecondRune 24 on BOTH sides, and Teleport_Root agrees on all 8 emitters. An entire
+# "rebuilding in place leaves an emitter dead" investigation was chasing this artefact.
+#
+# Emitters that spawn nothing are what makes it visible: a zero-particle emitter is listed
+# inconsistently by get_emitter_names(), so the contamination surfaces as "emitter set differs"
+# rather than as a count that is merely wrong.
+#
+# So one system per call: side A, then side B, and the frame between the two calls is what releases
+# side A. State survives because the bridge interpreter is persistent.
 #
 #     python .claude/skills/unreal-bridge/scripts/bridge.py --no-preflight exec-file <this file>
-#     ...then, per index i:  exec "l3_step(i)"
+#     ...then, per index i:  exec "l3_side_a(i)"  and then  exec "l3_side_b(i)"
 #     ...finally:            exec "l3_report()"
 # --------------------------------------------------------------------------------------------
 
 L3_PAIRS = []
 L3_ROWS = []
+L3_PENDING = {}
 
 
 def l3_begin():
     """Discovers the pairs and clears any previous run. Returns how many there are."""
-    global L3_PAIRS, L3_ROWS
+    global L3_PAIRS, L3_ROWS, L3_PENDING
     L3_PAIRS = sorted(_iter_mirror_pairs())
     L3_ROWS = []
+    L3_PENDING = {}
     return len(L3_PAIRS)
 
 
-def l3_step(index):
-    """Measures one pair. Prints the verdict so the caller sees progress."""
-    original, mirror = L3_PAIRS[index]
-    verdict = _compare(_counts_per_frame(original), _counts_per_frame(mirror))
+def l3_side_a(index):
+    """Measures the original. Every other side MUST be a separate call -- see the note above."""
+    original, _ = L3_PAIRS[index]
+    L3_PENDING[index] = {"a1": _counts_per_frame(original)}
+    return f"{index + 1}/{len(L3_PAIRS)} a1"
+
+
+def l3_side_b(index):
+    """Measures the mirror."""
+    _, mirror = L3_PAIRS[index]
+    L3_PENDING.setdefault(index, {})["b"] = _counts_per_frame(mirror)
+    return f"{index + 1}/{len(L3_PAIRS)} b"
+
+
+def l3_side_c(index):
+    """Measures the original a SECOND time, and that control is what decides the verdict.
+
+    A system that uses randomness without Determinism does not replay the same way twice, so
+    comparing it against its mirror answers a question it cannot answer. Eleven systems here are
+    like that -- Up_Root and Magic_Explosion disagree with THEMSELVES beyond a frame shift -- and
+    without this control they were reported as mirror differences.
+    """
+    original, _ = L3_PAIRS[index]
+    captured = L3_PENDING.pop(index, {})
+    control = _compare(captured.get("a1"), _counts_per_frame(original))
+
+    if control != "exact":
+        verdict = "nondeterministic (the original differs from itself)"
+    else:
+        verdict = _compare(captured.get("a1"), captured.get("b"))
+
     L3_ROWS.append((original.rsplit("/", 1)[-1], verdict))
-    print(f"L3 {index + 1}/{len(L3_PAIRS)} {verdict:<44} {original}")
+    print(f"L3 {index + 1}/{len(L3_PAIRS)} {verdict:<50} {original}")
     return verdict
 
 
@@ -199,21 +248,27 @@ def l3_report():
     """Writes the markdown table and returns the summary line."""
     exact = sum(1 for _, v in L3_ROWS if v == "exact")
     phased = sum(1 for _, v in L3_ROWS if v == "phased")
-    failed = len(L3_ROWS) - exact - phased
+    undecidable = sum(1 for _, v in L3_ROWS if v.startswith("nondeterministic"))
+    failed = len(L3_ROWS) - exact - phased - undecidable
 
     out = os.path.join(unreal.Paths.project_saved_dir(), "DreamFX", "l3-report.md")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as handle:
         handle.write(f"# L3 runtime equivalence\n\n{FRAMES} frames at {DELTA:.4f}s, fixed step.\n")
         handle.write("One pair per editor frame, so a pair is never measured alongside another.\n\n")
-        handle.write(f"**{exact} exact, {phased} phase-shifted, {failed} differ** over {len(L3_ROWS)} pair(s).\n\n")
+        handle.write(f"**{exact} exact, {phased} phase-shifted, {failed} differ, "
+                     f"{undecidable} undecidable** over {len(L3_ROWS)} pair(s).\n\n")
+        handle.write("Undecidable means the original does not replay the same way twice, so the "
+                     "mirror cannot be judged against it -- not that the two disagree.\n\n")
         handle.write("| asset | verdict |\n| --- | --- |\n")
         for name, verdict in L3_ROWS:
             handle.write(f"| `{name}` | {verdict} |\n")
 
-    summary = f"=== L3: {exact} exact, {phased} phased, {failed} differ over {len(L3_ROWS)} pair(s) -> {out} ==="
+    summary = (f"=== L3: {exact} exact, {phased} phased, {failed} differ, {undecidable} undecidable "
+               f"over {len(L3_ROWS)} pair(s) -> {out} ===")
     print(summary)
     return summary
 
 
-print(f"l3 harness loaded: {l3_begin()} pair(s). Call l3_step(i) per pair, then l3_report().")
+print(f"l3 harness loaded: {l3_begin()} pair(s). "
+      "Per pair call l3_side_a(i), l3_side_b(i), l3_side_c(i) -- separate calls -- then l3_report().")
