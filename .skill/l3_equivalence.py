@@ -22,11 +22,19 @@ A pair that is `phased` but not `exact` is reported separately rather than as a 
 the two agree on what they simulate and disagree on when, which is worth a look but is not the
 same defect as a mirror that spawns nothing.
 
-Run inside the editor (GPU emitters have no simulation under a commandlet's null RHI):
+Run inside the editor -- a commandlet's null RHI does not simulate at all. Load the harness, then
+step it one pair per call (see the note above l3_begin for why the loop cannot be internal):
 
-    py "Plugins/DreamFX/.skill/l3_equivalence.py"
+    B=.claude/skills/unreal-bridge/scripts/bridge.py
+    python $B --no-preflight exec-file "Plugins/DreamFX/.skill/l3_equivalence.py"
+    for i in $(seq 0 44); do python $B --no-preflight exec "l3_step($i)"; done
+    python $B --no-preflight exec "l3_report()"
 
-Writes a markdown table to Saved/DreamFX/l3-report.md and prints the summary.
+GPU emitters report zero here even in the editor -- there is no readback of their particle buffer on
+this path. That is symmetric between the two sides of every pair, so it costs coverage, not
+correctness: a GPU-only difference is invisible to this check rather than misreported by it.
+
+Writes a markdown table to Saved/DreamFX/l3-report.md.
 """
 
 import os
@@ -35,8 +43,12 @@ import unreal
 FRAMES = 24
 DELTA = 1.0 / 30.0
 
-# Mirrors are exported into /Game/Decompiled/<original path>, so a pair is found by prefixing.
-MIRROR_ROOT = "/Game/Decompiled"
+# A mirror is <Mount>/Decompiled/<the original's own path below its mount point>, so the pair is
+# recovered by deleting that one segment. Scanning /Game alone would have missed 16 of 45 -- the
+# HairStrands, VRM4U, Water and DreamFX packs all mirror inside their own mount.
+MIRROR_SEGMENT = "/Decompiled/"
+
+NIAGARA_SYSTEM_CLASS = unreal.TopLevelAssetPath("/Script/Niagara", "NiagaraSystem")
 
 
 def _iter_mirror_pairs():
@@ -44,15 +56,15 @@ def _iter_mirror_pairs():
     registry = unreal.AssetRegistryHelpers.get_asset_registry()
     registry.wait_for_completion()
 
-    for asset in registry.get_assets_by_path(MIRROR_ROOT, recursive=True):
+    # By class rather than by path: the class index is the cheap way to reach every mount at once,
+    # where get_assets_by_path would have to be called per mount point and told each one's name.
+    for asset in registry.get_assets_by_class(NIAGARA_SYSTEM_CLASS, search_sub_classes=False):
         mirror_path = str(asset.package_name)
-        if str(asset.asset_class_path.asset_name) != "NiagaraSystem":
+        index = mirror_path.find(MIRROR_SEGMENT)
+        if index == -1:
             continue
 
-        # /Game/Decompiled/Foo/Bar -> /Game/Foo/Bar. The namespace mirrors the original's own
-        # path below its mount point, which is what makes this recoverable at all.
-        tail = mirror_path[len(MIRROR_ROOT) + 1:]
-        original_path = "/Game/" + tail
+        original_path = mirror_path[:index] + "/" + mirror_path[index + len(MIRROR_SEGMENT):]
 
         # DoesAssetExist rather than the registry's GetAssetByObjectPath: that one took an FName in
         # UE4 and an FSoftObjectPath now, so which overload Python binds to depends on the version.
@@ -82,24 +94,33 @@ def _counts_per_frame(system_path):
     if component is None:
         return None
 
+    # The cache has to exist first. CaptureCurrentFrameImmediate opens with
+    # `if (SimCache != nullptr && NiagaraComponent != nullptr)` and otherwise does nothing at all,
+    # so passing None is a silent no-op that reports every system as having no particles.
+    cache = unreal.NiagaraSimCacheFunctionLibrary.create_niagara_sim_cache(world)
+
     series = {}
     try:
         for _ in range(FRAMES):
-            # The out-parameter comes back in the tuple, so the cache to read is the second
-            # element and not the one passed in -- passing None for the first argument lets the
-            # library allocate it.
-            ok, cache = unreal.NiagaraSimCacheFunctionLibrary.capture_niagara_sim_cache_immediate(
-                None, unreal.NiagaraSimCacheCreateParameters(), component,
+            # Python collapses the bool return and the out-parameter into one value, so this is the
+            # cache back again (or None) and not a success flag -- the frame count is what says
+            # whether anything was written. Each call is a fresh BeginWrite/EndWrite pair, so the
+            # frame just captured is always index 0.
+            captured = unreal.NiagaraSimCacheFunctionLibrary.capture_niagara_sim_cache_immediate(
+                cache, unreal.NiagaraSimCacheCreateParameters(), component,
                 advance_simulation=True, advance_delta_time=DELTA)
-            if not ok or cache is None or cache.get_num_frames() == 0:
+            if captured is None or captured.get_num_frames() == 0:
                 continue
-            for emitter in cache.get_emitter_names():
-                positions = cache.read_position_attribute(
+            for emitter in captured.get_emitter_names():
+                positions = captured.read_position_attribute(
                     attribute_name="Position", emitter_name=emitter, frame_index=0)
                 series.setdefault(str(emitter), []).append(len(positions))
     finally:
         component.deactivate()
-        component.destroy_component()
+        # DestroyComponent takes the caller: "may not be used to destroy a component that is owned
+        # by an actor unless the owning actor is calling the function". Spawning into the editor
+        # world attaches to the level's WorldSettings, so that is the owner to name.
+        component.destroy_component(component.get_owner())
 
     return series
 
@@ -135,27 +156,64 @@ def _compare(left, right):
     return "phased"
 
 
-def main():
-    rows = []
-    for original, mirror in sorted(_iter_mirror_pairs()):
-        verdict = _compare(_counts_per_frame(original), _counts_per_frame(mirror))
-        rows.append((original.rsplit("/", 1)[-1], verdict))
-        unreal.log(f"L3 {verdict:<40} {original}")
+# --------------------------------------------------------------------------------------------
+# Driving this one pair at a time is not a style choice.
+#
+# Every bridge exec runs to completion on the GameThread, so no frame boundary occurs inside one.
+# DestroyComponent only *marks* a component for destruction and CollectGarbage is documented as
+# "queued and happen at the end of the frame" -- neither takes effect until the frame ends. Running
+# all 45 pairs in one call therefore left ~90 live Niagara systems simulating in the level at once,
+# and the results were contaminated: NS_Spawn_Ground_Root was reported as "emitter set differs" and,
+# re-measured on its own, has the identical 9 emitters on both sides.
+#
+# So the loop lives in the caller, one pair per call, and the frames between calls are what actually
+# releases the previous pair. State survives because the bridge interpreter is persistent.
+#
+#     python .claude/skills/unreal-bridge/scripts/bridge.py --no-preflight exec-file <this file>
+#     ...then, per index i:  exec "l3_step(i)"
+#     ...finally:            exec "l3_report()"
+# --------------------------------------------------------------------------------------------
 
-    exact = sum(1 for _, v in rows if v == "exact")
-    phased = sum(1 for _, v in rows if v == "phased")
-    failed = len(rows) - exact - phased
+L3_PAIRS = []
+L3_ROWS = []
+
+
+def l3_begin():
+    """Discovers the pairs and clears any previous run. Returns how many there are."""
+    global L3_PAIRS, L3_ROWS
+    L3_PAIRS = sorted(_iter_mirror_pairs())
+    L3_ROWS = []
+    return len(L3_PAIRS)
+
+
+def l3_step(index):
+    """Measures one pair. Prints the verdict so the caller sees progress."""
+    original, mirror = L3_PAIRS[index]
+    verdict = _compare(_counts_per_frame(original), _counts_per_frame(mirror))
+    L3_ROWS.append((original.rsplit("/", 1)[-1], verdict))
+    print(f"L3 {index + 1}/{len(L3_PAIRS)} {verdict:<44} {original}")
+    return verdict
+
+
+def l3_report():
+    """Writes the markdown table and returns the summary line."""
+    exact = sum(1 for _, v in L3_ROWS if v == "exact")
+    phased = sum(1 for _, v in L3_ROWS if v == "phased")
+    failed = len(L3_ROWS) - exact - phased
 
     out = os.path.join(unreal.Paths.project_saved_dir(), "DreamFX", "l3-report.md")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as handle:
-        handle.write(f"# L3 runtime equivalence\n\n{FRAMES} frames at {DELTA:.4f}s, fixed step.\n\n")
-        handle.write(f"**{exact} exact, {phased} phase-shifted, {failed} differ** over {len(rows)} pair(s).\n\n")
+        handle.write(f"# L3 runtime equivalence\n\n{FRAMES} frames at {DELTA:.4f}s, fixed step.\n")
+        handle.write("One pair per editor frame, so a pair is never measured alongside another.\n\n")
+        handle.write(f"**{exact} exact, {phased} phase-shifted, {failed} differ** over {len(L3_ROWS)} pair(s).\n\n")
         handle.write("| asset | verdict |\n| --- | --- |\n")
-        for name, verdict in rows:
+        for name, verdict in L3_ROWS:
             handle.write(f"| `{name}` | {verdict} |\n")
 
-    unreal.log(f"=== L3: {exact} exact, {phased} phased, {failed} differ over {len(rows)} pair(s) -> {out} ===")
+    summary = f"=== L3: {exact} exact, {phased} phased, {failed} differ over {len(L3_ROWS)} pair(s) -> {out} ==="
+    print(summary)
+    return summary
 
 
-main()
+print(f"l3 harness loaded: {l3_begin()} pair(s). Call l3_step(i) per pair, then l3_report().")
