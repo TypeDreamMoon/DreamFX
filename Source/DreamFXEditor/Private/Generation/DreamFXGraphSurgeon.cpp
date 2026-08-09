@@ -259,9 +259,9 @@ namespace UE::DreamFX::Editor
 				ParameterToReferencesProperty->ContainerPtrToValuePtr<void>(&Graph));
 			if (References.FindValueFromHash(&Variable) == nullptr)
 			{
-				// The exported constructor for this struct takes the flag, but it is not inline and the
-				// struct carries no export macro, so it is default-constructed and the flag is written
-				// through its own UPROPERTY.
+				// The constructor that takes this flag is declared but not exported -- its body is in the
+				// .cpp and the struct carries no export macro -- so the struct is default-constructed
+				// (that one is `= default`, and inline) and the flag is written through its UPROPERTY.
 				FNiagaraGraphParameterReferenceCollection Collection;
 				CreatedByUserProperty->SetPropertyValue_InContainer(&Collection, true);
 				References.AddPair(&Variable, &Collection);

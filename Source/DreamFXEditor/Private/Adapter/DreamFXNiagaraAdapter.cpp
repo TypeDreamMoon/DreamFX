@@ -258,6 +258,93 @@ namespace UE::DreamFX::Editor
 			EStructuralKind Kind = EStructuralKind::Unrefreshed;
 		};
 
+		/**
+		 * Rewrites the `{"refPath": "..."}` spelling of an object reference to the bare path string,
+		 * throughout a property JSON blob.
+		 *
+		 * UE 5.8.1 replaced the external edit API's property importer: 5.8.0 called
+		 * `UToolsetLibrary::SetObjectProperties(..., EBypassContainerCheck::Yes)`, 5.8.1 calls
+		 * `FJsonObjectConverter::JsonObjectToUStruct` directly. The exporter was not changed with it, so
+		 * the engine now emits object references in a shape its own importer rejects, and every property
+		 * that holds one fails to apply -- a mesh renderer's `Meshes`, an audio player's `SoundToPlay`.
+		 * The failure is per-object and total: one bad reference fails the whole blob.
+		 *
+		 * Measured rather than guessed: `[]` imports, `[{"scale":{...}}]` imports, and
+		 * `[{"mesh":{"refPath":"..."}}]` does not while `[{"mesh":"..."}]` does.
+		 *
+		 * This runs on the way into the engine and not on the way out, so the exported text keeps the
+		 * engine's own spelling. When Epic fixes the importer this function is the only thing to delete.
+		 */
+		TSharedPtr<FJsonValue> RewriteObjectReferences(const TSharedPtr<FJsonValue>& Value)
+		{
+			if (!Value.IsValid())
+			{
+				return Value;
+			}
+
+			if (Value->Type == EJson::Object)
+			{
+				const TSharedPtr<FJsonObject> Object = Value->AsObject();
+
+				// Exactly one field, named refPath, holding a string: that shape is the exporter's, not
+				// something a Niagara property struct declares, so there is nothing else it could be.
+				if (Object->Values.Num() == 1)
+				{
+					if (const TSharedPtr<FJsonValue>* RefPath = Object->Values.Find(TEXT("refPath")))
+					{
+						if ((*RefPath)->Type == EJson::String)
+						{
+							return MakeShared<FJsonValueString>((*RefPath)->AsString());
+						}
+					}
+				}
+
+				const TSharedRef<FJsonObject> Rewritten = MakeShared<FJsonObject>();
+				for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Object->Values)
+				{
+					Rewritten->SetField(Field.Key, RewriteObjectReferences(Field.Value));
+				}
+				return MakeShared<FJsonValueObject>(Rewritten);
+			}
+
+			if (Value->Type == EJson::Array)
+			{
+				TArray<TSharedPtr<FJsonValue>> Rewritten;
+				for (const TSharedPtr<FJsonValue>& Element : Value->AsArray())
+				{
+					Rewritten.Add(RewriteObjectReferences(Element));
+				}
+				return MakeShared<FJsonValueArray>(Rewritten);
+			}
+
+			return Value;
+		}
+
+		/** The blob as the engine's importer can read it. Returns the input unchanged if it will not parse. */
+		FString NormalizeObjectReferences(const FString& PropertiesJson)
+		{
+			if (PropertiesJson.IsEmpty())
+			{
+				return PropertiesJson;
+			}
+
+			TSharedPtr<FJsonObject> Parsed;
+			const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PropertiesJson);
+			if (!FJsonSerializer::Deserialize(Reader, Parsed) || !Parsed.IsValid())
+			{
+				// Not our JSON to fix. Let the engine report whatever it makes of it.
+				return PropertiesJson;
+			}
+
+			const TSharedPtr<FJsonValue> Rewritten =
+				RewriteObjectReferences(MakeShared<FJsonValueObject>(Parsed));
+
+			FString Out;
+			const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
+			FJsonSerializer::Serialize(Rewritten->AsObject().ToSharedRef(), Writer);
+			return Out;
+		}
+
 		FNiagaraExt_StackItemReference ToReference(const FStackAddress& Address)
 		{
 			FNiagaraExt_StackItemReference Reference(Address.System, Address.EmitterName, Address.ScriptName, Address.ModuleName);
@@ -313,7 +400,7 @@ namespace UE::DreamFX::Editor
 			case EInputValueMode::DataInterface:
 			{
 				FNiagaraExt_StackInputData_DataInterface& Data = OutValue.InitializeAs<FNiagaraExt_StackInputData_DataInterface>();
-				Data.PropertyValues = Value.DataInterfaceJson;
+				Data.PropertyValues = NormalizeObjectReferences(Value.DataInterfaceJson);
 				return true;
 			}
 
@@ -1772,7 +1859,7 @@ namespace UE::DreamFX::Editor
 		FEditContext ContextHolder(RendererAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_RendererData Data;
-		Data.PropertyValues = PropertiesJson;
+		Data.PropertyValues = NormalizeObjectReferences(PropertiesJson);
 		UNiagaraExternalEditUtilities::SetRendererData(ToReference(RendererAddress), Data, Context);
 		return Drain(Context, OutErrors);
 	}
@@ -2004,7 +2091,7 @@ namespace UE::DreamFX::Editor
 		FEditContext ContextHolder(EmitterAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_EmitterData Data;
-		Data.PropertyValues = PropertiesJson;
+		Data.PropertyValues = NormalizeObjectReferences(PropertiesJson);
 		UNiagaraExternalEditUtilities::SetEmitterData(ToReference(EmitterAddress), Data, Context);
 		return Drain(Context, OutErrors);
 	}
@@ -2020,7 +2107,7 @@ namespace UE::DreamFX::Editor
 		FEditContext ContextHolder(System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		FNiagaraExt_SystemData Data;
-		Data.PropertyValues = PropertiesJson;
+		Data.PropertyValues = NormalizeObjectReferences(PropertiesJson);
 		UNiagaraExternalEditUtilities::SetSystemData(System, Data, Context);
 		return Drain(Context, OutErrors);
 	}
