@@ -46,24 +46,43 @@ ScaleSpriteSize(ScaleSpriteSizeMode = Uniform, UniformScaleFactor = ToonPulse(Fr
 
 ---
 
-## Generation is MoonEngine-only
+## Which engines can generate one
 
-Writing HLSL onto a Niagara custom node needs `UNiagaraNodeCustomHlsl::SetCustomHlsl`, which a stock
-engine does not export. MoonEngine adds an export macro to that declaration and three others;
-`DreamFXEditor.Build.cs` probes the engine headers for all of them and defines
+Writing HLSL onto a Niagara custom node needs `UNiagaraNodeCustomHlsl::SetCustomHlsl`, and building
+the graph around it needs four more declarations. MoonEngine puts an export macro on all five; a
+stock engine exports none of them. `DreamFXEditor.Build.cs` probes the engine headers and defines
 `DREAMFX_HAS_CUSTOMHLSL_WRITE` accordingly.
 
-**The product is not limited — only the making of it.** A generated module is an ordinary
-`UNiagaraScript`: a prebuilt engine loads it, references it from a `.dfs`, cooks it and runs it
-normally. The workflow is *generate on MoonEngine, commit the asset, everyone else consumes it.*
+That is no longer the end of the story, because *exported* and *reachable* are not the same thing.
+Public data members need no export macro, public virtuals dispatch through the vtable, and a private
+field that is a `UPROPERTY` can be written by name. Every behaviour behind those five declarations
+turned out to be reachable that way, so there are two backends and three outcomes:
 
-On an engine without the exports:
+| | When | Behaviour |
+| --- | --- | --- |
+| **direct** | the engine exports the five declarations | calls them; this is MoonEngine |
+| **reflection** | it does not, but the shapes it depends on all check out | rebuilds each operation from the public surface |
+| **degraded** | a shape it depends on has moved | refuses to generate, and says which one |
+
+The reflection backend is verified against the direct one rather than assumed equivalent: the same
+`.dfm` built both ways reads back with a byte-identical schema, and that holds across engines —
+a module generated on stock UE 5.8 matches the same module generated on MoonEngine.
+
+`-DreamFXForceReflectionBackend` (or `dfx.ps1 -ForceReflectionBackend`) selects the reflection
+backend on an engine that does not need it, which is how the two are diffed on one machine.
+
+**The product was never the limited part.** A generated module is an ordinary `UNiagaraScript`: any
+engine loads it, references it from a `.dfs`, cooks it and runs it. *Generate anywhere it works,
+commit the asset, everyone consumes it* — and on a team with MoonEngine, generating there stays the
+recommended path simply because it is the one the whole corpus is verified against.
+
+When neither backend can run:
 
 | Situation | What happens |
 | --- | --- |
 | asset committed and matching the source | build skips it, CI stays green |
-| source edited without regenerating | **DFX5107** — "rebuild the module on MoonEngine" |
-| no asset at all | **DFX5100** — cannot generate here |
+| source edited without regenerating | **DFX5107** — regenerate where a backend runs |
+| no asset at all | **DFX5100** — names the check that failed |
 
 The provenance check runs either way; only the remedy differs.
 

@@ -682,8 +682,11 @@ namespace UE::DreamFX::Editor
 		// Reason names the specific check that failed. Saying "unsupported engine" instead would leave
 		// whoever hits this with nothing to act on, and the whole point of the self-check is that the
 		// backend knows exactly which assumption broke.
+		// Deliberately says nothing about what this engine exports. The backend can also be selected by
+		// hand on an engine that exports everything, and claiming otherwise there would send whoever
+		// reads this looking in the wrong place.
 		return FString::Printf(
-			TEXT("this engine exports none of the Niagara declarations a .dfm needs, and the reflection backend that stands in for them could not confirm the shapes it depends on: %s. Generate the module on MoonEngine and commit the asset -- any engine loads, references and cooks it normally. Until then, use an inline hlsl { } expression or an existing dynamic input asset."),
+			TEXT("the graph backend that writes a .dfm could not confirm the engine shapes it depends on: %s. Generate the module on an engine where it can -- MoonEngine always qualifies -- and commit the asset; any engine loads, references and cooks it normally. Until then, use an inline hlsl { } expression or an existing dynamic input asset."),
 			*Reason);
 	}
 
