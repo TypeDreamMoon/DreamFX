@@ -112,6 +112,23 @@ namespace UE::DreamFX::Editor
 		const TMap<FName, FInputValue>* GetStackDefaults(UNiagaraScript* Module, EStackKind Stack,
 			const FGuid& VersionGuid, FString& OutError);
 
+		/**
+		 * The baseline a module has once the given static switches are set on it.
+		 *
+		 * An input's default can depend on a switch: EmitterState's LoopDuration reads 1.0 on a
+		 * pristine module and 5.0 once LoopBehavior is Once. Judging such an input against the
+		 * pristine baseline suppresses the authored 1.0 as "same as default", and the rebuild -- which
+		 * does set LoopBehavior -- then produces 5.0. That was 9 of the 10 remaining L1 mismatches.
+		 *
+		 * ONLY for non-switch inputs. A switch compared against a baseline that already has that
+		 * switch applied always matches, so it would suppress itself, the export would lose it, and
+		 * the rebuild's gated inputs would cease to exist -- which is exactly the "no input named
+		 * 'bUseMinDistance'" wreck a previous attempt at this produced. Switches keep the pristine
+		 * baseline; the caller is responsible for that split.
+		 */
+		const TMap<FName, FInputValue>* GetStackDefaultsForSwitches(UNiagaraScript* Module, EStackKind Stack,
+			TArrayView<const TPair<FName, FInputValue>> SwitchValues, const FGuid& VersionGuid, FString& OutError);
+
 		/** Property JSON a renderer class has when freshly added, for the same default-suppression job. */
 		const FString* GetRendererDefaults(UClass* RendererClass, FString& OutError);
 

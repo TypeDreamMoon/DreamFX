@@ -1558,10 +1558,51 @@ namespace UE::DreamFX::Editor
 				// R8: only inputs that differ from a pristine instance of the same module are
 				// printed. Without this every module dumps its entire input list.
 				FString DefaultsError;
-				const TMap<FName, FInputValue>* Defaults = (Module.Script && !Context.bIncludeDefaultedInputs)
-					? Modules.GetStackDefaults(Module.Script, StackKind,
-						bVersionDrifted ? LiveVersion.Guid : FGuid(), DefaultsError)
+				const FGuid DefaultsVersion = bVersionDrifted ? LiveVersion.Guid : FGuid();
+				const bool bWantDefaults = Module.Script && !Context.bIncludeDefaultedInputs;
+
+				// Two baselines, and which one an input is judged against decides whether this export
+				// can be rebuilt.
+				//
+				// An input's default can depend on a static switch -- EmitterState's LoopDuration is
+				// 1.0 pristine and 5.0 once LoopBehavior is Once -- so a non-switch input has to be
+				// compared against a module with this module's switches applied. Judged against the
+				// pristine baseline, an authored 1.0 looks like the default, gets dropped, and the
+				// rebuild (which does set LoopBehavior) produces 5.0. That was 9 of the 10 L1
+				// mismatches.
+				//
+				// A switch, though, must keep the pristine baseline. Compared against a baseline that
+				// already has it applied it always matches, so it would suppress itself; the export
+				// would lose the switch, the rebuild would never set it, and every input it gates
+				// would then not exist. That is the "no input named 'bUseMinDistance'" failure a
+				// previous attempt at this produced, 3921 dropped lines and 36 broken assets.
+				const TMap<FName, FInputValue>* PristineDefaults = bWantDefaults
+					? Modules.GetStackDefaults(Module.Script, StackKind, DefaultsVersion, DefaultsError)
 					: nullptr;
+
+				TArray<TPair<FName, FInputValue>> SwitchValues;
+				if (bWantDefaults)
+				{
+					for (const TTuple<FName, FInputValue>& Entry : Values)
+					{
+						const FInputInfo* Info = Module.FindInput(Entry.Get<0>());
+						if (Info != nullptr && Info->bStaticSwitch && Entry.Get<1>().IsSet())
+						{
+							SwitchValues.Emplace(Entry.Get<0>(), Entry.Get<1>());
+						}
+					}
+				}
+
+				const TMap<FName, FInputValue>* SwitchedDefaults = PristineDefaults;
+				if (bWantDefaults && SwitchValues.Num() > 0)
+				{
+					FString SwitchedError;
+					if (const TMap<FName, FInputValue>* Probed = Modules.GetStackDefaultsForSwitches(
+						Module.Script, StackKind, SwitchValues, DefaultsVersion, SwitchedError))
+					{
+						SwitchedDefaults = Probed;
+					}
+				}
 
 				// Switches first; see the same split in DynamicInputToSource.
 				TArray<FString> SwitchArguments;
@@ -1581,7 +1622,12 @@ namespace UE::DreamFX::Editor
 							continue;
 						}
 					}
-					if (Defaults != nullptr)
+					const FInputInfo* InputInfo = Module.FindInput(Entry.Get<0>());
+
+					// See the two-baseline note above: switches against pristine, everything else
+					// against a module carrying this module's switches.
+					const bool bIsSwitchInput = InputInfo != nullptr && InputInfo->bStaticSwitch;
+					if (const TMap<FName, FInputValue>* Defaults = bIsSwitchInput ? PristineDefaults : SwitchedDefaults)
 					{
 						if (const FInputValue* Default = Defaults->Find(Entry.Get<0>()))
 						{
@@ -1592,7 +1638,6 @@ namespace UE::DreamFX::Editor
 						}
 					}
 
-					const FInputInfo* InputInfo = Module.FindInput(Entry.Get<0>());
 					const FNiagaraTypeDefinition Type = InputInfo ? InputInfo->Type : FNiagaraTypeDefinition();
 
 					const FString InputSource = ValueToSource(Context,

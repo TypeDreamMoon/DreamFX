@@ -671,13 +671,23 @@ namespace UE::DreamFX::Editor
 	const TMap<FName, FInputValue>* FModuleLibrary::GetStackDefaults(UNiagaraScript* Module, EStackKind Stack,
 		const FGuid& VersionGuid, FString& OutError)
 	{
+		return GetStackDefaultsForSwitches(Module, Stack,
+			TArrayView<const TPair<FName, FInputValue>>(), VersionGuid, OutError);
+	}
+
+	const TMap<FName, FInputValue>* FModuleLibrary::GetStackDefaultsForSwitches(UNiagaraScript* Module,
+		EStackKind Stack, TArrayView<const TPair<FName, FInputValue>> SwitchValues,
+		const FGuid& VersionGuid, FString& OutError)
+	{
 		if (Module == nullptr)
 		{
 			OutError = TEXT("Cannot read the defaults of a null module.");
 			return nullptr;
 		}
 
-		const FString Key = MakeStackSchemaKey(Module, Stack, TArrayView<const TPair<FName, FInputValue>>(), VersionGuid);
+		// The switches are part of the identity of this baseline: two instances of one module with
+		// different switch values have different defaults, which is the whole reason this exists.
+		const FString Key = MakeStackSchemaKey(Module, Stack, SwitchValues, VersionGuid);
 		if (const TUniquePtr<TMap<FName, FInputValue>>* Cached = StackDefaultsCache.Find(Key))
 		{
 			return Cached->Get();
@@ -717,6 +727,20 @@ namespace UE::DreamFX::Editor
 				TArray<FString> RemoveErrors;
 				FNiagaraAdapter::RemoveModule(ModuleAddress, RemoveErrors);
 				return nullptr;
+			}
+		}
+
+		// Before the read, and in the caller's order: each write recompiles the module and changes
+		// what the next read reports. A refused write is logged, not fatal -- the switch may itself be
+		// hidden by another the source never set, and a coarser baseline only over-prints.
+		for (const TPair<FName, FInputValue>& Switch : SwitchValues)
+		{
+			Errors.Reset();
+			if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Switch.Key), Switch.Value, Errors))
+			{
+				UE_LOG(LogDreamFX, Verbose,
+					TEXT("Could not set static switch '%s' while probing the defaults of '%s': %s"),
+					*Switch.Key.ToString(), *Module->GetName(), *FString::Join(Errors, TEXT(" | ")));
 			}
 		}
 
