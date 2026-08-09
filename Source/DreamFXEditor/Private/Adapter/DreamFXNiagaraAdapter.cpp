@@ -878,7 +878,13 @@ namespace UE::DreamFX::Editor
 		GStats = FAdapterStats();
 		GOpSeconds.Reset();
 		GOpCounts.Reset();
+#if DREAMFX_HAS_NIAGARA_FAST_EDIT
+		// The accumulator is part of the MoonEngine addition, so the probe that gates the fast-edit
+		// calls has to gate the counters they feed too. Forcing the define off on MoonEngine does not
+		// catch this: the declaration is still in the header there, so it compiles either way. Only a
+		// build against an engine that genuinely lacks it fails, which is what found this.
 		FNiagaraExternalEditStepStats::Reset();
+#endif
 	}
 
 	void FNiagaraAdapter::ReportOperationTimings()
@@ -918,6 +924,7 @@ namespace UE::DreamFX::Editor
 
 		// The engine-side step accumulators (SETINPUT / SETLOCAL / INIT / REFRESHALL) — the
 		// breakdown INSIDE the operations above, from the same run.
+#if DREAMFX_HAS_NIAGARA_FAST_EDIT
 		TArray<FString> EngineSteps;
 		FNiagaraExternalEditStepStats::BuildReport(EngineSteps);
 		if (EngineSteps.Num() > 0)
@@ -928,6 +935,7 @@ namespace UE::DreamFX::Editor
 				UE_LOG(LogDreamFX, Display, TEXT("  %s"), *Line);
 			}
 		}
+#endif
 	}
 
 	FString FNiagaraAdapter::ReportStats()
