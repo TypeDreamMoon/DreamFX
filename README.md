@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `.dfs` | System：user 参数、system stack、emitter 列表 | `UNiagaraSystem` |
 | `.dfe` | 可复用 Emitter（被 `.dfs` 以 `from` 拷入，自身不生成资产） | —— |
-| `.dfm` | Module / Dynamic Input | `UNiagaraScript`（仅 MoonEngine 可生成，产物不受限——见下） |
+| `.dfm` | Module / Dynamic Input | `UNiagaraScript` |
 
 ## 快速开始
 
@@ -26,17 +26,18 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 | 能力 | 说明 |
 | --- | --- |
 | 文本 → Niagara 资产 | `.dfs` 全量重建，包路径与 user 变量名跨重建稳定（plan 4.5 身份契约） |
-| 诊断回映射 | 125 个 `DFXnnnn`，每条带文件、行、列 |
+| 诊断回映射 | 133 个 `DFXnnnn`，每条带文件、行、列 |
 | 全部值模式 | 字面量 / linked / enum / dynamic input（含嵌套链）/ `hlsl { }` / `curve { }` 带切线 |
 | Renderer | schema 驱动的通用属性赋值（L8），任意 renderer 类型无需专门语法；`Bind` 走 binding 自己的 setter |
 | 内联表达式 | L6 白名单内降为单个 HLSL 表达式 |
 | user 参数 | `Properties` 段，含资产与 DI 类型声明 |
-| `.dfm` 生成 | Module 支持多语句 body；DynamicInput 单表达式。**仅 MoonEngine** —— 见下 |
+| `.dfm` 生成 | Module 支持多语句 body；DynamicInput 单表达式。**stock 引擎同样能生成**：`FGraphSurgeon` 在引擎不导出那五个声明时用公开面重建同样的图手术，形状对不上就拒绝生成并点名。产物与直调路径 schema 逐行一致(含跨引擎) —— [Docs/language/dfm.md](Docs/language/dfm.md) |
 | 反编译 | 资产 → 源码，逐字节幂等；默认值抑制走探针基线。表达不了的东西**逐条写进文件头注释**，绝不静默丢 |
 | Decompiled 命名空间 | 导出件的 `Name=` 落 `Decompiled/<原目录>/<资产名>` ⇒ 重建的是镜像，**结构上碰不到原资产**。整棵 `DFX/Decompiled/` 因此是一等源码：存盘即重编、lint / build / CI 一视同仁（plan-v4 V1） |
 | 编辑器集成 | Tools 菜单 / 关卡工具栏 / Content Browser 右键（System 两态 + Emitter Export .dfe）/ Niagara 系统编辑器工具栏 / VSCode workspace；全部走既有管线，`-NoDreamFXEditor` 一键关掉 —— [Docs/tools/editor-integration.md](Docs/tools/editor-integration.md) |
 | 接管外来资产 | 右键 **Adopt**：反编译落到真源码根 → 重建 → 打戳 → 再导出逐字节比对。有丢失就拒绝，因为接管的意思是「文本从此是唯一真相」 |
 | 溯源戳 | 源 hash + 生成器版本 + 模块版本 GUID 清单（R7） |
+| `@版本` 选择 | 不只是记录：`@` 指定的版本会真的选中（模块与 dynamic input 都走 `ChangeScriptVersion` + `RefreshFromExternalChanges`，少了后者拿到的是半新半旧的引脚集）。跳过 Python 升级脚本是有意的 —— 所有输入紧接着从源码重写，remap 出来的东西会被立刻覆盖。R1b；该 API 在 stock 引擎同样导出，不依赖 MoonEngine |
 | 漂移检测 | `-Verify`：改了源没重建、手改了资产、依赖的模块换了版本，三种都报 |
 | lint | GPU 无 FixedBounds、spawn rate 无上限、用随机没开 Determinism 等 |
 | file watcher | 保存即重编；打开生成资产 + 保存文本 = 实时预览 |
@@ -44,19 +45,18 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 | 批量导出 / 镜像比对 | `dfx decompile-all -Path=...` 一次导出整个目录；`dfx mirror-diff` 拿镜像与原资产各自反编译逐行比对（L1）并编译镜像（L2） |
 | 安全改名 | `dfx rename`，保住 emitter handle 与 rapid iteration 别名（R4） |
 | CI gate | lint → build → verify → corpus 四步 |
-| 语料库 | 43 个 automation 测试：诊断码 + 行列、黄金拓扑、反编译幂等 |
+| 语料库 | 46 个 automation 测试：诊断码 + 行列、黄金拓扑、反编译幂等 |
 | 4 个 skill | `dream-fx-{create,verify,diagnose,decompile}` |
 
 ### 降级
 
 | 项 | 现状 | 原因 |
 | --- | --- | --- |
-| `.dfm` 生成 | 仅 MoonEngine | `UNiagaraNodeCustomHlsl::SetCustomHlsl` 等在 stock 引擎无导出宏。**产物不受限**：生成出的是标准 `UNiagaraScript`，任何引擎都能加载、引用、cook、运行。工作流是「MoonEngine 上生成并提交，其余只消费」。别处报 DFX5100 / DFX5107 |
+| `.dfm` 生成 | 引擎形状变了才降级 | 五个声明在 stock 引擎无导出宏，但**导出与可达是两回事** —— public 数据成员本就不需要导出宏，public virtual 走 vtable，剩下的私有字段都是 UPROPERTY。反射后端据此重建，启动自检确认每个依赖的形状；只有形状真的挪了才落 DFX5100 / DFX5107，且诊断点名是哪一项。**产物从来不受限**：生成出的是标准 `UNiagaraScript`，任何引擎都能加载、引用、cook、运行 |
 | `.dfm` 的 `[StaticSwitch]` | 降为普通输入 + DFX5102 | 档一把整个 body 塞进一个 CustomHlsl 节点，没有可供 switch 选择的分支 |
 | DI 参数配置 | 只声明不配置，注释保全 | 全库 8 处命中全在引擎插件内容（HairStrands / VRM4U / Water），项目自有内容 0 处 —— 等真有需求再做（plan §3.5） |
 | `#Region` | 只进文本 | 外部编辑 API 没有 stack note 读写函数 |
 | `[Group]` / `[SortPriority]` | 只进文本 + DFX5099 | user 变量结构体没有对应元数据字段 |
-| `@版本` | 只记录与校验 | API 无法选择版本：`AddModule` 只吃资产指针，拓扑结构体也不报版本（plan-v2 W3 探查结论） |
 | `MaterialParam` | 保留语法未实现 | 见 plan §7 |
 | Emitter 继承 | `from` 是拷贝不是继承（R3） | 真继承需要 merge manager，另立项 |
 

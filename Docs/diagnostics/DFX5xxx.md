@@ -14,7 +14,7 @@
 Stack '%s' has no Niagara script usage mapping.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1029`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1030`
 <!-- generated:end DFX5001 -->
 
 **Cause.** A stack kind with no Niagara script usage behind it. Reserved stacks (`Stage`, `OnEvent`) reach here if they get past DFX2012.
@@ -32,7 +32,7 @@ Stack '%s' has no Niagara script usage mapping.
 This system declares no emitters, so it will produce nothing.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1938`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1939`
 <!-- generated:end DFX5002 -->
 
 **Cause.** A system with no emitters compiles and produces nothing.
@@ -50,7 +50,7 @@ This system declares no emitters, so it will produce nothing.
 '%s' is not declared in this source, so its existing modules are left as-is: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2342`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2561`
 <!-- generated:end DFX5003 -->
 
 **Cause.** Declaring a stack means taking it over; a stack this source never mentions keeps whatever it had. `CreateNiagaraSystem` puts a `SystemState` in `SystemUpdate`, and clearing it wholesale would make every `.dfs` without an explicit `SystemUpdate` produce a system that never runs. Informational so the difference is visible rather than silent.
@@ -68,7 +68,7 @@ This system declares no emitters, so it will produce nothing.
 No Material was set, so the engine default was applied: %s. Write 'Material = \"...\";' to choose your own.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2443`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2672`
 <!-- generated:end DFX5004 -->
 
 **Cause.** A renderer with no `Material` gets the engine default, which is why an untextured effect still draws.
@@ -86,7 +86,7 @@ No Material was set, so the engine default was applied: %s. Write 'Material = \"
 SavePackage failed for '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1281`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1302`
 <!-- generated:end DFX5030 -->
 
 **Cause.** Writing the package failed -- read-only file, source control lock, or a path the process cannot write.
@@ -104,7 +104,7 @@ SavePackage failed for '%s'.
 'MaterialParam' is reserved syntax and is not implemented in v1 (plan section 7).
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1446`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1447`
 <!-- generated:end DFX5093 -->
 
 **Cause.** `MaterialParam` is reserved syntax (L8) with no implementation in v1.
@@ -122,7 +122,7 @@ SavePackage failed for '%s'.
 Only System documents can be generated right now; this file declares a %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2662`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2989`
 <!-- generated:end DFX5097 -->
 
 **Cause.** Only `.dfs` and `.dfm` produce assets. A `.dfe` is merged into its host by copy (R3) and has nothing of its own to generate.
@@ -140,7 +140,7 @@ Only System documents can be generated right now; this file declares a %s.
 Data interface parameter '%s' has a default value, which v1 does not apply. Feed it at runtime instead.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1701`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1702`
 <!-- generated:end DFX5098 -->
 
 **Cause.** A data interface parameter's default is not applied: v1 declares DI parameters and leaves the value to runtime (plan 3.5).
@@ -158,7 +158,7 @@ Data interface parameter '%s' has a default value, which v1 does not apply. Feed
 [Group] and [SortPriority] are kept in source only: the external edit API's user variable struct has no metadata fields to write them to.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1719`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1720`
 <!-- generated:end DFX5099 -->
 
 **Cause.** `[Group]` and `[SortPriority]` have nowhere to go: the external edit API's user variable struct carries name, type and description and no other metadata.
@@ -176,7 +176,7 @@ Data interface parameter '%s' has a default value, which v1 does not apply. Feed
 '%s' is a %s with no generated asset at '%s', and %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:700`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:717`
 <!-- generated:end DFX5100 -->
 
 **Cause.** This build cannot generate a `.dfm`, and no previously generated asset was found. Generation is enabled only where the engine exports a way to write HLSL onto a Niagara custom node -- MoonEngine, detected by a Build.cs probe (plan-v2 W1).
@@ -194,7 +194,7 @@ Data interface parameter '%s' has a default value, which v1 does not apply. Feed
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:593`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:599`
 <!-- generated:end DFX5101 -->
 
 **Cause.** The `Root="..."` on a `.dfm` does not name a mounted content root.
@@ -212,7 +212,7 @@ Data interface parameter '%s' has a default value, which v1 does not apply. Feed
 Input '%s' is marked [StaticSwitch]. Tier-one generation (plan 3.3) lowers the whole Body to a single custom HLSL node, which has no branch for a switch to select, so it is written as an ordinary input instead. The body reads it the same way; only the compile-time folding is lost.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:932`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:946`
 <!-- generated:end DFX5102 -->
 
 **Cause.** Tier-one generation (plan 3.3) puts the whole body in one custom HLSL node, which has no branch for a switch to select, so a `[StaticSwitch]` input becomes an ordinary one. Said out loud because silently downgrading a declared compile-time switch to a runtime value is the kind of difference that surfaces later as a performance question nobody can source.
@@ -230,7 +230,7 @@ Input '%s' is marked [StaticSwitch]. Tier-one generation (plan 3.3) lowers the w
 Package '%s' exists on disk but could not be loaded.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:623`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:629`
 <!-- generated:end DFX5103 -->
 
 **Cause.** The package exists on disk but would not load. Usually a partially written file or one held by another process.
@@ -248,7 +248,7 @@ Package '%s' exists on disk but could not be loaded.
 Package '%s' exists but holds no Niagara script named '%s'. Refusing to overwrite it.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:632`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:638`
 <!-- generated:end DFX5104 -->
 
 **Cause.** The target package exists and holds something other than the expected script. DreamFX refuses to overwrite it rather than replacing an unrelated asset.
@@ -266,7 +266,7 @@ Package '%s' exists but holds no Niagara script named '%s'. Refusing to overwrit
 Could not create package '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:980`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:994`
 <!-- generated:end DFX5105 -->
 
 **Cause.** The package could not be created -- usually an unmounted root or an invalid name.
@@ -284,7 +284,7 @@ Could not create package '%s'.
 Could not wire the module graph. The Niagara schema rejected a parameter map connection.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1070`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1100`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1114`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1197`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1214`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1226`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1084`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1109`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1118`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1132`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1209`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1218`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1235`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1247`
 <!-- generated:end DFX5106 -->
 
 **Cause.** The Niagara schema rejected a connection while building the module graph. A type mismatch between an input's declared type and the pin it feeds is the usual cause.
@@ -302,7 +302,7 @@ Could not wire the module graph. The Niagara schema rejected a parameter map con
 '%s' no longer matches the module asset at '%s', and this engine cannot regenerate it. Rebuild the module on MoonEngine and commit the updated asset; %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:717`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:734`
 <!-- generated:end DFX5107 -->
 
 **Cause.** The `.dfm` source no longer matches its committed asset, and this engine cannot regenerate it. Distinct from DFX5100 because the remedy differs: there is an asset, it is simply out of date (plan-v2 W1).
