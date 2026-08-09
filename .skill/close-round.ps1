@@ -1,38 +1,39 @@
 <#
 .SYNOPSIS
-    Everything the 2026-08-08 round still owes, in one run. Requires the editor CLOSED.
+    The three measurements that close out a round. Requires the editor CLOSED.
 
 .DESCRIPTION
-    Five changes landed after the last full measurement, and none of them are in the binary that
-    produced it. Reading the old numbers as if they still applied is how the last two wrong turns
-    started, so this re-establishes all of them together rather than one at a time:
+    Nothing here is new; the point is that all three run against the *same* binary. Reading a build
+    number taken before a fix next to an L1 number taken after it is how two of this project's wrong
+    turns started, so these go together or not at all:
 
-      * NiagaraFluids is now enabled, which closed all 23 gaps in NS_Spawn_Ninja_Root
-      * the engine fix that lets a data-interface user parameter be created at all
-      * the prune pass that drops user parameters the source no longer declares (UNVALIDATED --
-        this run is its first real test)
-      * the switch-aware defaults probe was reverted, so exports are back to the pristine baseline
-      * the evidence behind the last L1 diagnosis was taken with that reverted binary and is void
+      build -All -Force   every source rebuilt, so no asset is carrying an earlier binary's output
+      mirror-diff         L1, does a mirror re-export to the same text; L2, does it still compile
+      corpus              the automation tests
 
-    Steps 1-4 need the editor closed because they write packages: two processes saving the same
-    package means the second one silently wins. Step 5 needs the editor OPEN, so it is not run here
-    -- the script prints how to run it instead.
+    Steps 1 and 2 write packages, which is why the editor has to be closed: two processes saving the
+    same package means the second one silently wins. L3 is the opposite -- it needs the editor OPEN,
+    because a commandlet's null RHI does not simulate GPU emitters -- so it is not run here and the
+    script prints how to run it instead.
+
+    L1 and L2 answer different questions and a round is not closed on one of them. A mirror can
+    compile perfectly and still simulate differently, and only L3 sees that.
 
 .EXAMPLE
     ./.skill/close-round.ps1
-    ./.skill/close-round.ps1 -SkipTree    # just re-export Ninja_Root and build it
+
+.EXAMPLE
+    ./.skill/close-round.ps1 -SkipTree    # mirror-diff and corpus against whatever is already built
 #>
 [CmdletBinding()]
 param(
-    # Skip the whole-tree build and mirror-diff. Leaves step 1-2 and the corpus.
+    # Skip the rebuild. Only honest when nothing has changed since the last one.
     [switch]$SkipTree
 )
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $PSCommandPath
 $dfx = Join-Path $here 'dfx.ps1'
-$repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
-$ninjaSource = Join-Path $repoRoot 'DFX/Decompiled/Game/_LevelUpSpawn/NS/NS_Spawn_Ninja_Root.dfs'
 
 $editor = Get-Process UnrealEditor -ErrorAction SilentlyContinue
 if ($editor) {
@@ -46,34 +47,20 @@ function Step([string]$Title) {
     Write-Host "=== $Title ===" -ForegroundColor Cyan
 }
 
-# ---------------------------------------------------------------- 1. Ninja_Root, with Fluids on
-
-Step '1/4  Re-export NS_Spawn_Ninja_Root now that NiagaraFluids is enabled'
-
-# Verified read-only while the editor was open: 23 gaps -> 0, and the export grew 576 -> 724 lines
-# with the 19 Grid3D / SetFluidSourceAttributes modules that used to be dropped.
-& $dfx decompile '/Game/_LevelUpSpawn/NS/NS_Spawn_Ninja_Root' -Out $ninjaSource
-$gaps = @(Select-String -Path $ninjaSource -Pattern '^//   - ').Count
-Write-Host ("  gaps in the re-exported source: {0} (was 23)" -f $gaps)
-
-Step '2/4  Build it -- it used to fail on Grid3D_GAS_CONTROLS_SPAWN.Gravity being read before set'
-& $dfx build $ninjaSource -Force
-Write-Host ("  exit {0}" -f $LASTEXITCODE)
-
 if ($SkipTree) {
-    Step 'Skipping the tree (-SkipTree)'
+    Step 'Skipping the rebuild (-SkipTree)'
 }
 else {
-    Step '3/4  Whole tree, re-measured against every change since the last reading'
+    Step '1/3  build -All -Force'
     $watch = [Diagnostics.Stopwatch]::StartNew()
     & $dfx build -All -Force
-    Write-Host ("  build -All took {0:N1} min" -f $watch.Elapsed.TotalMinutes)
-
-    Step '4/4  mirror-diff -- L1 text, L2 compile'
-    & $dfx mirror-diff
+    Write-Host ("  took {0:N1} min" -f $watch.Elapsed.TotalMinutes)
 }
 
-Step 'Corpus'
+Step '2/3  mirror-diff -- L1 text, L2 compile'
+& $dfx mirror-diff
+
+Step '3/3  corpus'
 & $dfx corpus
 
 # ---------------------------------------------------------------- what still needs the editor
