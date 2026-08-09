@@ -1017,6 +1017,7 @@ namespace UE::DreamFX::Editor
 	{
 		FOpTimer OpTimer(TEXT("ClearScriptStack"));
 
+#if DREAMFX_HAS_NIAGARA_FAST_EDIT
 		// Same classification as RemoveModule: the engine refreshes the group it emptied before
 		// returning, so the context still describes the system accurately.
 		FEpochGuard Epoch(ScriptAddress.System, EStructuralKind::RefreshedInPlace);
@@ -1024,12 +1025,40 @@ namespace UE::DreamFX::Editor
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		UNiagaraExternalEditUtilities::ClearScriptStack(ToReference(ScriptAddress), Context);
 		return Drain(Context, OutErrors);
+#else
+		// Stock engine: no single-call clear, so remove the modules one at a time. This is the exact
+		// cost ClearScriptStack was added to remove -- the engine rebuilds the group after each
+		// removal, n times to reach a state that is empty either way -- and it runs on four stacks of
+		// every emitter of every asset. Correct, just slower.
+		//
+		// Back to front, because removing by name shifts nothing but removing by position would.
+		FScriptStackInfo Info;
+		if (!GetScriptStackInfo(ScriptAddress, Info, OutErrors))
+		{
+			return false;
+		}
+
+		bool bOk = true;
+		for (int32 Index = Info.Modules.Num() - 1; Index >= 0; --Index)
+		{
+			bOk &= RemoveModule(ScriptAddress.WithModule(Info.Modules[Index].ModuleName), OutErrors);
+		}
+		return bOk;
+#endif
 	}
 
 	bool FNiagaraAdapter::GetParameterDefaults(const FStackAddress& EmitterAddress,
 		TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("read: GetParameterDefaults"));
+
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+		// Stock engine: no reader for a graph parameter's default. Reporting none is honest rather
+		// than merely convenient -- the export then carries no Defaults block, which matches what the
+		// writer below can reproduce. An asset authored on MoonEngine WITH defaults round-trips
+		// lossily here, and that is the documented limit of the stock-engine path.
+		return true;
+#else
 		FEditContext ContextHolder(EmitterAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 
@@ -1048,6 +1077,7 @@ namespace UE::DreamFX::Editor
 			}
 		}
 		return Drain(Context, OutErrors);
+#endif
 	}
 
 	bool FNiagaraAdapter::SetParameterDefault(const FStackAddress& EmitterAddress,
@@ -1055,6 +1085,21 @@ namespace UE::DreamFX::Editor
 	{
 		FOpTimer OpTimer(TEXT("SetParameterDefault"));
 
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+		// Stock engine: the only functional casualty of this path, and worth stating exactly.
+		//
+		// Writing a parameter's default is how the generator turns a graph parameter created by a
+		// link write from FailIfPreviouslyNotSet into Value. Left on Fail, Niagara refuses to compile
+		// a read of it -- the DFX6001 this project spent a day on. There is no stock API that reaches
+		// UNiagaraScriptVariable::DefaultMode: UNiagaraGraph::AddParameter is the way in, and it
+		// carries no export macro on a stock engine.
+		//
+		// A no-op rather than an error, because whether it actually bites depends on the source: an
+		// asset whose reads are all of stock attributes never creates such a parameter. Sources that
+		// do will fail at the Niagara compile with a clear message, which is a better place to find
+		// out than a build-time refusal that stops assets that would have been fine.
+		return true;
+#else
 		// Structural: this creates the graph parameter when it is not there, and changes which pins
 		// the map-get node carries. Nothing in the engine refreshes for it, so the epoch ends.
 		FEpochGuard Epoch(EmitterAddress.System);
@@ -1074,6 +1119,7 @@ namespace UE::DreamFX::Editor
 
 		UNiagaraExternalEditUtilities::SetEmitterParameterDefault(ToReference(EmitterAddress), Entry, Context);
 		return Drain(Context, OutErrors);
+#endif
 	}
 
 	bool FNiagaraAdapter::SetParameterDefaults(const FStackAddress& EmitterAddress,
@@ -1083,6 +1129,11 @@ namespace UE::DreamFX::Editor
 		{
 			return true;
 		}
+
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+		// See SetParameterDefault: no stock way to write a graph parameter's default mode.
+		return true;
+#else
 
 		FOpTimer OpTimer(TEXT("SetParameterDefaults"));
 
@@ -1115,12 +1166,19 @@ namespace UE::DreamFX::Editor
 		}
 
 		return Drain(Context, OutErrors) && bOk;
+#endif
 	}
 
 	bool FNiagaraAdapter::CleanUpStaleParameters(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("CleanUpStaleParameters"));
 
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+		// Stock engine: hygiene only. What survives is a rapid-iteration parameter for a module the
+		// rebuilt stack no longer has -- it costs a little memory and shows up in the editor's
+		// parameter list, and it does not change what the system simulates.
+		return true;
+#else
 		// Structural: it removes parameters from the scripts the stack view models describe, so a
 		// context built before it no longer matches what is there.
 		FEpochGuard Epoch(EmitterAddress.System);
@@ -1128,6 +1186,7 @@ namespace UE::DreamFX::Editor
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		UNiagaraExternalEditUtilities::CleanUpStaleEmitterParameters(ToReference(EmitterAddress), Context);
 		return Drain(Context, OutErrors);
+#endif
 	}
 
 	bool FNiagaraAdapter::GetEmitterInfo(const FStackAddress& EmitterAddress, FEmitterInfo& OutInfo, TArray<FString>& OutErrors)
@@ -1460,8 +1519,14 @@ namespace UE::DreamFX::Editor
 		// Only the name is read below, and filling the rest walks every input on the module to build
 		// a topology nobody looks at -- 18 of this call's 62 ms. The generator learns a module's
 		// inputs from the schema, not from what it just added.
+#if DREAMFX_HAS_NIAGARA_FAST_EDIT
 		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context,
 			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly, bDeferStackRefresh);
+#else
+		// Stock engine: neither knob exists. The topology comes back fully populated and the stack
+		// refreshes on every add, so a stack of n modules pays n refreshes instead of one.
+		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context);
+#endif
 
 		OutModuleName = Topology.ModuleName;
 		if (!Drain(Context, OutErrors))
@@ -1480,6 +1545,11 @@ namespace UE::DreamFX::Editor
 	{
 		FOpTimer OpTimer(TEXT("RefreshScriptStack"));
 
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+		// Stock engine: nothing to settle. This call exists to pay, once, the refresh that a batch of
+		// deferred adds skipped -- and without bDeferStackRefresh every add already paid its own.
+		return true;
+#else
 		// The refresh IS the in-place refresh a batch of deferred adds owes: after it the shared
 		// context describes the stack again, so the epoch survives.
 		FEpochGuard Epoch(StackAddress.System, EStructuralKind::RefreshedInPlace);
@@ -1487,6 +1557,7 @@ namespace UE::DreamFX::Editor
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
 		UNiagaraExternalEditUtilities::RefreshScriptStack(ToReference(StackAddress), Context);
 		return Drain(Context, OutErrors);
+#endif
 	}
 
 	bool FNiagaraAdapter::RemoveModule(const FStackAddress& ModuleAddress, TArray<FString>& OutErrors)
@@ -1549,8 +1620,12 @@ namespace UE::DreamFX::Editor
 		FNiagaraExt_ModuleTopology Topology;
 
 		// Same as AddModule above: the name is all that is read.
+#if DREAMFX_HAS_NIAGARA_FAST_EDIT
 		UNiagaraExternalEditUtilities::AddSetParametersModule(ToReference(StackAddress), Parameters, Topology, Context,
 			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly, bDeferStackRefresh);
+#else
+		UNiagaraExternalEditUtilities::AddSetParametersModule(ToReference(StackAddress), Parameters, Topology, Context);
+#endif
 
 		OutModuleName = Topology.ModuleName;
 		if (!Drain(Context, OutErrors))
@@ -2136,6 +2211,7 @@ namespace UE::DreamFX::Editor
 	FNiagaraAdapter::FCompileSuppressionScope::FCompileSuppressionScope(UNiagaraSystem* InSystem)
 		: System(InSystem)
 	{
+#if DREAMFX_HAS_NIAGARA_FAST_EDIT
 		if (System != nullptr && !System->GetSuppressCompileRequests())
 		{
 			bOwns = true;
@@ -2145,14 +2221,23 @@ namespace UE::DreamFX::Editor
 			// of starting with one stray launch.
 			System->DeferRequestCompile();
 		}
+#else
+		// Stock engine: the scope becomes a no-op and every edit relaunches the system's compile.
+		// RequestCompile aborts whatever is queued and starts again, so all but the last are thrown
+		// away -- 260 of them, 8.3 s, on the worst system in this tree. Nothing is incorrect about it;
+		// the work is simply done and discarded.
+		(void)System;
+#endif
 	}
 
 	FNiagaraAdapter::FCompileSuppressionScope::~FCompileSuppressionScope()
 	{
+#if DREAMFX_HAS_NIAGARA_FAST_EDIT
 		if (bOwns)
 		{
 			System->SetSuppressCompileRequests(false);
 		}
+#endif
 	}
 
 	void FNiagaraAdapter::RequestCompileAsync(UNiagaraSystem* System)

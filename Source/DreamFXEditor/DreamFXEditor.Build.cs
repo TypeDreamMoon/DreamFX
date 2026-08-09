@@ -46,6 +46,59 @@ public class DreamFXEditor : ModuleRules
 	};
 
 	/// <summary>
+	/// The MoonEngine additions to Niagara's external-edit API.
+	///
+	/// Stock UE 5.8 already ships most of that API -- AddEmitter, AddModule, AddSetParametersModule,
+	/// GetModuleTopology, SetStackInputData and forty-odd others. What MoonEngine adds is a batch
+	/// story: clear a stack in one call rather than n, defer the per-add refresh to one at the end,
+	/// and stop the system relaunching a compile after every edit. Plus the parameter-default pair,
+	/// which is the only functional item in the list.
+	///
+	/// Probed together, for the same reason as RequiredExports: a partial match would compile and
+	/// then fail to link. The two optional *parameters* are probed as well -- AddModule without
+	/// bDeferStackRefresh still links, but silently refreshes per add, which is the cost this whole
+	/// define exists to avoid.
+	/// </summary>
+	private static readonly (string Header, string Pattern, string Symbol)[] FastEditExports =
+	{
+		(
+			"Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h",
+			@"static\s+void\s+ClearScriptStack\s*\(",
+			"UNiagaraExternalEditUtilities::ClearScriptStack"
+		),
+		(
+			"Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h",
+			@"static\s+void\s+RefreshScriptStack\s*\(",
+			"UNiagaraExternalEditUtilities::RefreshScriptStack"
+		),
+		(
+			"Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h",
+			@"static\s+void\s+GetEmitterParameterDefaults\s*\(",
+			"UNiagaraExternalEditUtilities::GetEmitterParameterDefaults"
+		),
+		(
+			"Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h",
+			@"static\s+void\s+SetEmitterParameterDefault\s*\(",
+			"UNiagaraExternalEditUtilities::SetEmitterParameterDefault"
+		),
+		(
+			"Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h",
+			@"static\s+void\s+CleanUpStaleEmitterParameters\s*\(",
+			"UNiagaraExternalEditUtilities::CleanUpStaleEmitterParameters"
+		),
+		(
+			"Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h",
+			@"AddModule\s*\([^)]*bDeferStackRefresh",
+			"UNiagaraExternalEditUtilities::AddModule(..., bDeferStackRefresh)"
+		),
+		(
+			"Plugins/FX/Niagara/Source/Niagara/Classes/NiagaraSystem.h",
+			@"void\s+SetSuppressCompileRequests\s*\(",
+			"UNiagaraSystem::SetSuppressCompileRequests"
+		)
+	};
+
+	/// <summary>
 	/// NiagaraEditor's private include directory, relative to the engine root.
 	///
 	/// UNiagaraNodeParameterMapGet lives there, and a module's inputs have to come through one: a
@@ -99,6 +152,14 @@ public class DreamFXEditor : ModuleRules
 		bool bHasCustomHlslWrite = ProbeCustomHlslWriteSupport();
 		PublicDefinitions.Add("DREAMFX_HAS_CUSTOMHLSL_WRITE=" + (bHasCustomHlslWrite ? "1" : "0"));
 
+		// The same bargain for the batch-edit API. Without it the adapter still does every operation,
+		// just the slow way the stock engine offers: clear a stack by removing its modules one at a
+		// time, let each add refresh the group, and let every edit relaunch the system's compile.
+		// Measured on this tree, that is the difference between 9.2 and roughly 17 minutes for all 55
+		// systems -- and a few seconds either way for the single-asset rebuild that is the normal edit.
+		bool bHasFastEdit = ProbeFastEditSupport();
+		PublicDefinitions.Add("DREAMFX_HAS_NIAGARA_FAST_EDIT=" + (bHasFastEdit ? "1" : "0"));
+
 		if (bHasCustomHlslWrite)
 		{
 			PrivateIncludePaths.Add(Path.Combine(EngineDirectory, NiagaraEditorPrivate));
@@ -107,6 +168,45 @@ public class DreamFXEditor : ModuleRules
 			// enabled configuration needs it, so a build without the exports gains no dependency.
 			PrivateDependencyModuleNames.Add("GraphEditor");
 		}
+	}
+
+	private bool ProbeFastEditSupport()
+	{
+		if (Environment.GetEnvironmentVariable("DREAMFX_FORCE_NO_FAST_EDIT") == "1")
+		{
+			// Same escape hatch as the .dfm probe: prove the stock-engine path builds and passes on a
+			// machine that does have the patched engine, without needing the other engine to hand.
+			//
+			// TOUCH THIS FILE WHEN YOU CHANGE THE VARIABLE. UBT tracks Build.cs by timestamp and does
+			// not know an environment variable fed a PublicDefinition, so flipping the variable alone
+			// leaves the cached makefile -- and the previous define -- in place. The tell is a build
+			// that finishes in a fraction of a second having compiled nothing, and the cost of missing
+			// it is an experiment that measured the binary it meant to replace. The log line below is
+			// the only proof that the flip took: no line, no flip.
+			Logger.LogInformation("DreamFX: Niagara fast-edit path disabled by DREAMFX_FORCE_NO_FAST_EDIT.");
+			return false;
+		}
+
+		foreach ((string Header, string Pattern, string Symbol) Required in FastEditExports)
+		{
+			string FullPath = Path.Combine(EngineDirectory, Required.Header.Replace('/', Path.DirectorySeparatorChar));
+			if (!File.Exists(FullPath))
+			{
+				Logger.LogInformation(
+					"DreamFX: Niagara fast-edit path disabled -- '{Header}' not found.", Required.Header);
+				return false;
+			}
+
+			if (!Regex.IsMatch(File.ReadAllText(FullPath), Required.Pattern))
+			{
+				Logger.LogInformation(
+					"DreamFX: Niagara fast-edit path disabled -- this engine has no {Symbol}.", Required.Symbol);
+				return false;
+			}
+		}
+
+		Logger.LogInformation("DreamFX: Niagara fast-edit path enabled (MoonEngine batch-edit API present).");
+		return true;
 	}
 
 	private bool ProbeCustomHlslWriteSupport()
