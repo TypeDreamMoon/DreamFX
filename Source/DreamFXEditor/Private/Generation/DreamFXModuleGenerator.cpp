@@ -13,23 +13,31 @@
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 
-#if DREAMFX_HAS_CUSTOMHLSL_WRITE
+// Every header here is public on both a stock engine and MoonEngine. The two parameter map node
+// classes are not, and neither are the five declarations this generator used to call directly; both
+// now live behind FGraphSurgeon, which is what lets one copy of the generation code serve both.
 #include "EdGraph/EdGraphSchema.h"
+#include "Generation/DreamFXGraphSurgeon.h"
 #include "NiagaraGraph.h"
 #include "NiagaraNodeCustomHlsl.h"
 #include "NiagaraNodeInput.h"
 #include "NiagaraNodeOutput.h"
-#include "NiagaraNodeParameterMapGet.h"
-#include "NiagaraNodeParameterMapSet.h"
 #include "NiagaraScriptSource.h"
 #include "NiagaraScriptVariable.h"
-#endif
 
 namespace UE::DreamFX::Editor
 {
 	namespace
 	{
-#if DREAMFX_HAS_CUSTOMHLSL_WRITE
+		/** The graph backend, chosen once: direct on MoonEngine, reflection on a stock engine. */
+		FGraphSurgeon* GetSurgeon(FString& OutUnavailableReason)
+		{
+			static FString CachedReason;
+			static TUniquePtr<FGraphSurgeon> Surgeon = FGraphSurgeon::Create(CachedReason);
+			OutUnavailableReason = CachedReason;
+			return Surgeon.Get();
+		}
+
 		/**
 		 * The `Usage = ...` spellings a .dfm may declare, and the script usage each maps to.
 		 *
@@ -580,8 +588,6 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
-#endif // DREAMFX_HAS_CUSTOMHLSL_WRITE
-
 		/** Where a .dfm's asset lives. Shared by both configurations, so the two agree on the path. */
 		bool ResolveTargetPath(const FDocument& Document, FDiagnosticSink& Diagnostics,
 			FString& OutFullAssetPath, FString& OutPackagePath, FString& OutAssetName)
@@ -661,16 +667,24 @@ namespace UE::DreamFX::Editor
 
 	bool FModuleGenerator::IsAvailable()
 	{
-#if DREAMFX_HAS_CUSTOMHLSL_WRITE
-		return true;
-#else
-		return false;
-#endif
+		FString Reason;
+		return GetSurgeon(Reason) != nullptr;
 	}
 
 	FString FModuleGenerator::DescribeUnavailability()
 	{
-		return TEXT("this build of DreamFX was compiled against an engine that does not export UNiagaraNodeCustomHlsl::SetCustomHlsl, so no HLSL can be written onto a Niagara custom node. Generation is enabled only on MoonEngine, where those declarations carry NIAGARAEDITOR_API (plan-v2 W1). Generate the module there and commit the asset -- a prebuilt engine loads, references and cooks it normally. Until then, use an inline hlsl { } expression or an existing dynamic input asset.");
+		FString Reason;
+		if (GetSurgeon(Reason) != nullptr)
+		{
+			return FString();
+		}
+
+		// Reason names the specific check that failed. Saying "unsupported engine" instead would leave
+		// whoever hits this with nothing to act on, and the whole point of the self-check is that the
+		// backend knows exactly which assumption broke.
+		return FString::Printf(
+			TEXT("this engine exports none of the Niagara declarations a .dfm needs, and the reflection backend that stands in for them could not confirm the shapes it depends on: %s. Generate the module on MoonEngine and commit the asset -- any engine loads, references and cooks it normally. Until then, use an inline hlsl { } expression or an existing dynamic input asset."),
+			*Reason);
 	}
 
 	FModuleGenerateResult FModuleGenerator::CheckWithoutGenerating(const FDocument& Document,
@@ -727,22 +741,19 @@ namespace UE::DreamFX::Editor
 		return Result;
 	}
 
-#if !DREAMFX_HAS_CUSTOMHLSL_WRITE
-
 	FModuleGenerateResult FModuleGenerator::Generate(const FDocument& Document, const FGenerateOptions& Options,
 		FDiagnosticSink& Diagnostics)
 	{
-		// Unreachable: FGenerator routes to CheckWithoutGenerating when IsAvailable() is false. Present
-		// so the two configurations differ by a define and nothing else.
-		(void)Options;
-		return CheckWithoutGenerating(Document, Diagnostics);
-	}
+		FString SurgeonUnavailable;
+		FGraphSurgeon* Surgeon = GetSurgeon(SurgeonUnavailable);
+		if (Surgeon == nullptr)
+		{
+			// State 3. FGenerator already routes here through IsAvailable(), so reaching this is not
+			// expected; it is here so that no path can arrive at the graph code without a backend.
+			(void)Options;
+			return CheckWithoutGenerating(Document, Diagnostics);
+		}
 
-#else
-
-	FModuleGenerateResult FModuleGenerator::Generate(const FDocument& Document, const FGenerateOptions& Options,
-		FDiagnosticSink& Diagnostics)
-	{
 		FModuleGenerateResult Result;
 		Diagnostics.SetFile(Document.SourceFilePath);
 
@@ -1051,18 +1062,18 @@ namespace UE::DreamFX::Editor
 		{
 			// Adds the map input and the typed output, and marks the node so the translator wraps the
 			// body as an assignment to that output.
-			HlslNode->InitAsCustomHlslDynamicInput(OutputType);
+			Surgeon->InitAsDynamicInput(*HlslNode, OutputType);
 		}
 		else
 		{
 			// The map passes straight through. Both pins carry the same name on purpose: the translator
 			// rewrites every parameter-map pin name to the map instance, so in and out resolve to the
 			// same `Context.Map` and the body's namespaced reads and writes land on it.
-			HlslNode->RequestNewTypedPin(EGPD_Input, FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("Map"));
-			HlslNode->RequestNewTypedPin(EGPD_Output, FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("Map"));
+			Surgeon->AddTypedPin(*HlslNode, EGPD_Input, FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("Map"));
+			Surgeon->AddTypedPin(*HlslNode, EGPD_Output, FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("Map"));
 		}
 
-		HlslNode->SetCustomHlsl(Hlsl);
+		Surgeon->SetCustomHlsl(*HlslNode, Hlsl);
 
 		const UEdGraphSchema* Schema = Graph->GetSchema();
 		if (Schema == nullptr || !Schema->TryCreateConnection(InputNode->GetOutputPin(0), HlslNode->GetInputPin(0)))
@@ -1086,14 +1097,18 @@ namespace UE::DreamFX::Editor
 		const int32 ReadCount = Inputs.Num() + Algo::CountIf(Attributes,
 			[](const FAttributeBinding& Binding) { return Binding.bRead; });
 
-		UNiagaraNodeParameterMapGet* MapGetNode = nullptr;
+		UNiagaraNode* MapGetNode = nullptr;
 		if (ReadCount > 0)
 		{
-			FGraphNodeCreator<UNiagaraNodeParameterMapGet> MapGetNodeCreator(*Graph);
-			MapGetNode = MapGetNodeCreator.CreateNode();
+			MapGetNode = Surgeon->CreateParameterMapGet(*Graph);
+			if (MapGetNode == nullptr)
+			{
+				Diagnostics.Error(TEXT("DFX5106"), Document.HeaderLocation,
+					TEXT("Could not wire the module graph. A parameter map get node could not be created."));
+				return Result;
+			}
 			MapGetNode->NodePosX = -200;
 			MapGetNode->NodePosY = 200;
-			MapGetNodeCreator.Finalize();
 
 			if (!Schema->TryCreateConnection(InputNode->GetOutputPin(0), MapGetNode->GetInputPin(0)))
 			{
@@ -1106,8 +1121,8 @@ namespace UE::DreamFX::Editor
 		auto WireRead = [&](const FNiagaraTypeDefinition& Type, const FName& MapName, const FName& PinName,
 			const FSourceLocation& Location, const FString& What) -> bool
 		{
-			UEdGraphPin* ReadPin = MapGetNode->RequestNewTypedPin(EGPD_Output, Type, MapName);
-			UEdGraphPin* FeedPin = HlslNode->RequestNewTypedPin(EGPD_Input, Type, PinName);
+			UEdGraphPin* ReadPin = Surgeon->AddTypedPin(*MapGetNode, EGPD_Output, Type, MapName);
+			UEdGraphPin* FeedPin = Surgeon->AddTypedPin(*HlslNode, EGPD_Input, Type, PinName);
 
 			if (ReadPin == nullptr || FeedPin == nullptr || !Schema->TryCreateConnection(ReadPin, FeedPin))
 			{
@@ -1137,8 +1152,7 @@ namespace UE::DreamFX::Editor
 			MetaData.bAdvancedDisplay = Input.bAdvanced;
 			MetaData.CreateNewGuid();
 
-			UNiagaraScriptVariable* ScriptVariable =
-				Graph->AddParameter(Variable, MetaData, /*bIsStaticSwitch=*/false, /*bNotifyChanged=*/false);
+			UNiagaraScriptVariable* ScriptVariable = Surgeon->AddParameter(*Graph, Variable, MetaData);
 			if (ScriptVariable == nullptr)
 			{
 				continue;
@@ -1186,11 +1200,15 @@ namespace UE::DreamFX::Editor
 
 		if (bHasWrites)
 		{
-			FGraphNodeCreator<UNiagaraNodeParameterMapSet> MapSetNodeCreator(*Graph);
-			UNiagaraNodeParameterMapSet* MapSetNode = MapSetNodeCreator.CreateNode();
+			UNiagaraNode* MapSetNode = Surgeon->CreateParameterMapSet(*Graph);
+			if (MapSetNode == nullptr)
+			{
+				Diagnostics.Error(TEXT("DFX5106"), Document.HeaderLocation,
+					TEXT("Could not wire the module graph. A parameter map set node could not be created."));
+				return Result;
+			}
 			MapSetNode->NodePosX = 200;
 			MapSetNode->NodePosY = 0;
-			MapSetNodeCreator.Finalize();
 
 			if (!Schema->TryCreateConnection(MapOutPin, MapSetNode->GetInputPin(0)))
 			{
@@ -1206,8 +1224,8 @@ namespace UE::DreamFX::Editor
 					continue;
 				}
 
-				UEdGraphPin* SourcePin = HlslNode->RequestNewTypedPin(EGPD_Output, Binding.Type, FName(*Binding.WritePin()));
-				UEdGraphPin* TargetPin = MapSetNode->RequestNewTypedPin(EGPD_Input, Binding.Type, FName(*Binding.FullName));
+				UEdGraphPin* SourcePin = Surgeon->AddTypedPin(*HlslNode, EGPD_Output, Binding.Type, FName(*Binding.WritePin()));
+				UEdGraphPin* TargetPin = Surgeon->AddTypedPin(*MapSetNode, EGPD_Input, Binding.Type, FName(*Binding.FullName));
 
 				if (SourcePin == nullptr || TargetPin == nullptr || !Schema->TryCreateConnection(SourcePin, TargetPin))
 				{
@@ -1287,6 +1305,4 @@ namespace UE::DreamFX::Editor
 		Result.bSucceeded = !Diagnostics.HasErrors();
 		return Result;
 	}
-
-#endif // DREAMFX_HAS_CUSTOMHLSL_WRITE
 }

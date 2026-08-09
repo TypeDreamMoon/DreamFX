@@ -83,6 +83,11 @@ param(
     # synchronous module refresh. Slower by design -- the switch-refresh round's A/B and escape hatch.
     [switch]$RebuildOnSwitch,
 
+    # build: build .dfm graphs through the reflection backend even on an engine that exports the
+    # declarations directly. This is how the stock-engine path gets exercised on MoonEngine, and how
+    # the two backends' output can be diffed against each other on one machine.
+    [switch]$ForceReflectionBackend,
+
     # build: pay the engine's per-add stack refresh again instead of one batch refresh per stack.
     # Slower by design -- the AddModule-batching round's A/B and escape hatch.
     [switch]$RebuildPerAdd,
@@ -252,6 +257,9 @@ if ($Command -eq 'corpus') {
 # ---------------------------------------------------------------- argument assembly
 
 $arguments = @($uproject, '-run=DreamFX')
+
+# Read by FGraphSurgeon::Create, not by the commandlet, so it is not part of any one command.
+if ($ForceReflectionBackend) { $arguments += '-DreamFXForceReflectionBackend' }
 
 switch ($Command) {
     'build' {
