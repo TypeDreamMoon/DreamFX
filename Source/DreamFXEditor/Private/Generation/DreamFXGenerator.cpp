@@ -2748,6 +2748,24 @@ namespace UE::DreamFX::Editor
 				if (Event.Severity >= 3)
 				{
 					Diagnostics.Error(TEXT("DFX6001"), Location, Message);
+
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+					// A read-before-set is the one failure this engine configuration causes by itself,
+					// so say so rather than leaving the author to wonder why the same source builds
+					// elsewhere. On MoonEngine the generator answers this by setting the parameter's
+					// default mode to Value, which makes an unset read yield the type's default; the
+					// stock API exposes no way to write that mode, so Niagara's refusal stands.
+					//
+					// Matched on the message text, which is localised -- hence both spellings. Missing
+					// the match costs an explanation, never a diagnosis, so a loose match is the right
+					// trade here.
+					if (Event.Message.Contains(TEXT("read before being set"))
+						|| Event.Message.Contains(TEXT("在设置之前被读取")))
+					{
+						Diagnostics.Info(TEXT("DFX6007"), Location,
+							TEXT("This build has no Niagara fast-edit API (DREAMFX_HAS_NIAGARA_FAST_EDIT=0), so the generator could not set that parameter's default mode to Value, and Niagara rejects reading it before something writes it. Two ways out: write the parameter earlier in the same stack than whatever reads it -- for an 'Emitter.<Module>.<Output>' name that means moving the module that produces it ahead of its readers -- or build against an engine carrying the MoonEngine Niagara additions. If nothing writes it anywhere, the read is a genuine defect that the other engine was hiding."));
+					}
+#endif
 				}
 				else
 				{
