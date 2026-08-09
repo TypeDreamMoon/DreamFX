@@ -1859,17 +1859,36 @@ namespace UE::DreamFX::Editor
 					Name.RemoveFromStart(TEXT("User."), ESearchCase::IgnoreCase);
 					Name = ToNameToken(Name);
 
-					// Defaults are not recoverable through the read API -- GetUserVariables reports
-					// name, type and description, and no value. Declaring without a default is
-					// legal and honest; the runtime default stays on the asset.
-					FString Line = FString::Printf(TEXT("%s %s;"),
+					// The default is the whole value of a user parameter -- nothing in the stacks
+					// assigns it, so a declaration without one is a parameter that reads as zero.
+					// Dropping it is what made a rebuilt mirror simulate differently while exporting
+					// to identical text: NS_SparkBurst's spawn rate is User.SparkRate, the original
+					// carries 90.0, the mirror carried 0, and it emitted no particles at all. L1 could
+					// not see it because the export it compares is the one missing the value, and L2
+					// could not either because zero compiles.
+					FString Line = FString::Printf(TEXT("%s %s"),
 						*FValueLowering::DescribeDeclaredType(Variable.Type), *Name);
+
+					FString DefaultText;
+					if (Variable.DefaultValue.Mode == EInputValueMode::Literal
+						&& LiteralToSource(Variable.DefaultValue, Variable.Type, DefaultText))
+					{
+						Line += FString::Printf(TEXT(" = %s"), *DefaultText);
+					}
+					else if (Variable.DefaultValue.Mode == EInputValueMode::Enum
+						&& Variable.DefaultValue.EnumType != nullptr)
+					{
+						Line += FString::Printf(TEXT(" = %s"), *FValueLowering::EnumEntryToSourceToken(
+							Variable.DefaultValue.EnumType, Variable.DefaultValue.EnumEntryName));
+					}
+					// A data interface or object default has no inline spelling, so those still
+					// declare bare -- the same state every user parameter used to be exported in.
+
 					if (!Variable.Description.IsEmpty())
 					{
-						Line = FString::Printf(TEXT("%s %s [ Description=\"%s\" ];"),
-							*FValueLowering::DescribeDeclaredType(Variable.Type), *Name, *Variable.Description);
+						Line += FString::Printf(TEXT(" [ Description=\"%s\" ]"), *Variable.Description);
 					}
-					Writer.Line(Line);
+					Writer.Line(Line + TEXT(";"));
 				}
 				Writer.Pop();
 				Writer.Line(TEXT("}"));
