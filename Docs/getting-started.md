@@ -41,7 +41,7 @@ Three extensions:
 | --- | --- | --- |
 | `.dfs` | `System` | `UNiagaraSystem` |
 | `.dfe` | `Emitter` | nothing on its own — merged into a `.dfs` by `from` |
-| `.dfm` | `Module` / `DynamicInput` | `UNiagaraScript` (MoonEngine only — see [language/dfm.md](language/dfm.md)) |
+| `.dfm` | `Module` / `DynamicInput` | `UNiagaraScript` |
 
 ---
 

@@ -179,9 +179,9 @@ Data interface parameter '%s' has a default value, which v1 does not apply. Feed
 **Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:717`
 <!-- generated:end DFX5100 -->
 
-**Cause.** This build cannot generate a `.dfm`, and no previously generated asset was found. Generation is enabled only where the engine exports a way to write HLSL onto a Niagara custom node -- MoonEngine, detected by a Build.cs probe (plan-v2 W1).
+**Cause.** No previously generated asset was found, and this build has no graph backend to make one. That is rarer than it used to be: an engine that does not export the five declarations still gets the reflection backend, so reaching this means its startup self-check failed and the message names which check it was. See [dfm.md](../language/dfm.md) for the three outcomes.
 
-**Fix.** Build the module on MoonEngine and commit the asset. A prebuilt engine loads, references and cooks it normally; it just cannot make new ones. Until then use an inline `hlsl { }` expression or an existing dynamic input asset.
+**Fix.** Read the named check --- it says which engine shape the backend expected and did not find, which is the actual thing to fix or report. Meanwhile, build the module on an engine where a backend does run and commit the asset; any engine loads, references and cooks it normally. Or sidestep the module entirely with an inline `hlsl { }` expression or an existing dynamic input asset.
 
 ## DFX5101
 
@@ -299,13 +299,13 @@ Could not wire the module graph. The Niagara schema rejected a parameter map con
 **Message**
 
 ```
-'%s' no longer matches the module asset at '%s', and this engine cannot regenerate it. Rebuild the module on MoonEngine and commit the updated asset; %s
+'%s' no longer matches the module asset at '%s', and this build cannot regenerate it. Rebuild it where a graph backend runs and commit the updated asset; %s
 ```
 
 **Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:734`
 <!-- generated:end DFX5107 -->
 
-**Cause.** The `.dfm` source no longer matches its committed asset, and this engine cannot regenerate it. Distinct from DFX5100 because the remedy differs: there is an asset, it is simply out of date (plan-v2 W1).
+**Cause.** The `.dfm` source no longer matches its committed asset, and this build has no graph backend to regenerate it. Distinct from DFX5100 because the remedy differs: there is an asset, it is simply out of date.
 
-**Fix.** Rebuild the module on MoonEngine and commit the updated asset.
+**Fix.** Rebuild the module where a backend runs and commit the updated asset. The trailing half of the message names the check that failed, which is what to fix if you expected this engine to be able to generate.
 

@@ -732,7 +732,7 @@ namespace UE::DreamFX::Editor
 		if (!FProvenance::Read(Script, Stamp) || Stamp.SourceHash != Document.SourceHash)
 		{
 			Diagnostics.Error(TEXT("DFX5107"), Document.HeaderLocation,
-				FString::Printf(TEXT("'%s' no longer matches the module asset at '%s', and this engine cannot regenerate it. Rebuild the module on MoonEngine and commit the updated asset; %s"),
+				FString::Printf(TEXT("'%s' no longer matches the module asset at '%s', and this build cannot regenerate it. Rebuild it where a graph backend runs and commit the updated asset; %s"),
 					*FPaths::GetCleanFilename(Document.SourceFilePath), *FullAssetPath,
 					*DescribeUnavailability()));
 			Result.bDrifted = true;

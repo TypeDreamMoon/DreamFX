@@ -8,7 +8,7 @@ see [plan.md](../plan.md) §3. This tree is the reference; plan.md is the argume
 | --- | --- |
 | [dfs.md](dfs.md) | `.dfs` — a system: user parameters, system stacks, emitters, renderers |
 | [dfe.md](dfe.md) | `.dfe` — a reusable emitter, and what `from` does to it |
-| [dfm.md](dfm.md) | `.dfm` — a module or dynamic input, and the MoonEngine limit on generating one |
+| [dfm.md](dfm.md) | `.dfm` — a module or dynamic input, and which engines can generate one |
 | [values.md](values.md) | Every value position, the type rules, and the eight `L*` rules by name |
 
 ## Shape of every file
