@@ -59,6 +59,12 @@ DerivedDataCache/*
 # Plans are local working notes and stay out of the repository; Docs/ ships with the plugin.
 Plan/
 
+# Measurement reports -- round trips, performance rounds, L3 runs, coverage sweeps. They are dated
+# records of what a particular build measured on a particular machine, useful while the work is in
+# flight and misleading afterwards: half of them were superseded within a day, and one of them
+# argued for a bug that turned out not to exist. Docs/ carries what stays true.
+Reports/
+
 # Generated Niagara assets. Design principle 1: .uasset is a build product, the .dfs is the source.
 # Rebuild them with: pwsh -File .skill/dfx.ps1 build -All -Force
 Content/Samples/
