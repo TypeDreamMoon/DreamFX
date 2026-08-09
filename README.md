@@ -97,7 +97,7 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 Plugins/DreamFX/
 ├── DFX/                        源文件：Samples / Emitters / Modules
 ├── Docs/                       getting-started · language/ · tools/ · diagnostics/
-├── Plan/                       plan.md · plan-v2…v6.md（本地工作笔记，gitignore）
+├── Plan/                       plan.md · plan-v2…v7.md（本地工作笔记，gitignore）
 ├── Tests/Corpus/               Parse / Generate / RoundTrip 语料
 ├── .skill/                     dfx.ps1 · ci.ps1 · gen-diagnostics.ps1 · 4 个 skill
 └── Source/
@@ -108,5 +108,6 @@ Plugins/DreamFX/
 设计与逐期实测记录见 [Plan/plan.md](Plan/plan.md)，收尾工作项见 [Plan/plan-v2.md](Plan/plan-v2.md)，
 编辑器集成与完整反编译见 [Plan/plan-v3.md](Plan/plan-v3.md)，Decompiled 命名空间与内容包
 等价往返见 [Plan/plan-v4.md](Plan/plan-v4.md)，四包跑通（v4-V3 续篇）见
-[Plan/plan-v5.md](Plan/plan-v5.md)，生成性能与工作区入库见 [Plan/plan-v6.md](Plan/plan-v6.md)。
+[Plan/plan-v5.md](Plan/plan-v5.md)，生成性能与工作区入库见 [Plan/plan-v6.md](Plan/plan-v6.md)，
+预编译引擎支持见 [Plan/plan-v7.md](Plan/plan-v7.md)。
 `Plan/` 在本仓库 gitignore 中，只存在于磁盘上；`Docs/` 随插件入库。

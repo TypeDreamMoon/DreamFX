@@ -69,6 +69,16 @@ namespace UE::DreamFX::Editor
 		Hlsl,
 		DynamicInput,
 		DataInterface,
+		/**
+		 * A plain UObject reference -- the texture an `Object<Texture>` parameter holds.
+		 *
+		 * Distinct from DataInterface: that one is declaration-only because the engine instantiates
+		 * it, while this is a reference to an existing asset and the reference IS the value. Reading
+		 * it used to return an unset value, which exported as a bare declaration and rebuilt as an
+		 * empty slot -- the _LevelUpSpawn systems lost the texture their "LEVEL UP" text is drawn
+		 * from, and no verification tier could see it (see the comment on the export below).
+		 */
+		ObjectAsset,
 	};
 
 	/** A value bound for a module input, in the shape the adapter can translate on its own. */
@@ -92,6 +102,9 @@ namespace UE::DreamFX::Editor
 		FString DataInterfaceJson;
 		UClass* DataInterfaceClass = nullptr;
 
+		/** The asset an ObjectAsset value points at. Null is a legitimate value: an empty slot. */
+		UObject* ObjectAsset = nullptr;
+
 		bool IsSet() const { return Mode != EInputValueMode::Unset; }
 
 		/**
@@ -107,6 +120,7 @@ namespace UE::DreamFX::Editor
 		static FInputValue MakeHlsl(const FString& Expression);
 		static FInputValue MakeDynamicInput(UNiagaraScript* Asset);
 		static FInputValue MakeDataInterface(UClass* Class, const FString& Json);
+		static FInputValue MakeObjectAsset(UObject* Asset);
 	};
 
 	/** Static description of one module input, from the module asset alone (no owning system needed). */

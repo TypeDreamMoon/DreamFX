@@ -570,10 +570,41 @@ namespace UE::DreamFX::Editor
 		}
 
 		case EValueKind::String:
+		{
+			// An `Object<T>` parameter's value is a reference to an existing asset, so its spelling is
+			// the asset path -- the same one a renderer's Material already uses. Without this the
+			// declaration round-tripped bare and the rebuild left the slot empty, which is how the
+			// _LevelUpSpawn systems lost the texture behind their "LEVEL UP" text.
+			if (BaseType.IsUObject() && BaseType.GetClass() != nullptr)
+			{
+				UObject* Asset = LoadObject<UObject>(nullptr, *Value.Text);
+				if (Asset == nullptr)
+				{
+					Diagnostics.Error(TEXT("DFX4040"), Value.Location,
+						FString::Printf(TEXT("Parameter '%s': no asset at '%s'."), *InputDisplayName, *Value.Text));
+					return false;
+				}
+
+				// Checked here rather than left to the engine: assigning a StaticMesh to an
+				// Object<Texture> is accepted by the variant and only misbehaves at runtime.
+				if (!Asset->IsA(BaseType.GetClass()))
+				{
+					Diagnostics.Error(TEXT("DFX4041"), Value.Location,
+						FString::Printf(TEXT("Parameter '%s': '%s' is a %s, which is not a %s."),
+							*InputDisplayName, *Value.Text, *Asset->GetClass()->GetName(),
+							*BaseType.GetClass()->GetName()));
+					return false;
+				}
+
+				OutValue = FInputValue::MakeObjectAsset(Asset);
+				return true;
+			}
+
 			Diagnostics.Error(TEXT("DFX4001"), Value.Location,
 				FString::Printf(TEXT("Input '%s' expects %s; a quoted string is only valid for asset-typed values."),
 					*InputDisplayName, *DescribeType(TargetType)));
 			return false;
+		}
 
 		case EValueKind::Name:
 		{

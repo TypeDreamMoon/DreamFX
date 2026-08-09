@@ -383,9 +383,13 @@ namespace UE::DreamFX::Editor
 				OutValue = FInputValue::MakeDataInterface(nullptr, FString());
 				return;
 			}
-			if (In.GetPtr<FNiagaraExt_VariableValue_Object>() != nullptr)
+			if (const FNiagaraExt_VariableValue_Object* Data = In.GetPtr<FNiagaraExt_VariableValue_Object>())
 			{
-				OutValue = FInputValue();
+				// The reference IS the value here, unlike a data interface. Returning an unset value
+				// -- which this did -- exported the parameter as a bare declaration, and the rebuild
+				// left an empty slot: the _LevelUpSpawn systems came back without the texture their
+				// "LEVEL UP" text is drawn from.
+				OutValue = FInputValue::MakeObjectAsset(Data->Object);
 				return;
 			}
 			if (In.IsValid())
@@ -427,6 +431,17 @@ namespace UE::DreamFX::Editor
 				// Declaration only: the DI instance is created by the engine and fed at runtime (3.5).
 				FNiagaraVariant Variant;
 				Variant.SetDataInterface(nullptr);
+				OutValue.Set(Type, Variant);
+				return true;
+			}
+
+			case EInputValueMode::ObjectAsset:
+			{
+				// A null asset is written as deliberately as a non-null one: the source said the slot
+				// is empty, and leaving whatever the previous build put there would be a rebuild that
+				// does not match its source.
+				FNiagaraVariant Variant;
+				Variant.SetUObject(Value.ObjectAsset);
 				OutValue.Set(Type, Variant);
 				return true;
 			}
@@ -544,6 +559,14 @@ namespace UE::DreamFX::Editor
 		return Value;
 	}
 
+	FInputValue FInputValue::MakeObjectAsset(UObject* Asset)
+	{
+		FInputValue Value;
+		Value.Mode = EInputValueMode::ObjectAsset;
+		Value.ObjectAsset = Asset;
+		return Value;
+	}
+
 	bool FInputValue::Equals(const FInputValue& Other) const
 	{
 		if (Mode != Other.Mode)
@@ -565,6 +588,8 @@ namespace UE::DreamFX::Editor
 			return DynamicInputAsset == Other.DynamicInputAsset;
 		case EInputValueMode::DataInterface:
 			return DataInterfaceJson == Other.DataInterfaceJson;
+		case EInputValueMode::ObjectAsset:
+			return ObjectAsset == Other.ObjectAsset;
 		default:
 			return true;
 		}

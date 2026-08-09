@@ -1958,6 +1958,15 @@ namespace UE::DreamFX::Editor
 						Line += FString::Printf(TEXT(" = %s"), *FValueLowering::EnumEntryToSourceToken(
 							Variable.DefaultValue.EnumType, Variable.DefaultValue.EnumEntryName));
 					}
+					else if (Variable.DefaultValue.Mode == EInputValueMode::ObjectAsset
+						&& Variable.DefaultValue.ObjectAsset != nullptr)
+					{
+						// The same spelling a renderer's Material already uses. An empty slot stays a
+						// bare declaration, so "no asset" and "an asset we failed to record" do not
+						// end up looking alike in the source.
+						Line += FString::Printf(TEXT(" = \"%s\""),
+							*Variable.DefaultValue.ObjectAsset->GetPathName());
+					}
 					// A data interface or object default has no inline spelling, so those still
 					// declare bare -- the same state every user parameter used to be exported in.
 
