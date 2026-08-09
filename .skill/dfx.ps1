@@ -75,6 +75,18 @@ param(
     # stops refreshing the stack group it just changed.
     [switch]$RebuildOnStructural,
 
+    # build: how many systems may sit between compile request and finalize (the pipeline depth).
+    # 1 restores the fully serial build; 0 keeps the commandlet default.
+    [int]$Window = 0,
+
+    # build: drop the edit context after every static-switch write, as before the engine's
+    # synchronous module refresh. Slower by design -- the switch-refresh round's A/B and escape hatch.
+    [switch]$RebuildOnSwitch,
+
+    # build: pay the engine's per-add stack refresh again instead of one batch refresh per stack.
+    # Slower by design -- the AddModule-batching round's A/B and escape hatch.
+    [switch]$RebuildPerAdd,
+
     # list: show dynamic inputs instead of modules.
     [switch]$DynamicInputs,
 
@@ -251,6 +263,9 @@ switch ($Command) {
         if ($NoSave) { $arguments += '-NoSave' }
         if ($NoWriteScope) { $arguments += '-NoWriteScope' }
         if ($RebuildOnStructural) { $arguments += '-RebuildOnStructural' }
+        if ($RebuildOnSwitch) { $arguments += '-RebuildOnSwitch' }
+        if ($RebuildPerAdd) { $arguments += '-RebuildPerAdd' }
+        if ($Window -gt 0) { $arguments += "-Window=$Window" }
     }
     'verify' {
         if (-not $All) {

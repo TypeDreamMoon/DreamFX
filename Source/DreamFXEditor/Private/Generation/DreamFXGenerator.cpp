@@ -19,6 +19,7 @@
 #include "NiagaraSystem.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "UObject/StrongObjectPtr.h"
 
 namespace UE::DreamFX::Editor
 {
@@ -2009,15 +2010,15 @@ namespace UE::DreamFX::Editor
 		 */
 		bool ApplyPlannedInput(const FStackAddress& InputAddress, const FPlannedInput& Input, TArray<FString>& OutErrors)
 		{
-			// Writing a static switch changes which other inputs are visible, so the shared edit
-			// context stops describing this module the moment it lands. The adapter cannot tell -- a
-			// switch write looks like any other literal from there -- so the epoch is ended here, where
-			// the module schema said so at plan time. Nothing happens outside a write scope.
+			// Writing a static switch changes which other inputs are visible. The engine's external
+			// write path refreshes the owning module item in place when one lands, so by default the
+			// epoch survives; the adapter still has to be told, because from where it sits a switch
+			// write looks like any other literal -- the module schema said so at plan time, here.
 			ON_SCOPE_EXIT
 			{
 				if (Input.bIsStaticSwitch)
 				{
-					FNiagaraAdapter::EndStructuralEpoch(InputAddress.System);
+					FNiagaraAdapter::OnStaticSwitchWritten(InputAddress.System);
 				}
 			};
 
@@ -2033,7 +2034,23 @@ namespace UE::DreamFX::Editor
 			FDiagnosticSink& Diagnostics, TMap<FName, FSourceLocation>& OutModuleLocations)
 		{
 			bool bOk = true;
-			FName PreviousModule = NAME_None;
+
+			// Pass 1 -- create. Every module is appended with the engine's stack refresh deferred,
+			// versions are rebound (graph-level, so they need no refreshed stack), and the stack
+			// refreshes once at the end. The per-add refresh this replaces rebuilt every existing
+			// module item again for each add -- O(n^2) in stack depth, and the second-largest line
+			// of a tree build. Append order is declaration order: every add targets the stack's
+			// output node, and ConnectModuleNode treats the unset target index as "append".
+			struct FAddedModule
+			{
+				const FPlannedModule* Planned = nullptr;
+				FName Name;
+			};
+			TArray<FAddedModule> Added;
+			Added.Reserve(Stack.Modules.Num());
+
+			const FStackAddress StackAddress = OwnerAddress.WithScript(Stack.ScriptName);
+			const bool bBatchRefresh = FNiagaraAdapter::IsBatchAddRefreshEnabled();
 
 			for (const FPlannedModule& Module : Stack.Modules)
 			{
@@ -2043,15 +2060,6 @@ namespace UE::DreamFX::Editor
 				FNiagaraAdapter::CollectIfHeavy();
 
 				TArray<FString> Errors;
-				// AddModule inserts after ModuleName when one is given, and appends otherwise. Chaining
-				// each new module after the previous one makes declaration order the stack order without
-				// depending on what an unset target index means.
-				FStackAddress StackAddress = OwnerAddress.WithScript(Stack.ScriptName);
-				if (PreviousModule != NAME_None)
-				{
-					StackAddress = StackAddress.WithModule(PreviousModule);
-				}
-
 				FName AddedName;
 
 				if (Module.bIsSetParameters)
@@ -2063,18 +2071,69 @@ namespace UE::DreamFX::Editor
 						Entries.Emplace(Parameter.Name, Parameter.Type, Parameter.Value);
 					}
 
-					if (!FNiagaraAdapter::AddSetParametersModule(StackAddress, Entries, AddedName, Errors))
+					if (!FNiagaraAdapter::AddSetParametersModule(StackAddress, Entries, AddedName, Errors,
+						/*bDeferStackRefresh=*/bBatchRefresh))
 					{
 						ReportAdapterErrors(Errors, TEXT("DFX5024"), Module.Location, Diagnostics);
 						bOk = false;
 						continue;
 					}
-					PreviousModule = AddedName;
 					OutModuleLocations.Add(AddedName, Module.Location);
+					Added.Add({&Module, AddedName});
+					continue;
+				}
 
+				if (!FNiagaraAdapter::AddModule(StackAddress, Module.Asset, AddedName, Errors,
+					/*bDeferStackRefresh=*/bBatchRefresh))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5020"), Module.Location, Diagnostics);
+					bOk = false;
+					continue;
+				}
+				OutModuleLocations.Add(AddedName, Module.Location);
+
+				// R1b: before any input is written, because the version decides which inputs exist.
+				// AddModule always lands on the asset's newest version, so a module the source pinned
+				// to an older one is the wrong module until this runs. Resolved from the graph, not
+				// the stack, so the deferred refresh is no obstacle.
+				if (Module.VersionGuid.IsValid())
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::SetModuleScriptVersion(StackAddress.WithModule(AddedName), Module.VersionGuid, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5022"), Module.Location, Diagnostics);
+						bOk = false;
+						continue;
+					}
+				}
+
+				Added.Add({&Module, AddedName});
+			}
+
+			// The one refresh the deferred adds owe. Without it nothing below can resolve a module.
+			if (bBatchRefresh && Added.Num() > 0)
+			{
+				TArray<FString> Errors;
+				if (!FNiagaraAdapter::RefreshScriptStack(StackAddress, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5020"), Added[0].Planned->Location, Diagnostics);
+					return false;
+				}
+			}
+
+			// Pass 2 -- write, against the freshly refreshed stack.
+			for (const FAddedModule& Entry : Added)
+			{
+				FNiagaraAdapter::CollectIfHeavy();
+
+				const FPlannedModule& Module = *Entry.Planned;
+				const FStackAddress ModuleAddress = StackAddress.WithModule(Entry.Name);
+				TArray<FString> Errors;
+
+				if (Module.bIsSetParameters)
+				{
 					// Only literals and enums ride along on the create call; every other value mode has
 					// to be written afterwards, addressing the entry as an input on the new module.
-					const FStackAddress ModuleAddress = OwnerAddress.WithScript(Stack.ScriptName).WithModule(AddedName);
 					for (const FPlannedSetParameter& Parameter : Module.Parameters)
 					{
 						if (Parameter.Value.Mode != EInputValueMode::Literal && Parameter.Value.Mode != EInputValueMode::Enum)
@@ -2104,31 +2163,6 @@ namespace UE::DreamFX::Editor
 						}
 					}
 					continue;
-				}
-
-				if (!FNiagaraAdapter::AddModule(StackAddress, Module.Asset, AddedName, Errors))
-				{
-					ReportAdapterErrors(Errors, TEXT("DFX5020"), Module.Location, Diagnostics);
-					bOk = false;
-					continue;
-				}
-				PreviousModule = AddedName;
-				OutModuleLocations.Add(AddedName, Module.Location);
-
-				const FStackAddress ModuleAddress = OwnerAddress.WithScript(Stack.ScriptName).WithModule(AddedName);
-
-				// R1b: before any input is written, because the version decides which inputs exist.
-				// AddModule always lands on the asset's newest version, so a module the source pinned
-				// to an older one is the wrong module until this runs.
-				if (Module.VersionGuid.IsValid())
-				{
-					Errors.Reset();
-					if (!FNiagaraAdapter::SetModuleScriptVersion(ModuleAddress, Module.VersionGuid, Errors))
-					{
-						ReportAdapterErrors(Errors, TEXT("DFX5022"), Module.Location, Diagnostics);
-						bOk = false;
-						continue;
-					}
 				}
 
 				// Inputs are written switches-first, then values (see PlanArguments). That order is
@@ -2812,6 +2846,81 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	/**
+	 * A deferred build between its compile request and its finalize.
+	 *
+	 * Everything the post-compile tail reads, detached from Generate's locals so a pipelined caller
+	 * can hold several of these while their compiles overlap. The strong pointer is the lifetime
+	 * guarantee: a mid-pipeline garbage collection (CollectIfHeavy) must not collect a system whose
+	 * compile is still on the task pool.
+	 */
+	struct FPendingBuild
+	{
+		TStrongObjectPtr<UNiagaraSystem> System;
+		FPlan Plan;
+		TMap<FName, FSourceLocation> ModuleLocations;
+		FSourceLocation HeaderLocation;
+		FString SourceFilePath;
+		FString SourceHash;
+		bool bHasGpuEmitter = false;
+		bool bSave = true;
+	};
+
+	namespace
+	{
+		/** The post-compile tail shared by the synchronous and pipelined paths: wait, report, stamp, save. */
+		bool FinalizeBuild(FPendingBuild& Pending, FDiagnosticSink& Diagnostics)
+		{
+			UNiagaraSystem* System = Pending.System.Get();
+
+			FCompileStateInfo CompileState;
+			TArray<FString> Errors;
+			const bool bCompiled = FNiagaraAdapter::WaitAndCollect(System, Pending.bHasGpuEmitter, CompileState, Errors);
+			ReportAdapterErrors(Errors, TEXT("DFX6000"), Pending.HeaderLocation, Diagnostics);
+			ReportNiagaraDiagnostics(System, CompileState, Pending.Plan, Pending.ModuleLocations, Diagnostics);
+
+			if (!bCompiled)
+			{
+				Diagnostics.Error(TEXT("DFX6005"), Pending.HeaderLocation,
+					FString::Printf(TEXT("Niagara compilation of '%s' did not succeed (status %s)."),
+						*Pending.Plan.FullAssetPath, *CompileState.StatusName));
+				return false;
+			}
+
+			FProvenanceStamp Stamp;
+			Stamp.SourceFullPath = Pending.SourceFilePath;
+			Stamp.SourceHash = Pending.SourceHash;
+			Stamp.GeneratorVersion = FProvenance::GetGeneratorVersion();
+			Stamp.ModuleDependencies = Pending.Plan.Dependencies.Paths;
+			Stamp.ModuleVersions = Pending.Plan.Dependencies.Versions;
+
+			FSourceRoot OwningRoot;
+			if (FDreamFXPaths::FindOwningRoot(Pending.SourceFilePath, OwningRoot))
+			{
+				Stamp.SourceRelativePath = Pending.SourceFilePath;
+				FPaths::MakePathRelativeTo(Stamp.SourceRelativePath, *(OwningRoot.Directory / TEXT("")));
+			}
+			else
+			{
+				Stamp.SourceRelativePath = FPaths::GetCleanFilename(Pending.SourceFilePath);
+			}
+
+			FProvenance::Write(System, Stamp);
+
+			if (Pending.bSave)
+			{
+				Errors.Reset();
+				if (!FNiagaraAdapter::SaveSystem(System, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5030"), Pending.HeaderLocation, Diagnostics);
+					return false;
+				}
+			}
+
+			return !Diagnostics.HasErrors();
+		}
+	}
+
 	FGenerateResult FGenerator::GenerateFromFile(const FString& FilePath, const FGenerateOptions& Options,
 		FDiagnosticSink& Diagnostics)
 	{
@@ -2991,19 +3100,26 @@ namespace UE::DreamFX::Editor
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE ApplyPlan begin '%s'"), *Plan.FullAssetPath);
 
 		TMap<FName, FSourceLocation> ModuleLocations;
-		if (!ApplyPlan(System, Plan, Diagnostics, ModuleLocations))
 		{
-			return Result;
+			// The window holds every structural and value write, and nothing in it needs a compiled
+			// result -- so no engine path gets to launch one against the half-built system. The debt
+			// this records is paid exactly once, by the wait in FinalizeBuild.
+			FNiagaraAdapter::FCompileSuppressionScope SuppressCompiles(System);
+
+			if (!ApplyPlan(System, Plan, Diagnostics, ModuleLocations))
+			{
+				return Result;
+			}
+
+			UE_LOG(LogDreamFX, Verbose, TEXT("PHASE ApplyPlan end '%s'"), *Plan.FullAssetPath);
+
+			// Before the compile, because the compile is the first thing that reads them. A curve written
+			// through the data-interface JSON path has its keys but not the sample table those keys are
+			// baked into, and nothing in that path bakes it (see RefreshCurveLookupTables).
+			FNiagaraAdapter::RefreshCurveLookupTables(System);
+
+			UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RefreshCurveLookupTables end '%s'"), *Plan.FullAssetPath);
 		}
-
-		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE ApplyPlan end '%s'"), *Plan.FullAssetPath);
-
-		// Before the compile, because the compile is the first thing that reads them. A curve written
-		// through the data-interface JSON path has its keys but not the sample table those keys are
-		// baked into, and nothing in that path bakes it (see RefreshCurveLookupTables).
-		FNiagaraAdapter::RefreshCurveLookupTables(System);
-
-		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RefreshCurveLookupTables end '%s'"), *Plan.FullAssetPath);
 
 		// plan-v2 W4. A GPU emitter's real work is the compute shader, and WaitForCompilationComplete
 		// does not wait for it unless asked -- so without this a GPU system's build reports the VM
@@ -3024,51 +3140,43 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
-		FCompileStateInfo CompileState;
-		Errors.Reset();
-		const bool bCompiled = FNiagaraAdapter::CompileAndWait(System, bHasGpuEmitter, CompileState, Errors);
-		ReportAdapterErrors(Errors, TEXT("DFX6000"), Document.HeaderLocation, Diagnostics);
-		ReportNiagaraDiagnostics(System, CompileState, Plan, ModuleLocations, Diagnostics);
+		FPendingBuild Pending;
+		Pending.System = TStrongObjectPtr<UNiagaraSystem>(System);
+		Pending.Plan = MoveTemp(Plan);
+		Pending.ModuleLocations = MoveTemp(ModuleLocations);
+		Pending.HeaderLocation = Document.HeaderLocation;
+		Pending.SourceFilePath = Document.SourceFilePath;
+		Pending.SourceHash = Document.SourceHash;
+		Pending.bHasGpuEmitter = bHasGpuEmitter;
+		Pending.bSave = Options.bSave;
 
-		if (!bCompiled)
+		// Issued here for both paths: a pipelined caller overlaps the wait with its next source's
+		// generation; the synchronous path pays it in FinalizeBuild immediately below.
+		FNiagaraAdapter::RequestCompileAsync(System);
+
+		if (Options.bDeferCompile)
 		{
-			Diagnostics.Error(TEXT("DFX6005"), Document.HeaderLocation,
-				FString::Printf(TEXT("Niagara compilation of '%s' did not succeed (status %s)."),
-					*Plan.FullAssetPath, *CompileState.StatusName));
+			Result.bSucceeded = !Diagnostics.HasErrors();
+			Result.Pending = MakeShared<FPendingBuild>(MoveTemp(Pending));
 			return Result;
 		}
 
-		FProvenanceStamp Stamp;
-		Stamp.SourceFullPath = Document.SourceFilePath;
-		Stamp.SourceHash = Document.SourceHash;
-		Stamp.GeneratorVersion = FProvenance::GetGeneratorVersion();
-		Stamp.ModuleDependencies = Plan.Dependencies.Paths;
-		Stamp.ModuleVersions = Plan.Dependencies.Versions;
-
-		FSourceRoot OwningRoot;
-		if (FDreamFXPaths::FindOwningRoot(Document.SourceFilePath, OwningRoot))
-		{
-			Stamp.SourceRelativePath = Document.SourceFilePath;
-			FPaths::MakePathRelativeTo(Stamp.SourceRelativePath, *(OwningRoot.Directory / TEXT("")));
-		}
-		else
-		{
-			Stamp.SourceRelativePath = FPaths::GetCleanFilename(Document.SourceFilePath);
-		}
-
-		FProvenance::Write(System, Stamp);
-
-		if (Options.bSave)
-		{
-			Errors.Reset();
-			if (!FNiagaraAdapter::SaveSystem(System, Errors))
-			{
-				ReportAdapterErrors(Errors, TEXT("DFX5030"), Document.HeaderLocation, Diagnostics);
-				return Result;
-			}
-		}
-
-		Result.bSucceeded = !Diagnostics.HasErrors();
+		Result.bSucceeded = FinalizeBuild(Pending, Diagnostics);
 		return Result;
+	}
+
+	bool FGenerator::Finalize(const TSharedPtr<FPendingBuild>& Pending, FDiagnosticSink& Diagnostics)
+	{
+		if (!Pending.IsValid() || !Pending->System.IsValid())
+		{
+			Diagnostics.Error(TEXT("DFX6005"), FSourceLocation(), TEXT("Finalize called with no pending build."));
+			return false;
+		}
+		return FinalizeBuild(*Pending, Diagnostics);
+	}
+
+	bool FGenerator::IsCompileComplete(const TSharedPtr<FPendingBuild>& Pending)
+	{
+		return !Pending.IsValid() || FNiagaraAdapter::PumpCompile(Pending->System.Get());
 	}
 }

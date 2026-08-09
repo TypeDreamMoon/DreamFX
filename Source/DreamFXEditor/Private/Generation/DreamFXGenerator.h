@@ -33,7 +33,19 @@ namespace UE::DreamFX::Editor
 		 * what must not ship.
 		 */
 		bool bStrictVersions = false;
+
+		/**
+		 * Pipeline mode: issue the Niagara compile and return without waiting for it. The result
+		 * carries a pending handle the caller must pass to FGenerator::Finalize -- that is where the
+		 * compile diagnostics, the provenance stamp and the save happen. Everything before the
+		 * compile behaves exactly as the synchronous path, and a build that fails before the compile
+		 * returns no handle.
+		 */
+		bool bDeferCompile = false;
 	};
+
+	/** A deferred build between its compile request and its finalize. Opaque outside the generator. */
+	struct FPendingBuild;
 
 	struct FGenerateResult
 	{
@@ -45,6 +57,9 @@ namespace UE::DreamFX::Editor
 
 		UNiagaraSystem* System = nullptr;
 		FString AssetPath;
+
+		/** Set when Options.bDeferCompile reached the compile request; consumed by FGenerator::Finalize. */
+		TSharedPtr<FPendingBuild> Pending;
 	};
 
 	/**
@@ -64,5 +79,11 @@ namespace UE::DreamFX::Editor
 
 		static FGenerateResult Generate(const FDocument& Document, const FGenerateOptions& Options,
 			FDiagnosticSink& Diagnostics);
+
+		/** Completes a deferred build: waits for its compile, reports, stamps and saves. */
+		static bool Finalize(const TSharedPtr<FPendingBuild>& Pending, FDiagnosticSink& Diagnostics);
+
+		/** Non-blocking: advances a deferred build's compile one step; true when Finalize would not wait. */
+		static bool IsCompileComplete(const TSharedPtr<FPendingBuild>& Pending);
 	};
 }

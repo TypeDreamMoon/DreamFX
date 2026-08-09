@@ -71,6 +71,12 @@ namespace UE::DreamFX::Editor
 		/** True restores the pre-P3 behaviour: every structural mutator drops the context. */
 		bool GRebuildContextOnStructural = false;
 
+		/** True restores the pre-switch-refresh behaviour: every static-switch write drops the context. */
+		bool GRebuildContextOnSwitch = false;
+
+		/** False restores the per-add engine stack refresh instead of one batch refresh per stack. */
+		bool GBatchAddRefresh = true;
+
 		/**
 		 * Wall time and call count per operation, for `-LogCmds="LogDreamFX Verbose"`.
 		 *
@@ -789,16 +795,32 @@ namespace UE::DreamFX::Editor
 
 	void FNiagaraAdapter::EndStructuralEpoch(UNiagaraSystem* System)
 	{
-		// Counting here is what separates the callers who ask for this -- a static switch write, and
-		// the generator's retry of a refused one -- from the Add/Remove operations.
+		// Counting here is what separates the callers who ask for this -- the generator's retry of a
+		// refused write, and a switch write when -RebuildOnSwitch restores the old behaviour -- from
+		// the Add/Remove operations.
 		++GStats.StaticSwitchCalls;
 
-		// Unconditional, unlike the automatic drop above. Both callers are asking for a context that
-		// reflects a change the engine did not refresh synchronously, which is the whole reason this
-		// is public: a static switch changes which *other* inputs exist, and the refresh that would
-		// show them is deferred to a tick a commandlet never runs. A fresh view model is the only
+		// Unconditional, unlike the automatic drop above. The caller is asking for a context that
+		// reflects a change the engine did not refresh synchronously -- the inline edit conditions
+		// that gate other inputs with no schema flag anyone can see. A fresh view model is the only
 		// thing that sees them.
 		DropSharedContext(System);
+	}
+
+	void FNiagaraAdapter::OnStaticSwitchWritten(UNiagaraSystem* System)
+	{
+		// The engine's external write path now refreshes the owning module item synchronously after
+		// a static switch lands (MoonEngine, SetStackInputData) -- the inputs the switch revealed
+		// exist in the live context by the time this runs, so the epoch survives the write. The flag
+		// is the A/B and the escape hatch if that engine behaviour ever regresses.
+		if (GRebuildContextOnSwitch)
+		{
+			EndStructuralEpoch(System);
+			return;
+		}
+
+		++GStats.StaticSwitchCalls;
+		++GStats.RefreshedInPlaceCalls;
 	}
 
 	void FNiagaraAdapter::SetWriteScopeEnabled(bool bEnabled)
@@ -811,11 +833,27 @@ namespace UE::DreamFX::Editor
 		GRebuildContextOnStructural = bEnabled;
 	}
 
+	void FNiagaraAdapter::SetRebuildContextOnSwitch(bool bEnabled)
+	{
+		GRebuildContextOnSwitch = bEnabled;
+	}
+
+	void FNiagaraAdapter::SetBatchAddRefresh(bool bEnabled)
+	{
+		GBatchAddRefresh = bEnabled;
+	}
+
+	bool FNiagaraAdapter::IsBatchAddRefreshEnabled()
+	{
+		return GBatchAddRefresh;
+	}
+
 	void FNiagaraAdapter::ResetStats()
 	{
 		GStats = FAdapterStats();
 		GOpSeconds.Reset();
 		GOpCounts.Reset();
+		FNiagaraExternalEditStepStats::Reset();
 	}
 
 	void FNiagaraAdapter::ReportOperationTimings()
@@ -851,6 +889,19 @@ namespace UE::DreamFX::Editor
 				Count,
 				Count > 0 ? (Entry.Value * 1000.0 / Count) : 0.0,
 				*Entry.Key);
+		}
+
+		// The engine-side step accumulators (SETINPUT / SETLOCAL / INIT / REFRESHALL) — the
+		// breakdown INSIDE the operations above, from the same run.
+		TArray<FString> EngineSteps;
+		FNiagaraExternalEditStepStats::BuildReport(EngineSteps);
+		if (EngineSteps.Num() > 0)
+		{
+			UE_LOG(LogDreamFX, Display, TEXT("=== engine external-edit steps ==="));
+			for (const FString& Line : EngineSteps)
+			{
+				UE_LOG(LogDreamFX, Display, TEXT("  %s"), *Line);
+			}
 		}
 	}
 
@@ -1365,7 +1416,7 @@ namespace UE::DreamFX::Editor
 	}
 
 	bool FNiagaraAdapter::AddModule(const FStackAddress& StackAddress, UNiagaraScript* ModuleAsset,
-		FName& OutModuleName, TArray<FString>& OutErrors)
+		FName& OutModuleName, TArray<FString>& OutErrors, bool bDeferStackRefresh)
 	{
 		FOpTimer OpTimer(TEXT("AddModule"));
 		if (ModuleAsset == nullptr)
@@ -1374,7 +1425,8 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		// UNiagaraExternalEditUtilities::AddModule calls ScriptItem->RefreshChildren().
+		// UNiagaraExternalEditUtilities::AddModule calls ScriptItem->RefreshChildren() -- unless the
+		// caller deferred that to a batch-closing RefreshScriptStack.
 		FEpochGuard Epoch(StackAddress.System, EStructuralKind::RefreshedInPlace);
 		FEditContext ContextHolder(StackAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
@@ -1384,7 +1436,7 @@ namespace UE::DreamFX::Editor
 		// a topology nobody looks at -- 18 of this call's 62 ms. The generator learns a module's
 		// inputs from the schema, not from what it just added.
 		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context,
-			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly);
+			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly, bDeferStackRefresh);
 
 		OutModuleName = Topology.ModuleName;
 		if (!Drain(Context, OutErrors))
@@ -1397,6 +1449,19 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 		return true;
+	}
+
+	bool FNiagaraAdapter::RefreshScriptStack(const FStackAddress& StackAddress, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("RefreshScriptStack"));
+
+		// The refresh IS the in-place refresh a batch of deferred adds owes: after it the shared
+		// context describes the stack again, so the epoch survives.
+		FEpochGuard Epoch(StackAddress.System, EStructuralKind::RefreshedInPlace);
+		FEditContext ContextHolder(StackAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
+		UNiagaraExternalEditUtilities::RefreshScriptStack(ToReference(StackAddress), Context);
+		return Drain(Context, OutErrors);
 	}
 
 	bool FNiagaraAdapter::RemoveModule(const FStackAddress& ModuleAddress, TArray<FString>& OutErrors)
@@ -1423,7 +1488,7 @@ namespace UE::DreamFX::Editor
 
 	bool FNiagaraAdapter::AddSetParametersModule(const FStackAddress& StackAddress,
 		const TArray<TTuple<FName, FNiagaraTypeDefinition, FInputValue>>& Entries,
-		FName& OutModuleName, TArray<FString>& OutErrors)
+		FName& OutModuleName, TArray<FString>& OutErrors, bool bDeferStackRefresh)
 	{
 		FOpTimer OpTimer(TEXT("AddSetParametersModule"));
 		TArray<FNiagaraExt_SetParameterEntry> Parameters;
@@ -1451,7 +1516,8 @@ namespace UE::DreamFX::Editor
 			Parameters.Add(MoveTemp(Parameter));
 		}
 
-		// UNiagaraExternalEditUtilities::AddSetParametersModule calls ScriptItem->RefreshChildren().
+		// UNiagaraExternalEditUtilities::AddSetParametersModule calls ScriptItem->RefreshChildren()
+		// -- unless the caller deferred that to a batch-closing RefreshScriptStack.
 		FEpochGuard Epoch(StackAddress.System, EStructuralKind::RefreshedInPlace);
 		FEditContext ContextHolder(StackAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
@@ -1459,7 +1525,7 @@ namespace UE::DreamFX::Editor
 
 		// Same as AddModule above: the name is all that is read.
 		UNiagaraExternalEditUtilities::AddSetParametersModule(ToReference(StackAddress), Parameters, Topology, Context,
-			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly);
+			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly, bDeferStackRefresh);
 
 		OutModuleName = Topology.ModuleName;
 		if (!Drain(Context, OutErrors))
@@ -2042,7 +2108,52 @@ namespace UE::DreamFX::Editor
 	// Compile + diagnostics
 	// -------------------------------------------------------------------------------------------
 
-	bool FNiagaraAdapter::CompileAndWait(UNiagaraSystem* System, bool bIncludingGpuShaders,
+	FNiagaraAdapter::FCompileSuppressionScope::FCompileSuppressionScope(UNiagaraSystem* InSystem)
+		: System(InSystem)
+	{
+		if (System != nullptr && !System->GetSuppressCompileRequests())
+		{
+			bOwns = true;
+			System->SetSuppressCompileRequests(true);
+			// The debt closes the guarded launch sites immediately -- RefreshAll and auto-compile ask
+			// HasOutstandingCompilationRequests before compiling -- so the window starts quiet instead
+			// of starting with one stray launch.
+			System->DeferRequestCompile();
+		}
+	}
+
+	FNiagaraAdapter::FCompileSuppressionScope::~FCompileSuppressionScope()
+	{
+		if (bOwns)
+		{
+			System->SetSuppressCompileRequests(false);
+		}
+	}
+
+	void FNiagaraAdapter::RequestCompileAsync(UNiagaraSystem* System)
+	{
+		if (System == nullptr)
+		{
+			return;
+		}
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RequestCompile begin '%s'"), *System->GetName());
+		System->RequestCompile(/*bForce=*/false);
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RequestCompile issued '%s'"), *System->GetName());
+	}
+
+	bool FNiagaraAdapter::PumpCompile(UNiagaraSystem* System)
+	{
+		if (System == nullptr)
+		{
+			return true;
+		}
+		// Completion is judged by the outstanding-work queries, not by this call's return value:
+		// QueryCompileComplete returns false both mid-flight and when nothing was ever active.
+		System->PollForCompilationComplete(/*bFlushRequestCompile=*/false);
+		return !System->HasActiveCompilations() && !System->NeedsRequestCompile();
+	}
+
+	bool FNiagaraAdapter::WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,
 		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("CompileAndWait"));
@@ -2052,9 +2163,7 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RequestCompile begin '%s'"), *System->GetName());
-		System->RequestCompile(/*bForce=*/false);
-		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RequestCompile issued, waiting '%s'"), *System->GetName());
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete begin '%s'"), *System->GetName());
 		System->WaitForCompilationComplete(bIncludingGpuShaders, /*bShowProgress=*/false);
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete end '%s'"), *System->GetName());
 
@@ -2092,6 +2201,18 @@ namespace UE::DreamFX::Editor
 
 		Drain(Context, OutErrors);
 		return bStatusOk && !State.bHasErrors;
+	}
+
+	bool FNiagaraAdapter::CompileAndWait(UNiagaraSystem* System, bool bIncludingGpuShaders,
+		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
+	{
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot compile a null system."));
+			return false;
+		}
+		RequestCompileAsync(System);
+		return WaitAndCollect(System, bIncludingGpuShaders, OutState, OutErrors);
 	}
 
 	bool FNiagaraAdapter::IsStackIssueReadingAvailable()

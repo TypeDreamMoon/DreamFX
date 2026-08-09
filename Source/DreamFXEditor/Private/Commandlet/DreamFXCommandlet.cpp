@@ -905,6 +905,14 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	Options.bForce = FParse::Param(*Params, TEXT("Force"));
 	Options.bSave = !FParse::Param(*Params, TEXT("NoSave")) && !Options.bVerifyOnly;
 
+	// -Window=N: how many systems may sit between their compile request and their finalize. Source
+	// N+1 generates on the game thread while N's scripts compile on the task pool; 1 restores the
+	// fully serial behaviour. The bound is memory, not scheduling -- each in-flight system stays
+	// fully loaded until its save.
+	int32 PipelineWindow = 4;
+	FParse::Value(*Params, TEXT("Window="), PipelineWindow);
+	PipelineWindow = FMath::Clamp(PipelineWindow, 1, 16);
+
 	// plan-v6 P0: the baseline half of the benchmark. Off, every write builds its own system view
 	// model again, which is what the numbers before P1 were measured on.
 	const bool bNoWriteScope = FParse::Param(*Params, TEXT("NoWriteScope"));
@@ -913,6 +921,13 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	// plan-v6 P3: the same, one epoch further in. Off, a structural mutator keeps the context and
 	// trusts the engine's own in-place refresh of the group it changed.
 	FNiagaraAdapter::SetRebuildContextOnStructural(FParse::Param(*Params, TEXT("RebuildOnStructural")));
+
+	// Switch-refresh round: off, a static-switch write keeps the context and trusts the engine's
+	// synchronous refresh of the module item it changed.
+	FNiagaraAdapter::SetRebuildContextOnSwitch(FParse::Param(*Params, TEXT("RebuildOnSwitch")));
+
+	// AddModule batching round: off, every add pays the engine's per-add stack refresh again.
+	FNiagaraAdapter::SetBatchAddRefresh(!FParse::Param(*Params, TEXT("RebuildPerAdd")));
 	FNiagaraAdapter::ResetStats();
 
 	FString SingleFile;
@@ -973,45 +988,8 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	int32 Skipped = 0;
 	int32 Failed = 0;
 
-	for (const FString& SourceFile : SourceFiles)
+	auto FlushDiagnostics = [&TotalErrors, &TotalWarnings](const FDiagnosticSink& Diagnostics)
 	{
-		// .dfs and .dfm produce assets. A .dfe does not -- it is merged into its host by copy (R3), so
-		// it is parsed and linted only, which still fails the gate on a broken one rather than waiting
-		// until something references it.
-		EDocumentKind Kind = EDocumentKind::System;
-		FParser::DocumentKindFromExtension(FPaths::GetExtension(SourceFile), Kind);
-
-		const bool bGenerates = Kind == EDocumentKind::System
-			|| Kind == EDocumentKind::Module
-			|| Kind == EDocumentKind::DynamicInput;
-
-		FDiagnosticSink Diagnostics;
-
-		if (bLintOnly || !bGenerates)
-		{
-			FDocument Document;
-			if (FParser::ParseFile(SourceFile, Document, Diagnostics))
-			{
-				FLint::Run(Document, Diagnostics);
-			}
-		}
-		else
-		{
-			const FGenerateResult Result = FGenerator::GenerateFromFile(SourceFile, Options, Diagnostics);
-			if (Result.bSkipped)
-			{
-				++Skipped;
-			}
-			else if (Result.bSucceeded)
-			{
-				++Built;
-			}
-			else
-			{
-				++Failed;
-			}
-		}
-
 		for (const FDiagnostic& Diagnostic : Diagnostics.GetDiagnostics())
 		{
 			switch (Diagnostic.Severity)
@@ -1030,6 +1008,102 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 
 		TotalErrors += Diagnostics.NumErrors();
 		TotalWarnings += Diagnostics.NumWarnings();
+	};
+
+	// Systems whose compile is in flight, oldest first. Their diagnostics are held with them so each
+	// file's block still prints contiguously, at finalize.
+	struct FInFlightBuild
+	{
+		TSharedPtr<FPendingBuild> Pending;
+		TUniquePtr<FDiagnosticSink> Diagnostics;
+	};
+	TArray<FInFlightBuild> InFlight;
+
+	auto FinalizeFront = [&]()
+	{
+		FInFlightBuild Front = MoveTemp(InFlight[0]);
+		InFlight.RemoveAt(0);
+		if (FGenerator::Finalize(Front.Pending, *Front.Diagnostics))
+		{
+			++Built;
+		}
+		else
+		{
+			++Failed;
+		}
+		FlushDiagnostics(*Front.Diagnostics);
+	};
+
+	for (const FString& SourceFile : SourceFiles)
+	{
+		// .dfs and .dfm produce assets. A .dfe does not -- it is merged into its host by copy (R3), so
+		// it is parsed and linted only, which still fails the gate on a broken one rather than waiting
+		// until something references it.
+		EDocumentKind Kind = EDocumentKind::System;
+		FParser::DocumentKindFromExtension(FPaths::GetExtension(SourceFile), Kind);
+
+		const bool bGenerates = Kind == EDocumentKind::System
+			|| Kind == EDocumentKind::Module
+			|| Kind == EDocumentKind::DynamicInput;
+
+		if (bLintOnly || !bGenerates)
+		{
+			FDiagnosticSink Diagnostics;
+			FDocument Document;
+			if (FParser::ParseFile(SourceFile, Document, Diagnostics))
+			{
+				FLint::Run(Document, Diagnostics);
+			}
+			FlushDiagnostics(Diagnostics);
+			continue;
+		}
+
+		// Systems go through the pipeline; modules and dynamic inputs stay synchronous -- they are
+		// the dependencies the systems behind them resolve at plan time, and the sort above put them
+		// first for exactly that reason.
+		FGenerateOptions FileOptions = Options;
+		FileOptions.bDeferCompile = PipelineWindow > 1 && Kind == EDocumentKind::System && !Options.bVerifyOnly;
+
+		TUniquePtr<FDiagnosticSink> Diagnostics = MakeUnique<FDiagnosticSink>();
+		const FGenerateResult Result = FGenerator::GenerateFromFile(SourceFile, FileOptions, *Diagnostics);
+
+		if (Result.Pending.IsValid())
+		{
+			InFlight.Add({Result.Pending, MoveTemp(Diagnostics)});
+
+			// Oldest-first and opportunistic: whatever already compiled finalizes now, so its logs
+			// land next to its build and its save runs while the next generation is still cheap.
+			while (InFlight.Num() > 0 && FGenerator::IsCompileComplete(InFlight[0].Pending))
+			{
+				FinalizeFront();
+			}
+			while (InFlight.Num() >= PipelineWindow)
+			{
+				FinalizeFront();
+			}
+			continue;
+		}
+
+		if (Result.bSkipped)
+		{
+			++Skipped;
+		}
+		else if (Result.bSucceeded)
+		{
+			++Built;
+		}
+		else
+		{
+			++Failed;
+		}
+		FlushDiagnostics(*Diagnostics);
+	}
+
+	// Drain the tail: the last few systems' compiles overlap each other even with nothing left to
+	// generate.
+	while (InFlight.Num() > 0)
+	{
+		FinalizeFront();
 	}
 
 	UE_LOG(LogDreamFX, Display,

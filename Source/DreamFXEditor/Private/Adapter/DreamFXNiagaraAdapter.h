@@ -424,6 +424,14 @@ namespace UE::DreamFX::Editor
 		static void EndStructuralEpoch(UNiagaraSystem* System);
 
 		/**
+		 * A static switch landed. The engine's external write path refreshes the owning module item
+		 * synchronously (MoonEngine), so by default the shared context survives and only the counters
+		 * move; with SetRebuildContextOnSwitch the pre-refresh behaviour -- drop the context -- is
+		 * restored for A/B and as the escape hatch.
+		 */
+		static void OnStaticSwitchWritten(UNiagaraSystem* System);
+
+		/**
 		 * Turns the write scope off, so every write builds its own context as it did before P1.
 		 *
 		 * It exists to be measured against. A before-and-after taken from two different binaries also
@@ -440,6 +448,22 @@ namespace UE::DreamFX::Editor
 		 * wrong only without it has found exactly that. `dfx.ps1 build -RebuildOnStructural` sets it.
 		 */
 		static void SetRebuildContextOnStructural(bool bEnabled);
+
+		/**
+		 * Restores the pre-switch-refresh behaviour: a static-switch write drops the shared context.
+		 * Same purpose as the flag above: one-binary A/B, and the escape hatch if the engine's
+		 * synchronous module refresh after a switch write ever regresses. `dfx.ps1 build
+		 * -RebuildOnSwitch` sets it.
+		 */
+		static void SetRebuildContextOnSwitch(bool bEnabled);
+
+		/**
+		 * Off, every add pays the engine's per-add stack refresh again instead of one batch refresh
+		 * per stack. One-binary A/B and the escape hatch for the batching round. `dfx.ps1 build
+		 * -RebuildPerAdd` sets it off.
+		 */
+		static void SetBatchAddRefresh(bool bEnabled);
+		static bool IsBatchAddRefreshEnabled();
 
 		/** Zeroes the counters reported by ReportStats. */
 		static void ResetStats();
@@ -581,15 +605,24 @@ namespace UE::DreamFX::Editor
 		 */
 		static bool RenameEmitter(UNiagaraSystem* System, FName OldName, FName NewName, TArray<FString>& OutErrors);
 
+		/**
+		 * bDeferStackRefresh: a caller appending a stack's whole module list pays the engine-side
+		 * stack refresh once, via RefreshScriptStack, instead of per add. Until that refresh runs
+		 * nothing may resolve through the stack -- no inputs, no module items; graph-level calls
+		 * (SetModuleScriptVersion) are fine. The returned name is authoritative either way.
+		 */
 		static bool AddModule(const FStackAddress& StackAddress, UNiagaraScript* ModuleAsset,
-			FName& OutModuleName, TArray<FString>& OutErrors);
+			FName& OutModuleName, TArray<FString>& OutErrors, bool bDeferStackRefresh = false);
 		static bool RemoveModule(const FStackAddress& ModuleAddress, TArray<FString>& OutErrors);
 		static bool SetModuleEnabled(const FStackAddress& ModuleAddress, bool bEnabled, TArray<FString>& OutErrors);
 
 		/** Creates a Set Parameters module holding the given entries, and reports its module name. */
 		static bool AddSetParametersModule(const FStackAddress& StackAddress,
 			const TArray<TTuple<FName, FNiagaraTypeDefinition, FInputValue>>& Entries,
-			FName& OutModuleName, TArray<FString>& OutErrors);
+			FName& OutModuleName, TArray<FString>& OutErrors, bool bDeferStackRefresh = false);
+
+		/** The one stack refresh a deferred batch of adds pays. See AddModule's bDeferStackRefresh. */
+		static bool RefreshScriptStack(const FStackAddress& StackAddress, TArray<FString>& OutErrors);
 
 		static bool AddRenderer(const FStackAddress& EmitterAddress, UClass* RendererClass,
 			int32& OutRendererIndex, TArray<FString>& OutErrors);
@@ -691,6 +724,47 @@ namespace UE::DreamFX::Editor
 		 */
 		static bool CompileAndWait(UNiagaraSystem* System, bool bIncludingGpuShaders,
 			FCompileStateInfo& OutState, TArray<FString>& OutErrors);
+
+		/**
+		 * The two halves of CompileAndWait, for a pipelined build.
+		 *
+		 * RequestCompileAsync issues the compile and returns; the caller generates the next system
+		 * while this one's scripts compile on the task pool. PumpCompile advances the async work one
+		 * non-blocking step and reports completion from the system's outstanding-work queries -- not
+		 * from QueryCompileComplete's return value, for the reason CompileAndWait's comment gives.
+		 * WaitAndCollect is CompileAndWait minus the request, safe on a system whose compile is
+		 * already in flight, where a second RequestCompile would stack a duplicate compilation next
+		 * to the running one.
+		 */
+		static void RequestCompileAsync(UNiagaraSystem* System);
+		static bool PumpCompile(UNiagaraSystem* System);
+		static bool WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,
+			FCompileStateInfo& OutState, TArray<FString>& OutErrors);
+
+		/**
+		 * Closes every compile launch site on the system for the scope's lifetime.
+		 *
+		 * A generation window performs hundreds of structural edits, and several engine paths compile
+		 * the half-built system along the way: view model construction pays a loaded system's
+		 * on-demand debt, RefreshAll compiles when nothing is outstanding, a parameter rename
+		 * compiles unconditionally. Measured across a full tree that was 192 system compiles for 47
+		 * assets, every one but the last per asset thrown away. The scope makes RequestCompile record
+		 * the debt instead (engine-side SetSuppressCompileRequests); the finalize step's wait pays it
+		 * exactly once. Nesting is harmless -- the inner scope defers to the outer.
+		 */
+		class FCompileSuppressionScope
+		{
+		public:
+			explicit FCompileSuppressionScope(UNiagaraSystem* InSystem);
+			~FCompileSuppressionScope();
+
+			FCompileSuppressionScope(const FCompileSuppressionScope&) = delete;
+			FCompileSuppressionScope& operator=(const FCompileSuppressionScope&) = delete;
+
+		private:
+			UNiagaraSystem* System = nullptr;
+			bool bOwns = false;
+		};
 
 		/**
 		 * False when stack issues cannot be read in this process.
