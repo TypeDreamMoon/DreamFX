@@ -290,6 +290,13 @@ namespace UE::DreamFX::Editor
 		FName Name;
 		FNiagaraTypeDefinition Type;
 		FString Description;
+
+		/**
+		 * What the parameter is set to on the asset, which for a user parameter is its whole value --
+		 * nothing else assigns it unless a caller does at runtime. Dropping it on the read side was
+		 * how a rebuilt mirror ended up with every user parameter zeroed.
+		 */
+		FInputValue DefaultValue;
 	};
 
 	/**

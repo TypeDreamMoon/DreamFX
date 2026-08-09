@@ -1177,6 +1177,7 @@ namespace UE::DreamFX::Editor
 			Info.Name = Variable.Name;
 			Info.Type = Variable.Type;
 			Info.Description = Variable.Description.ToString();
+			FromVariableValue(Variable.DefaultValue, Info.DefaultValue);
 			OutVariables.Add(MoveTemp(Info));
 		}
 
