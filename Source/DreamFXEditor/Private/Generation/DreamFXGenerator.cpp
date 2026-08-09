@@ -2192,6 +2192,191 @@ namespace UE::DreamFX::Editor
 			return bOk;
 		}
 
+		/**
+		 * Every parameter this emitter's stacks read through a link, whatever depth it was written at.
+		 *
+		 * Set Parameters entries carry their own value and can hang a dynamic input chain below it, so
+		 * both lists are walked; NestedInputs is already flattened by the planner, which is why one
+		 * level of iteration reaches all of them.
+		 */
+		void CollectLinkedParameters(const FPlannedEmitter& Emitter, TSet<FNiagaraVariableBase>& OutLinked)
+		{
+			auto Note = [&OutLinked](const FInputValue& Value)
+			{
+				if (Value.Mode == EInputValueMode::Linked && Value.LinkedVariable.GetName() != NAME_None)
+				{
+					OutLinked.Add(Value.LinkedVariable);
+				}
+			};
+
+			for (const FPlannedStack& Stack : Emitter.Stacks)
+			{
+				for (const FPlannedModule& Module : Stack.Modules)
+				{
+					for (const FPlannedInput& Input : Module.Inputs)
+					{
+						Note(Input.Value);
+					}
+					for (const FPlannedSetParameter& Parameter : Module.Parameters)
+					{
+						Note(Parameter.Value);
+						for (const FPlannedInput& Nested : Parameter.NestedInputs)
+						{
+							Note(Nested.Value);
+						}
+					}
+				}
+			}
+		}
+
+		/**
+		 * True for the namespaces where a link is a read of a simulation attribute.
+		 *
+		 * Module. is excluded because UNiagaraGraph::CreateScriptVariableInternal already gives it
+		 * Value ("inputs in graphs are intrinsically written to"). User. and Engine. are excluded
+		 * because their defaults are not the graph's to decide -- a user parameter is set from outside
+		 * the system, and SynchronizeDefaultInputPin marks engine parameters' defaults ignored outright.
+		 */
+		bool IsAttributeNamespace(const FNiagaraVariableBase& Variable)
+		{
+			const FString Name = Variable.GetName().ToString();
+			return !Name.StartsWith(TEXT("Module."), ESearchCase::CaseSensitive)
+				&& !Name.StartsWith(TEXT("User."), ESearchCase::CaseSensitive)
+				&& !Name.StartsWith(TEXT("Engine."), ESearchCase::CaseSensitive)
+				&& Name.Contains(TEXT("."));
+		}
+
+		/**
+		 * The emitter's declared `Defaults = { … }`, plus the ones its links imply.
+		 *
+		 * The implied pass exists because linking a parameter *creates* a graph entry for it, and
+		 * CreateScriptVariableInternal gives anything outside the Module namespace
+		 * FailIfPreviouslyNotSet. The systems being mirrored have no entry at all for these parameters
+		 * -- reading one compiles because an absent mode means the translator falls back to the map-get
+		 * node's own default pin -- so a rebuild that adds a Fail entry turns an asset that compiled
+		 * into "Variable Particles.MySize was read before being set".
+		 *
+		 * Value with no value attached is the faithful reproduction of that absence: the same default
+		 * pin is read, and the fail check does not run. Where the source did declare a default, that
+		 * declaration wins and no implied entry is written for it.
+		 */
+		bool ApplyParameterDefaults(const FStackAddress& EmitterAddress, const FPlannedEmitter& Emitter,
+			FDiagnosticSink& Diagnostics)
+		{
+			// Declared and implied go in separate batches because they fail differently: a `Defaults`
+			// entry the source wrote is an instruction, and an entry inferred from a link is a fallback
+			// nobody asked for. One batch would have to pick one of those two failure modes for both.
+			TArray<FParameterDefault> Declared;
+			TSet<FNiagaraVariableBase> DeclaredNames;
+
+			for (const FPlannedParameterDefault& Default : Emitter.ParameterDefaults)
+			{
+				DeclaredNames.Add(Default.Variable);
+
+				FParameterDefault& Applied = Declared.AddDefaulted_GetRef();
+				Applied.Variable = Default.Variable;
+				Applied.Mode = Default.Mode;
+				Applied.Binding = Default.Binding;
+				Applied.Value = Default.Value;
+			}
+
+			TArray<FString> Errors;
+			if (!Declared.IsEmpty()
+				&& !FNiagaraAdapter::SetParameterDefaults(EmitterAddress, Declared, Errors))
+			{
+				ReportAdapterErrors(Errors, TEXT("DFX5027"), Emitter.ParameterDefaults[0].Location, Diagnostics);
+				return false;
+			}
+
+			TSet<FNiagaraVariableBase> Linked;
+			CollectLinkedParameters(Emitter, Linked);
+
+			TArray<FParameterDefault> Implied;
+			for (const FNiagaraVariableBase& Variable : Linked)
+			{
+				if (DeclaredNames.Contains(Variable) || !IsAttributeNamespace(Variable))
+				{
+					continue;
+				}
+
+				FParameterDefault& Applied = Implied.AddDefaulted_GetRef();
+				Applied.Variable = Variable;
+				Applied.Mode = FParameterDefault::EMode::Value;
+			}
+
+			Errors.Reset();
+			if (!Implied.IsEmpty()
+				&& !FNiagaraAdapter::SetParameterDefaults(EmitterAddress, Implied, Errors))
+			{
+				// Not a build error: the links themselves already landed, and all that is lost is the
+				// fallback for a read nothing set. Failing here would stop a compile that may well
+				// succeed, over a parameter the source never mentioned.
+				UE_LOG(LogDreamFX, Verbose, TEXT("emitter '%s': could not relax %d implied parameter default(s): %s"),
+					*Emitter.Name.ToString(), Implied.Num(), Errors.Num() > 0 ? *Errors[0] : TEXT("unknown"));
+			}
+
+			return true;
+		}
+
+		/**
+		 * Drops every exposed user parameter the source does not declare.
+		 *
+		 * Run twice, before the stacks and again after, because the two runs catch different things
+		 * and neither catches the other's:
+		 *
+		 *   * before -- what the *previous* build left behind. A build reuses the asset rather than
+		 *     recreating it, so a renamed or retyped parameter would otherwise accumulate: `_ArrowTex`
+		 *     ended up present as a `Texture` and a `DI<Texture>` at once.
+		 *   * after -- what *this* build created as a side effect. Writing `Bool = User.ShowCaseMode`
+		 *     goes through SetLinkedParameterValueForFunctionInput, which calls Graph->AddParameter,
+		 *     and that exposes a user parameter the source never declared. Nine of the ten remaining
+		 *     L1 mismatches were this, and the pre-stack run could not see any of them -- it had
+		 *     already finished by the time the link that creates them was written.
+		 *
+		 * Matched on name *and* type: that is what RemoveUserVariable is keyed on, and it is what makes
+		 * a retype removable at all. Matching on name alone would delete the entry the add loop is
+		 * about to write.
+		 */
+		void PruneUndeclaredUserVariables(UNiagaraSystem* System, const FPlan& Plan)
+		{
+			TArray<FString> Errors;
+			TArray<FUserVariableInfo> Existing;
+			if (!FNiagaraAdapter::GetUserVariables(System, Existing, Errors))
+			{
+				return;
+			}
+
+			TSet<TPair<FName, FNiagaraTypeDefinition>> Planned;
+			for (const FPlannedUserVariable& Variable : Plan.UserVariables)
+			{
+				Planned.Add(TPair<FName, FNiagaraTypeDefinition>(Variable.Name, Variable.Type));
+			}
+
+			for (const FUserVariableInfo& Stale : Existing)
+			{
+				// GetUserVariables reports the qualified name (`User.X`) and the plan holds the bare
+				// one, which is the same split AddUserVariable already documents.
+				FString BareName = Stale.Name.ToString();
+				BareName.RemoveFromStart(TEXT("User."), ESearchCase::CaseSensitive);
+
+				if (Planned.Contains(TPair<FName, FNiagaraTypeDefinition>(FName(*BareName), Stale.Type)))
+				{
+					continue;
+				}
+
+				Errors.Reset();
+				if (!FNiagaraAdapter::RemoveUserVariable(System, Stale.Name, Stale.Type, Errors))
+				{
+					// Not fatal. A parameter that will not come off leaves the asset carrying something
+					// the source does not describe, which is the state this whole pass is narrowing --
+					// failing the build over it would be worse.
+					UE_LOG(LogDreamFX, Warning,
+						TEXT("Could not remove user parameter '%s' that the source no longer declares: %s"),
+						*Stale.Name.ToString(), *FString::Join(Errors, TEXT(" | ")));
+				}
+			}
+		}
+
 		bool ApplyPlan(UNiagaraSystem* System, const FPlan& Plan, FDiagnosticSink& Diagnostics,
 			TMap<FName, FSourceLocation>& OutModuleLocations)
 		{
@@ -2261,42 +2446,7 @@ namespace UE::DreamFX::Editor
 			// Name *and* type, because that is what RemoveUserVariable is keyed on and what makes a
 			// retype removable at all -- matching on name alone would delete the entry the loop below
 			// is about to add.
-			{
-				TArray<FUserVariableInfo> Existing;
-				Errors.Reset();
-				if (FNiagaraAdapter::GetUserVariables(System, Existing, Errors))
-				{
-					TSet<TPair<FName, FNiagaraTypeDefinition>> Planned;
-					for (const FPlannedUserVariable& Variable : Plan.UserVariables)
-					{
-						Planned.Add(TPair<FName, FNiagaraTypeDefinition>(Variable.Name, Variable.Type));
-					}
-
-					for (const FUserVariableInfo& Stale : Existing)
-					{
-						// GetUserVariables reports the qualified name (`User.X`) and the plan holds the
-						// bare one, which is the same split AddUserVariable already documents.
-						FString BareName = Stale.Name.ToString();
-						BareName.RemoveFromStart(TEXT("User."), ESearchCase::CaseSensitive);
-
-						if (Planned.Contains(TPair<FName, FNiagaraTypeDefinition>(FName(*BareName), Stale.Type)))
-						{
-							continue;
-						}
-
-						Errors.Reset();
-						if (!FNiagaraAdapter::RemoveUserVariable(System, Stale.Name, Stale.Type, Errors))
-						{
-							// Not fatal. A parameter that will not come off leaves the asset carrying
-							// something the source does not describe, which is the state this whole
-							// block is narrowing -- failing the build over it would be worse.
-							UE_LOG(LogDreamFX, Warning,
-								TEXT("Could not remove user parameter '%s' that the source no longer declares: %s"),
-								*Stale.Name.ToString(), *FString::Join(Errors, TEXT(" | ")));
-						}
-					}
-				}
-			}
+			PruneUndeclaredUserVariables(System, Plan);
 
 			for (const FPlannedUserVariable& Variable : Plan.UserVariables)
 			{
@@ -2414,30 +2564,24 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
-				// Parameter defaults go on before the stacks too, and for the same kind of reason: a
-				// module that reads the parameter is only legal once reading it is.
-				for (const FPlannedParameterDefault& Default : Emitter.ParameterDefaults)
-				{
-					FParameterDefault Applied;
-					Applied.Variable = Default.Variable;
-					Applied.Mode = Default.Mode;
-					Applied.Binding = Default.Binding;
-					Applied.Value = Default.Value;
-
-					Errors.Reset();
-					if (!FNiagaraAdapter::SetParameterDefault(EmitterAddress, Applied, Errors))
-					{
-						ReportAdapterErrors(Errors, TEXT("DFX5027"), Default.Location, Diagnostics);
-						return false;
-					}
-				}
-
 				for (const FPlannedStack& Stack : Emitter.Stacks)
 				{
 					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations))
 					{
 						return false;
 					}
+				}
+
+				// Parameter defaults go on *after* the stacks, and the order is the whole point.
+				//
+				// Writing `Input = Particles.Foo` ends in FNiagaraStackGraphUtilities::
+				// SetLinkedParameterValueForFunctionInput, whose DesiredDefaultMode argument defaults to
+				// FailIfPreviouslyNotSet and which assigns it unconditionally over whatever the parameter
+				// already had. So every link write in the stacks silently stomps a default written before
+				// them, and an emitter with two links to one parameter stomps it twice.
+				if (!ApplyParameterDefaults(EmitterAddress, Emitter, Diagnostics))
+				{
+					return false;
 				}
 
 				for (const FPlannedRenderer& Renderer : Emitter.Renderers)
@@ -2500,6 +2644,11 @@ namespace UE::DreamFX::Editor
 					}
 				}
 			}
+
+			// Again, now that the stacks and renderers have run: writing a link to `User.X` exposes X
+			// whether the source declared it or not, so this is the only point at which those are
+			// visible to be dropped.
+			PruneUndeclaredUserVariables(System, Plan);
 
 			return true;
 		}

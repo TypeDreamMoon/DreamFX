@@ -511,6 +511,10 @@ namespace UE::DreamFX::Editor
 		static bool SetParameterDefault(const FStackAddress& EmitterAddress,
 			const FParameterDefault& Default, TArray<FString>& OutErrors);
 
+		/** As SetParameterDefault, for a whole emitter's worth at one context and one epoch. */
+		static bool SetParameterDefaults(const FStackAddress& EmitterAddress,
+			TArrayView<const FParameterDefault> Defaults, TArray<FString>& OutErrors);
+
 		/**
 		 * One script stack's modules in execution order. Needed for the two system-scope stacks, which
 		 * GetEmitterInfo cannot reach because they have no owning emitter.

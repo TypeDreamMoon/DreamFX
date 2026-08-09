@@ -1000,6 +1000,47 @@ namespace UE::DreamFX::Editor
 		return Drain(Context, OutErrors);
 	}
 
+	bool FNiagaraAdapter::SetParameterDefaults(const FStackAddress& EmitterAddress,
+		TArrayView<const FParameterDefault> Defaults, TArray<FString>& OutErrors)
+	{
+		if (Defaults.IsEmpty())
+		{
+			return true;
+		}
+
+		FOpTimer OpTimer(TEXT("SetParameterDefaults"));
+
+		// One epoch and one context for the whole batch. Each write is still structural, but none of
+		// these read the stack -- they address the emitter's graph, not an item in it -- so a view
+		// model left stale between two of them describes nothing either of them looks at. The caller
+		// writes one of these per parameter its links touched, which on a 24-emitter system is several
+		// hundred, and paying a context rebuild for each was most of the cost of having them at all.
+		FEpochGuard Epoch(EmitterAddress.System);
+		FEditContext ContextHolder(EmitterAddress.System);
+		FNiagaraExternalEditContext& Context = ContextHolder.Get();
+		const FNiagaraExt_StackItemReference Reference = ToReference(EmitterAddress);
+
+		bool bOk = true;
+		for (const FParameterDefault& Default : Defaults)
+		{
+			FNiagaraExt_ParameterDefault Entry;
+			Entry.Variable.Name = Default.Variable.GetName();
+			Entry.Variable.Type = Default.Variable.GetType();
+			Entry.Mode = ToNiagaraDefaultMode(Default.Mode);
+			Entry.Binding = Default.Binding;
+			if (Default.Mode == FParameterDefault::EMode::Value && Default.Value.IsSet()
+				&& !ToVariableValue(Default.Value, Default.Variable.GetType(), Entry.Value, OutErrors))
+			{
+				bOk = false;
+				continue;
+			}
+
+			UNiagaraExternalEditUtilities::SetEmitterParameterDefault(Reference, Entry, Context);
+		}
+
+		return Drain(Context, OutErrors) && bOk;
+	}
+
 	bool FNiagaraAdapter::GetEmitterInfo(const FStackAddress& EmitterAddress, FEmitterInfo& OutInfo, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("read: GetEmitterInfo"));
