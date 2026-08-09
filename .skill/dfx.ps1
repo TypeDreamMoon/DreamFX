@@ -94,6 +94,10 @@ param(
 
     # mirror-diff: skip the L2 compile check and report text equivalence only. Much faster, and the
     # right thing when the mirrors were built in the same session that is now diffing them.
+    # decompile: print every input, including ones equal to a pristine module's. Diagnostic only --
+    # the result is not meant to be maintained, it answers "what did the baseline hide?".
+    [switch]$NoDefaults,
+
     [switch]$NoCompile,
 
     # schema: which stack to probe the module in. Defaults to trying each in turn.
@@ -268,6 +272,7 @@ switch ($Command) {
         $arguments += "-Decompile=$Target"
         if ($Out) { $arguments += "-Out=$Out" }
         if ($Root) { $arguments += "-Root=$Root" }
+        if ($NoDefaults) { $arguments += '-NoDefaults' }
     }
     'decompile-all' {
         $arguments += '-DecompileAll'

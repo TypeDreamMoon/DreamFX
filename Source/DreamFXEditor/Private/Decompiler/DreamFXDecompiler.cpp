@@ -276,6 +276,9 @@ namespace UE::DreamFX::Editor
 			/** Where lifted-out scratch pad scripts go; empty means "do not lift any out" (R3). */
 			FString ExtractedScriptFolder;
 
+			/** Diagnostic: print inputs even when they equal a pristine instance's. */
+			bool bIncludeDefaultedInputs = false;
+
 			/** Counts down across the whole document, not per chain: the blow-up is in the total. */
 			mutable int32 ExpansionsRemaining = MaxDynamicInputExpansions;
 		};
@@ -1555,7 +1558,7 @@ namespace UE::DreamFX::Editor
 				// R8: only inputs that differ from a pristine instance of the same module are
 				// printed. Without this every module dumps its entire input list.
 				FString DefaultsError;
-				const TMap<FName, FInputValue>* Defaults = Module.Script
+				const TMap<FName, FInputValue>* Defaults = (Module.Script && !Context.bIncludeDefaultedInputs)
 					? Modules.GetStackDefaults(Module.Script, StackKind,
 						bVersionDrifted ? LiveVersion.Guid : FGuid(), DefaultsError)
 					: nullptr;
@@ -1783,6 +1786,7 @@ namespace UE::DreamFX::Editor
 		Context.Modules = &Modules;
 		Context.RootToken = RootToken;
 		Context.Unsupported = &Result.UnsupportedFeatures;
+		Context.bIncludeDefaultedInputs = Options.bIncludeDefaultedInputs;
 		{
 			FString Error;
 			FDreamFXPaths::ResolveRootMountPoint(RootToken, Context.RootMountPoint, Error);
@@ -2051,6 +2055,7 @@ namespace UE::DreamFX::Editor
 		Context.Modules = &Modules;
 		Context.RootToken = RootToken;
 		Context.Unsupported = &Result.UnsupportedFeatures;
+		Context.bIncludeDefaultedInputs = Options.bIncludeDefaultedInputs;
 		{
 			FString Error;
 			FDreamFXPaths::ResolveRootMountPoint(RootToken, Context.RootMountPoint, Error);

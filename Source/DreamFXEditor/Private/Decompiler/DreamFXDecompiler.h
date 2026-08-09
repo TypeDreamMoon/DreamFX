@@ -39,6 +39,18 @@ namespace UE::DreamFX::Editor
 		 * file that has to rebuild, and a scratch pad script that was never lifted out cannot.
 		 */
 		bool bMaterializeEmbeddedScripts = false;
+
+		/**
+		 * Print every input, including ones equal to a pristine instance of the same module.
+		 *
+		 * Diagnostic only -- the output is far longer than anyone wants to maintain and re-importing
+		 * it writes inputs nobody authored. It exists because "what did the baseline hide?" is the
+		 * question behind a whole family of bugs: an input the export omits as equal-to-default, whose
+		 * rebuilt module then does *not* get that value, produces a mirror that reads identical and
+		 * simulates differently. NS_Spawn_Ninja_Root's LoopDuration and N_MagicRuneCast_*'s SpawnCount
+		 * were both this, and neither is visible in a normal export by construction.
+		 */
+		bool bIncludeDefaultedInputs = false;
 	};
 
 	/**

@@ -219,7 +219,8 @@ namespace
 	}
 
 	/** Exports one Niagara system back to source, to a file or to the log. */
-	int32 RunDecompile(const FString& AssetPath, const FString& OutputPath, const FString& RootToken)
+	int32 RunDecompile(const FString& AssetPath, const FString& OutputPath, const FString& RootToken,
+		bool bIncludeDefaultedInputs = false)
 	{
 		FString PackagePath;
 		FString ResolveError;
@@ -247,6 +248,8 @@ namespace
 		// idempotent, so the diff reuses what the export already wrote rather than writing again.
 		// `coverage` is deliberately not in this list: it reports and must not touch the tree.
 		DecompileOptions.bMaterializeEmbeddedScripts = true;
+		// Diagnostic only: prints inputs the baseline would suppress. See FDecompileOptions.
+		DecompileOptions.bIncludeDefaultedInputs = bIncludeDefaultedInputs;
 
 		FDiagnosticSink Diagnostics;
 		const FDecompileResult Result = FDecompiler::Decompile(System, RootToken, Diagnostics,
@@ -858,7 +861,8 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	{
 		FString OutputPath;
 		FParse::Value(*Params, TEXT("Out="), OutputPath);
-		return RunDecompile(DecompileTarget, OutputPath, RootToken.IsEmpty() ? TEXT("Game") : RootToken);
+		return RunDecompile(DecompileTarget, OutputPath, RootToken.IsEmpty() ? TEXT("Game") : RootToken,
+			FParse::Param(*Params, TEXT("NoDefaults")));
 	}
 
 	if (FParse::Param(*Params, TEXT("Coverage")))
