@@ -210,7 +210,14 @@ namespace UE::DreamFX::Editor
 
 	FString FValueLowering::DescribeType(const FNiagaraTypeDefinition& Type)
 	{
-		return Type.IsValid() ? Type.GetName() : TEXT("<invalid>");
+		if (!Type.IsValid())
+		{
+			return TEXT("<invalid>");
+		}
+		// A static type shares its struct, and therefore its name, with the runtime type it is built
+		// from -- so printing the name alone turned a real mismatch into the unreadable "expects
+		// NiagaraBool, but a boolean was written". Say which of the two it is.
+		return Type.IsStatic() ? FString::Printf(TEXT("static %s"), *Type.GetName()) : Type.GetName();
 	}
 
 	FString FValueLowering::DescribeDeclaredType(const FNiagaraTypeDefinition& Type)
@@ -381,6 +388,14 @@ namespace UE::DreamFX::Editor
 
 		const int32 Components = FloatComponentCount(TargetType);
 
+		// A static switch input is typed `bool`/`int`/an enum with TF_Static set, and TF_Static takes
+		// part in operator==, so comparing the target against GetBoolDef() refused every switch write
+		// outright -- `Grid3D_GAS_CONTROLS_SPAWN.StaticMesh = true` failed while `ApplyRenderDensityRamp
+		// = true`, a plain bool one line below it in the same module, went through. A literal of the
+		// right shape is the correct value for either, and both resolve to the same UScriptStruct, so
+		// the flag is stripped for the kind check and the target's own struct still writes the bytes.
+		const FNiagaraTypeDefinition BaseType = TargetType.IsStatic() ? TargetType.RemoveStaticDef() : TargetType;
+
 		switch (Value.Kind)
 		{
 		case EValueKind::Number:
@@ -389,7 +404,7 @@ namespace UE::DreamFX::Editor
 			bool bIsInteger = false;
 			EvaluateScalar(Value, Number, bIsInteger);
 
-			if (TargetType == FNiagaraTypeDefinition::GetFloatDef())
+			if (BaseType == FNiagaraTypeDefinition::GetFloatDef())
 			{
 				// L7: widening int -> float is always fine.
 				FNiagaraFloat Float;
@@ -398,7 +413,7 @@ namespace UE::DreamFX::Editor
 				return true;
 			}
 
-			if (TargetType == FNiagaraTypeDefinition::GetIntDef() || TargetType.IsEnum())
+			if (BaseType == FNiagaraTypeDefinition::GetIntDef() || TargetType.IsEnum())
 			{
 				if (!bIsInteger)
 				{
@@ -431,7 +446,7 @@ namespace UE::DreamFX::Editor
 
 		case EValueKind::Bool:
 		{
-			if (TargetType != FNiagaraTypeDefinition::GetBoolDef())
+			if (BaseType != FNiagaraTypeDefinition::GetBoolDef())
 			{
 				Diagnostics.Error(TEXT("DFX4001"), Value.Location,
 					FString::Printf(TEXT("Input '%s' expects %s, but a boolean was written."),
