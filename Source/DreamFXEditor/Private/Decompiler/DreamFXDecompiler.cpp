@@ -53,9 +53,37 @@ namespace UE::DreamFX::Editor
 
 		FString FormatFloat(float Value)
 		{
-			// SanitizeFloat keeps the shortest round-trippable form, which is what keeps a re-export
-			// byte-identical to the one before it.
-			return FString::SanitizeFloat(Value);
+			// SanitizeFloat is Printf("%f") with the trailing zeros trimmed -- six decimal places,
+			// NOT a round-trippable form. 11/15 stores as 0.73333335 and comes back as 0.733333,
+			// which is *below* the value it came from. Usually that is invisible, but Niagara
+			// resolves WarmupTime with FloorToInt(WarmupTime / WarmupTickDelta), so a value landing
+			// a hair low costs a whole tick: 0.733333 rebuilt as 0.666667.
+			//
+			// Keep the short form whenever it survives the trip and widen only for the values that
+			// need it, so the overwhelming majority of sources are left alone.
+			FString Text = FString::SanitizeFloat(Value);
+			if (FCString::Atof(*Text) == Value)
+			{
+				return Text;
+			}
+
+			for (int32 Digits = 7; Digits <= 9; ++Digits)
+			{
+				FString Candidate = FString::Printf(TEXT("%.*g"), Digits, Value);
+				if (FCString::Atof(*Candidate) == Value)
+				{
+					// %g drops the decimal point once the value is integral, and a bare 1 reads as
+					// an int rather than a float, so put it back.
+					if (!Candidate.Contains(TEXT(".")) && !Candidate.Contains(TEXT("e")))
+					{
+						Candidate += TEXT(".0");
+					}
+					return Candidate;
+				}
+			}
+
+			// Not a finite number: SanitizeFloat already returned it verbatim.
+			return Text;
 		}
 
 		/** Renders a literal value back to source, given the type that says how to read its bytes. */
