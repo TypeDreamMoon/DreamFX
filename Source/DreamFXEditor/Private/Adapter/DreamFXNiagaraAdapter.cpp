@@ -17,6 +17,7 @@
 #include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
 #include "NiagaraScriptSource.h"
+#include "NiagaraScriptVariable.h"
 #include "NiagaraSystem.h"
 #include "NiagaraTypes.h"
 #include "NiagaraVariant.h"
@@ -1231,24 +1232,55 @@ namespace UE::DreamFX::Editor
 #endif
 	}
 
+	namespace
+	{
+		/** Defined further down, next to the other graph lookups. */
+		UNiagaraGraph* GraphForAddress(const FStackAddress& Address);
+	}
+
 	bool FNiagaraAdapter::SetParameterDefault(const FStackAddress& EmitterAddress,
 		const FParameterDefault& Default, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("SetParameterDefault"));
 
 #if !DREAMFX_HAS_NIAGARA_FAST_EDIT
-		// Stock engine: the only functional casualty of this path, and worth stating exactly.
+		// Stock engine: written straight onto the graph's script variable.
 		//
-		// Writing a parameter's default is how the generator turns a graph parameter created by a
-		// link write from FailIfPreviouslyNotSet into Value. Left on Fail, Niagara refuses to compile
-		// a read of it -- the DFX6001 this project spent a day on. There is no stock API that reaches
-		// UNiagaraScriptVariable::DefaultMode: UNiagaraGraph::AddParameter is the way in, and it
-		// carries no export macro on a stock engine.
-		//
-		// A no-op rather than an error, because whether it actually bites depends on the source: an
-		// asset whose reads are all of stock attributes never creates such a parameter. Sources that
-		// do will fail at the Niagara compile with a clear message, which is a better place to find
-		// out than a build-time refusal that stops assets that would have been fine.
+		// This used to be a no-op, on the grounds that UNiagaraGraph::AddParameter is the way in and
+		// carries no export macro here. AddParameter is the way to *create* a parameter; it is not
+		// the way to reach one that exists. And by the time defaults are written the parameter does
+		// exist -- a link write is what creates it, which is the whole reason the generator writes
+		// defaults after the stacks. GetScriptVariable is exported, and DefaultMode, DefaultBinding
+		// and SetDefaultValueData are all public on what it returns.
+		UNiagaraGraph* Graph = GraphForAddress(EmitterAddress);
+		if (Graph == nullptr)
+		{
+			return true;
+		}
+
+		UNiagaraScriptVariable* ScriptVariable = Graph->GetScriptVariable(Default.Variable.GetName());
+		if (ScriptVariable == nullptr)
+		{
+			// Nothing created the parameter, so nothing reads it either. Still not an error: a source
+			// whose reads are all of stock attributes legitimately reaches here.
+			return true;
+		}
+
+		ScriptVariable->Modify();
+		ScriptVariable->DefaultMode = ToNiagaraDefaultMode(Default.Mode);
+
+		if (Default.Mode == FParameterDefault::EMode::Binding)
+		{
+			ScriptVariable->DefaultBinding.SetName(Default.Binding);
+		}
+		else if (Default.Mode == FParameterDefault::EMode::Value
+			&& Default.Value.Mode == EInputValueMode::Literal
+			&& Default.Value.LiteralBytes.Num() == Default.Variable.GetType().GetSize())
+		{
+			ScriptVariable->SetDefaultValueData(Default.Value.LiteralBytes.GetData());
+		}
+
+		Graph->NotifyGraphChanged();
 		return true;
 #else
 		// Structural: this creates the graph parameter when it is not there, and changes which pins
@@ -1282,8 +1314,30 @@ namespace UE::DreamFX::Editor
 		}
 
 #if !DREAMFX_HAS_NIAGARA_FAST_EDIT
-		// See SetParameterDefault: no stock way to write a graph parameter's default mode.
-		return true;
+		// Same graph write as the single version, once per entry. No context and no epoch: these
+		// address the emitter's graph rather than an item in its stack, so there is no view model to
+		// invalidate.
+		bool bWroteAny = false;
+		for (const FParameterDefault& Default : Defaults)
+		{
+			TArray<FString> EntryErrors;
+			if (SetParameterDefault(EmitterAddress, Default, EntryErrors))
+			{
+				bWroteAny = true;
+			}
+			else
+			{
+				OutErrors.Append(EntryErrors);
+			}
+		}
+		if (bWroteAny)
+		{
+			if (UNiagaraGraph* Graph = GraphForAddress(EmitterAddress))
+			{
+				Graph->NotifyGraphChanged();
+			}
+		}
+		return OutErrors.IsEmpty();
 #else
 
 		FOpTimer OpTimer(TEXT("SetParameterDefaults"));
