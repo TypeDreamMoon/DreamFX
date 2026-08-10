@@ -870,9 +870,14 @@ namespace UE::DreamFX::Editor
 		 *
 		 * The static-flagged type comes off the pin rather than being synthesized, which is what makes
 		 * the whole approach work: the flag that cannot be sent through the API is already sitting there.
+		 *
+		 * `bOutNotASwitch` distinguishes "this module declares no switch by that name" -- an ordinary
+		 * input, asked speculatively, and the caller should use the normal write path -- from a real
+		 * failure. The question is put to the module node rather than to the schema because the
+		 * schema's `bIsStaticSwitch` is false for any module whose topology could not be probed.
 		 */
 		static bool SetStaticSwitchByPin(const FStackAddress& ModuleAddress, FName SwitchVariableName,
-			const FInputValue& Value, TArray<FString>& OutErrors);
+			const FInputValue& Value, bool& bOutNotASwitch, TArray<FString>& OutErrors);
 
 		/**
 		 * Writes a dynamic input into an input and binds the node it creates to a script version.

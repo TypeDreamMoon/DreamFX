@@ -2774,24 +2774,19 @@ namespace UE::DreamFX::Editor
 	}
 
 	bool FNiagaraAdapter::SetStaticSwitchByPin(const FStackAddress& ModuleAddress, FName SwitchVariableName,
-		const FInputValue& Value, TArray<FString>& OutErrors)
+		const FInputValue& Value, bool& bOutNotASwitch, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("SetStaticSwitchByPin"));
+		bOutNotASwitch = false;
 
 		UNiagaraNodeFunctionCall* Node = FindModuleNode(ModuleAddress);
-		if (Node == nullptr)
-		{
-			OutErrors.Add(FString::Printf(TEXT("No module node named '%s' to write a static switch on."),
-				*ModuleAddress.ModuleName.ToString()));
-			return false;
-		}
-
 		const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
-		UNiagaraGraph* CalledGraph = Node->GetCalledGraph();
-		if (Schema == nullptr || CalledGraph == nullptr)
+		UNiagaraGraph* CalledGraph = Node != nullptr ? Node->GetCalledGraph() : nullptr;
+		if (Node == nullptr || Schema == nullptr || CalledGraph == nullptr)
 		{
-			OutErrors.Add(FString::Printf(TEXT("Module '%s' has no called graph to read switches from."),
-				*ModuleAddress.ModuleName.ToString()));
+			// Not an error: every depth-one input asks this question, and plenty of them address
+			// something that is not a module function call with a graph behind it.
+			bOutNotASwitch = true;
 			return false;
 		}
 
@@ -2825,17 +2820,33 @@ namespace UE::DreamFX::Editor
 
 		if (SwitchPin == nullptr)
 		{
-			// Explicit, never silent: a switch the node does not have means the module changed under
-			// the source, and quietly doing nothing would leave the graph on the old branch.
-			TArray<FString> Available;
-			for (const FNiagaraVariable& SwitchVariable : SwitchVariables)
+			// The module declares no switch by this name, which is the ordinary answer for an ordinary
+			// input. The caller writes it the normal way.
+			//
+			// -DreamFXTraceSwitchLookup prints what the module actually declares against what was
+			// asked for. It exists because an input can be static-typed to the engine and still be
+			// absent from this list: a switch a module *propagates* from an inner call surfaces as an
+			// input on the outer module with no pin on the outer node. Nothing short of printing both
+			// sides distinguishes that from a plain name mismatch -- it is what identified the case.
+			if (FParse::Param(FCommandLine::Get(), TEXT("DreamFXTraceSwitchLookup")))
 			{
-				Available.Add(SwitchVariable.GetName().ToString());
+				TArray<FString> Declared;
+				for (const FNiagaraVariable& SwitchVariable : SwitchVariables)
+				{
+					Declared.Add(SwitchVariable.GetName().ToString());
+				}
+				TArray<FString> PinNames;
+				for (const UEdGraphPin* Pin : InputPins)
+				{
+					if (Pin != nullptr) { PinNames.Add(Pin->GetFName().ToString()); }
+				}
+				UE_LOG(LogDreamFX, Warning,
+					TEXT("[switch-trace] module '%s' wanted '%s' | declares: %s | pins: %s"),
+					*ModuleAddress.ModuleName.ToString(), *SwitchVariableName.ToString(),
+					Declared.Num() > 0 ? *FString::Join(Declared, TEXT(", ")) : TEXT("(none)"),
+					PinNames.Num() > 0 ? *FString::Join(PinNames, TEXT(", ")) : TEXT("(none)"));
 			}
-			OutErrors.Add(FString::Printf(
-				TEXT("Module '%s' has no static switch named '%s'. Switches this module declares: %s."),
-				*ModuleAddress.ModuleName.ToString(), *SwitchVariableName.ToString(),
-				Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(none)")));
+			bOutNotASwitch = true;
 			return false;
 		}
 

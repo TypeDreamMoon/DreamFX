@@ -79,14 +79,19 @@ namespace UE::DreamFX::Editor
 			bool bIsStaticSwitch = false;
 
 			/**
-			 * The switch's Niagara variable name, for the pin write.
+			 * The input's Niagara variable name, for the static switch pin write.
 			 *
-			 * Recorded for the same reason as the flag above: the pin on the module node is named after
-			 * the variable, and Path carries the display spelling the external edit API addresses by --
-			 * `Life Cycle Mode`, not `LifeCycleMode`. The schema knows both while planning and neither
-			 * is derivable from the other, so the real name has to come along.
+			 * Recorded for the same reason as the flag above -- the schema is in hand while planning
+			 * and gone by the time the write happens -- and recorded for *every* input, not just the
+			 * ones the schema calls switches, because that flag is not reliable: it comes back false
+			 * for modules whose stack topology could not be probed, and those inputs then took the
+			 * path that cannot carry a switch. Asking the module node whether it declares a switch by
+			 * this name is a fact; the flag is a report.
+			 *
+			 * Distinct from `Path`, which carries the spelling the external edit API addresses by --
+			 * `Life Cycle Mode`, not `LifeCycleMode`. Neither is derivable from the other.
 			 */
-			FName SwitchVariableName;
+			FName NiagaraName;
 		};
 
 		/**
@@ -96,16 +101,19 @@ namespace UE::DreamFX::Editor
 		 * caller records the start index before planning so it does not have to know how many.
 		 */
 		void MarkStaticSwitch(TArray<FPlannedInput>& Inputs, int32 FirstIndex, bool bIsStaticSwitch,
-			FName SwitchVariableName)
+			FName NiagaraName)
 		{
-			if (!bIsStaticSwitch)
-			{
-				return;
-			}
+			// The name is recorded whatever the flag says. The schema cannot always tell that an input
+			// is a switch -- only FNiagaraExt_StackInputTopology::bIsStaticSwitch reports it, and it
+			// comes back false for modules whose topology could not be probed -- so the write path
+			// asks the module node itself rather than trusting the flag.
 			for (int32 Index = FirstIndex; Index < Inputs.Num(); ++Index)
 			{
-				Inputs[Index].bIsStaticSwitch = true;
-				Inputs[Index].SwitchVariableName = SwitchVariableName;
+				Inputs[Index].NiagaraName = NiagaraName;
+				if (bIsStaticSwitch)
+				{
+					Inputs[Index].bIsStaticSwitch = true;
+				}
 			}
 		}
 
@@ -2022,13 +2030,14 @@ namespace UE::DreamFX::Editor
 		 */
 		bool ApplyPlannedInput(const FStackAddress& InputAddress, const FPlannedInput& Input, TArray<FString>& OutErrors)
 		{
-			// Writing a static switch changes which other inputs are visible. The engine's external
-			// write path refreshes the owning module item in place when one lands, so by default the
-			// epoch survives; the adapter still has to be told, because from where it sits a switch
-			// write looks like any other literal -- the module schema said so at plan time, here.
+			// Writing a static switch changes which other inputs are visible, and a pin write tells the
+			// live edit context nothing, so the epoch has to end. Keyed on what actually happened
+			// rather than on the plan's flag: the flag is false for a module whose topology could not
+			// be probed, and one of those writes still lands on a switch pin.
+			bool bWroteSwitch = false;
 			ON_SCOPE_EXIT
 			{
-				if (Input.bIsStaticSwitch)
+				if (bWroteSwitch || Input.bIsStaticSwitch)
 				{
 					FNiagaraAdapter::OnStaticSwitchWritten(InputAddress.System);
 				}
@@ -2038,16 +2047,32 @@ namespace UE::DreamFX::Editor
 			// pin is what the stack UI does -- the external edit API cannot carry a static switch at
 			// all, because the static flag is part of type equality and cannot survive the payload.
 			//
-			// Restricted to depth one on purpose. A switch can also belong to a *dynamic input* nested
-			// in an argument (`SpriteSize = RandomRangeVector2D(RandomnessMode = ...)`), and that node
-			// is reached through the module's override pin chain -- which needs
-			// GetStackFunctionInputOverridePin, public but unexported. Those keep the old path until
-			// that traversal exists; routing them here found no pin and turned writes that used to
-			// land into failures.
-			if (Input.bIsStaticSwitch && Input.Path.Num() == 1 && !Input.SwitchVariableName.IsNone())
+			// The module node is asked, not the schema flag. `bIsStaticSwitch` comes back false for
+			// modules whose topology could not be probed -- `/NiagaraFluids/*` did exactly that -- and
+			// those writes then went down the path that refuses switches.
+			//
+			// Depth one only. A switch can also belong to a *dynamic input* nested in an argument
+			// (`SpriteSize = RandomRangeVector2D(RandomnessMode = ...)`); that node is reached through
+			// the override pin chain, which needs GetStackFunctionInputOverridePin -- public but
+			// unexported. Not-a-switch falls through rather than failing, so an ordinary input asking
+			// the same question costs one name lookup and nothing else.
+			if (Input.Path.Num() == 1 && !Input.NiagaraName.IsNone())
 			{
-				return FNiagaraAdapter::SetStaticSwitchByPin(
-					InputAddress, Input.SwitchVariableName, Input.Value, OutErrors);
+				bool bNotASwitch = false;
+				if (FNiagaraAdapter::SetStaticSwitchByPin(
+					InputAddress, Input.NiagaraName, Input.Value, bNotASwitch, OutErrors))
+				{
+					bWroteSwitch = true;
+					return true;
+				}
+				if (!bNotASwitch)
+				{
+					// A real switch that would not take the value -- report it, do not quietly fall
+					// through to a path that will reject it for an unrelated-sounding reason.
+					bWroteSwitch = true;
+					return false;
+				}
+				OutErrors.Reset();
 			}
 
 			if (Input.Value.Mode == EInputValueMode::DynamicInput && Input.DynamicInputVersion.IsValid())
