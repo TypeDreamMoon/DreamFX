@@ -880,6 +880,22 @@ namespace UE::DreamFX::Editor
 			const FInputValue& Value, bool& bOutNotASwitch, TArray<FString>& OutErrors);
 
 		/**
+		 * Writes a static-typed input that is *not* one of the module's own switches.
+		 *
+		 * The engine keeps override pins in two places, and says so where it writes them: a static
+		 * switch's pin is on the owning function call node, and an ordinary parameter's is on the
+		 * override parameter map set node. SetStaticSwitchByPin covers the first. This covers the
+		 * second -- a `Module.X` parameter whose type carries the static flag because it drives a
+		 * switch inside the module, which is therefore not in the module's own switch list and has no
+		 * pin on its node.
+		 *
+		 * FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin does the entire
+		 * find-or-create for it and is exported, so unlike the first path nothing has to be replicated.
+		 */
+		static bool SetStaticInputByOverridePin(const FStackAddress& ModuleAddress, FName InputName,
+			const FNiagaraTypeDefinition& InputType, const FInputValue& Value, TArray<FString>& OutErrors);
+
+		/**
 		 * Writes a dynamic input into an input and binds the node it creates to a script version.
 		 *
 		 * Dynamic inputs are versioned exactly as modules are, and the revisions are just as

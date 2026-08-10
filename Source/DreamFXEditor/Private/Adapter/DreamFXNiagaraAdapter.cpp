@@ -3,6 +3,8 @@
 #include "DreamFXModule.h"
 
 #include "EdGraphSchema_Niagara.h"
+#include "ViewModels/Stack/NiagaraParameterHandle.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #include "NiagaraCommon.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraDataInterfaceCurveBase.h"
@@ -344,6 +346,62 @@ namespace UE::DreamFX::Editor
 			const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
 			FJsonSerializer::Serialize(Rewritten->AsObject().ToSharedRef(), Writer);
 			return Out;
+		}
+
+		/**
+		 * A compile-time constant as the string a pin default holds.
+		 *
+		 * Shared by both static write paths -- the switch pin on the function call node and the
+		 * override pin on the map set node -- because the encoding is the same either way: build a
+		 * variable of the *static-flagged* type and let the schema serialise it. The flag has to be on
+		 * the type here, which is the whole reason these paths exist; it is what the external edit
+		 * API's payload cannot carry.
+		 */
+		bool EncodeStaticPinDefault(const FNiagaraTypeDefinition& Type, FName InputName,
+			const FInputValue& Value, FString& OutPinDefault, TArray<FString>& OutErrors)
+		{
+			const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
+			if (Schema == nullptr)
+			{
+				OutErrors.Add(TEXT("The Niagara graph schema is unavailable."));
+				return false;
+			}
+
+			FNiagaraVariable LocalValue(Type, NAME_None);
+			LocalValue.AllocateData();
+
+			if (Value.Mode == EInputValueMode::Literal
+				&& Value.LiteralBytes.Num() == LocalValue.GetSizeInBytes())
+			{
+				LocalValue.SetData(Value.LiteralBytes.GetData());
+			}
+			else if (Value.Mode == EInputValueMode::Enum && Value.EnumType != nullptr)
+			{
+				const int64 EntryValue = Value.EnumType->GetValueByName(Value.EnumEntryName);
+				if (EntryValue == INDEX_NONE || LocalValue.GetSizeInBytes() != sizeof(int32))
+				{
+					OutErrors.Add(FString::Printf(TEXT("'%s' is not an entry of enum '%s'."),
+						*Value.EnumEntryName.ToString(), *Value.EnumType->GetName()));
+					return false;
+				}
+				const int32 Narrowed = static_cast<int32>(EntryValue);
+				LocalValue.SetData(reinterpret_cast<const uint8*>(&Narrowed));
+			}
+			else
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("A static input takes a compile-time constant; '%s' was given a value this write path cannot encode."),
+					*InputName.ToString()));
+				return false;
+			}
+
+			if (!Schema->TryGetPinDefaultValueFromNiagaraVariable(LocalValue, OutPinDefault))
+			{
+				OutErrors.Add(FString::Printf(TEXT("Niagara could not encode a %s value as a pin default for '%s'."),
+					*Type.GetName(), *InputName.ToString()));
+				return false;
+			}
+			return true;
 		}
 
 		FNiagaraExt_StackItemReference ToReference(const FStackAddress& Address)
@@ -2852,45 +2910,58 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FNiagaraVariable LocalValue(SwitchType, NAME_None);
-		LocalValue.AllocateData();
-
-		if (Value.Mode == EInputValueMode::Literal
-			&& Value.LiteralBytes.Num() == LocalValue.GetSizeInBytes())
-		{
-			LocalValue.SetData(Value.LiteralBytes.GetData());
-		}
-		else if (Value.Mode == EInputValueMode::Enum && Value.EnumType != nullptr)
-		{
-			const int64 EntryValue = Value.EnumType->GetValueByName(Value.EnumEntryName);
-			if (EntryValue == INDEX_NONE || LocalValue.GetSizeInBytes() != sizeof(int32))
-			{
-				OutErrors.Add(FString::Printf(TEXT("'%s' is not an entry of enum '%s'."),
-					*Value.EnumEntryName.ToString(), *Value.EnumType->GetName()));
-				return false;
-			}
-			const int32 Narrowed = static_cast<int32>(EntryValue);
-			LocalValue.SetData(reinterpret_cast<const uint8*>(&Narrowed));
-		}
-		else
-		{
-			OutErrors.Add(FString::Printf(
-				TEXT("A static switch takes a compile-time constant; '%s' was given a value this write path cannot encode."),
-				*SwitchVariableName.ToString()));
-			return false;
-		}
-
 		FString PinDefaultValue;
-		if (!Schema->TryGetPinDefaultValueFromNiagaraVariable(LocalValue, PinDefaultValue))
+		if (!EncodeStaticPinDefault(SwitchType, SwitchVariableName, Value, PinDefaultValue, OutErrors))
 		{
-			OutErrors.Add(FString::Printf(TEXT("Niagara could not encode a %s value as a pin default for '%s'."),
-				*SwitchType.GetName(), *SwitchVariableName.ToString()));
 			return false;
 		}
 
 		SwitchPin->Modify();
 		SwitchPin->DefaultValue = PinDefaultValue;
 		Node->MarkNodeRequiresSynchronization(TEXT("DreamFX static switch write"), /*bRaiseGraphNeedsRecompile=*/true);
+		return true;
+	}
+
+	bool FNiagaraAdapter::SetStaticInputByOverridePin(const FStackAddress& ModuleAddress, FName InputName,
+		const FNiagaraTypeDefinition& InputType, const FInputValue& Value, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("SetStaticInputByOverridePin"));
+
+		UNiagaraNodeFunctionCall* Node = FindModuleNode(ModuleAddress);
+		if (Node == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("No module node named '%s' to write a static input on."),
+				*ModuleAddress.ModuleName.ToString()));
+			return false;
+		}
+
+		FString PinDefaultValue;
+		if (!EncodeStaticPinDefault(InputType, InputName, Value, PinDefaultValue, OutErrors))
+		{
+			return false;
+		}
+
+		// An override pin's name is namespaced by the function call it belongs to -- that equality is
+		// literally what IsOverridePinForFunction tests. The name goes through unchanged, spaces and
+		// all, because Niagara input names are not identifiers.
+		const FNiagaraParameterHandle AliasedHandle(FName(*Node->GetFunctionName()), InputName);
+
+		// One exported call does the whole chain: find the override pin, and failing that create the
+		// override parameter map set node, hang a typed pin on it and name it. The two GUIDs are the
+		// script-variable binding and a preferred node id; both are only consulted when valid, so an
+		// invalid one means "no opinion".
+		UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+			*Node, AliasedHandle, InputType, FGuid(), FGuid());
+
+		OverridePin.Modify();
+		OverridePin.DefaultValue = PinDefaultValue;
+
+		// The pin belongs to the override node, not to the module -- that node is what has to be told.
+		if (UNiagaraNode* OwningNode = Cast<UNiagaraNode>(OverridePin.GetOwningNode()))
+		{
+			OwningNode->MarkNodeRequiresSynchronization(TEXT("DreamFX static input write"),
+				/*bRaiseGraphNeedsRecompile=*/true);
+		}
 		return true;
 	}
 

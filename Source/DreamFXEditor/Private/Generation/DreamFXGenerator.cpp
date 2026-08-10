@@ -92,6 +92,16 @@ namespace UE::DreamFX::Editor
 			 * `Life Cycle Mode`, not `LifeCycleMode`. Neither is derivable from the other.
 			 */
 			FName NiagaraName;
+
+			/**
+			 * The input's declared type, kept because its static flag is the routing signal.
+			 *
+			 * `bIsStaticSwitch` above is a *report* and comes back false whenever the module's stack
+			 * topology could not be probed; the type comes straight from that topology and carries
+			 * `TF_Static` whenever the engine considers the input static -- which is exactly the
+			 * condition under which the external edit API will refuse to write it.
+			 */
+			FNiagaraTypeDefinition InputType;
 		};
 
 		/**
@@ -101,15 +111,16 @@ namespace UE::DreamFX::Editor
 		 * caller records the start index before planning so it does not have to know how many.
 		 */
 		void MarkStaticSwitch(TArray<FPlannedInput>& Inputs, int32 FirstIndex, bool bIsStaticSwitch,
-			FName NiagaraName)
+			FName NiagaraName, const FNiagaraTypeDefinition& InputType)
 		{
-			// The name is recorded whatever the flag says. The schema cannot always tell that an input
-			// is a switch -- only FNiagaraExt_StackInputTopology::bIsStaticSwitch reports it, and it
-			// comes back false for modules whose topology could not be probed -- so the write path
-			// asks the module node itself rather than trusting the flag.
+			// Name and type are recorded whatever the flag says. The schema cannot always tell that an
+			// input is a switch -- only FNiagaraExt_StackInputTopology::bIsStaticSwitch reports it, and
+			// it comes back false for modules whose topology could not be probed -- so the write path
+			// routes on the type's static flag and asks the graph, rather than trusting the flag.
 			for (int32 Index = FirstIndex; Index < Inputs.Num(); ++Index)
 			{
 				Inputs[Index].NiagaraName = NiagaraName;
+				Inputs[Index].InputType = InputType;
 				if (bIsStaticSwitch)
 				{
 					Inputs[Index].bIsStaticSwitch = true;
@@ -1005,7 +1016,7 @@ namespace UE::DreamFX::Editor
 							bOk = false;
 						}
 
-						MarkStaticSwitch(OutInputs, FirstPlanned, InputSchema->bIsStaticSwitch, InputSchema->Name);
+						MarkStaticSwitch(OutInputs, FirstPlanned, InputSchema->bIsStaticSwitch, InputSchema->Name, InputSchema->Type);
 					}
 				};
 
@@ -1409,7 +1420,7 @@ namespace UE::DreamFX::Editor
 							bOk = false;
 						}
 
-						MarkStaticSwitch(Planned.Inputs, FirstPlanned, InputSchema->bIsStaticSwitch, InputSchema->Name);
+						MarkStaticSwitch(Planned.Inputs, FirstPlanned, InputSchema->bIsStaticSwitch, InputSchema->Name, InputSchema->Type);
 					}
 				};
 
@@ -2073,6 +2084,19 @@ namespace UE::DreamFX::Editor
 					return false;
 				}
 				OutErrors.Reset();
+
+				// Not one of the module's switches, but still static-typed: an ordinary `Module.X`
+				// parameter that drives a switch inside the module. Its override pin is on the map set
+				// node, and the API would refuse it for the same reason it refuses a switch.
+				//
+				// Routed on the type rather than on bIsStaticSwitch: the flag is false whenever the
+				// topology could not be probed, and `/NiagaraFluids/*` is exactly that case.
+				if (Input.InputType.IsStatic())
+				{
+					bWroteSwitch = true;
+					return FNiagaraAdapter::SetStaticInputByOverridePin(
+						InputAddress, Input.NiagaraName, Input.InputType, Input.Value, OutErrors);
+				}
 			}
 
 			if (Input.Value.Mode == EInputValueMode::DynamicInput && Input.DynamicInputVersion.IsValid())

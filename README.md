@@ -37,7 +37,7 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 | 编辑器集成 | Tools 菜单 / 关卡工具栏 / Content Browser 右键（System 两态 + Emitter Export .dfe）/ Niagara 系统编辑器工具栏 / VSCode workspace；全部走既有管线，`-NoDreamFXEditor` 一键关掉 —— [Docs/tools/editor-integration.md](Docs/tools/editor-integration.md) |
 | 接管外来资产 | 右键 **Adopt**：反编译落到真源码根 → 重建 → 打戳 → 再导出逐字节比对。有丢失就拒绝，因为接管的意思是「文本从此是唯一真相」 |
 | 溯源戳 | 源 hash + 生成器版本 + 模块版本 GUID 清单（R7） |
-| 静态开关写入 | 走模块节点上的开关 pin —— 引擎自己的 stack UI 就是这么写的（静态参数不是 rapid-iteration 候选，必然走 override pin 分支）。外部编辑 API 永远拒绝静态输入（静态标志参与类型相等、却无法从 `UScriptStruct` 复原），所以这条不是绕行而是正路，**任何引擎都成立**。覆盖**模块自身声明**的开关（节点上有 pin 的那些）。override map-set 一侧的静态输入仍走旧路 —— 类型带静态标志但本身不是开关节点的 `Module.X`，以及嵌套 dynamic input 上的开关，两者都要 `GetStackFunctionInputOverridePin`，public 但未导出 |
+| 静态输入写入 | 走 override pin —— 引擎自己的 stack UI 就是这么写的（静态参数不是 rapid-iteration 候选，必然走这条分支）。外部编辑 API 永远拒绝静态输入（静态标志参与类型相等、却无法从 `UScriptStruct` 复原），所以这不是绕行而是正路，**任何引擎都成立**。两个位置都覆盖：模块自身声明的开关（pin 在函数调用节点上）、静态类型的普通参数（pin 在 override map-set 节点上，`GetOrCreateStackFunctionInputOverridePin` 已导出且找-或-建整链全包）。**MoonEngine 为此加的引擎豁免已于 2026-08-10 退役，触面 4 → 3** |
 | `@版本` 选择 | 不只是记录：`@` 指定的版本会真的选中（模块与 dynamic input 都走 `ChangeScriptVersion` + `RefreshFromExternalChanges`，少了后者拿到的是半新半旧的引脚集）。跳过 Python 升级脚本是有意的 —— 所有输入紧接着从源码重写，remap 出来的东西会被立刻覆盖。R1b；该 API 在 stock 引擎同样导出，不依赖 MoonEngine |
 | 漂移检测 | `-Verify`：改了源没重建、手改了资产、依赖的模块换了版本，三种都报 |
 | lint | GPU 无 FixedBounds、spawn rate 无上限、用随机没开 Determinism 等 |
