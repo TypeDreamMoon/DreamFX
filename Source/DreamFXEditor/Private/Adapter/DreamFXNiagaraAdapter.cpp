@@ -278,6 +278,11 @@ namespace UE::DreamFX::Editor
 		 *
 		 * This runs on the way into the engine and not on the way out, so the exported text keeps the
 		 * engine's own spelling. When Epic fixes the importer this function is the only thing to delete.
+		 *
+		 * Deleting it is an experiment, not a cleanup: build the content pack on the new engine with
+		 * this gone and check the count, because "the current build is green" says nothing about a
+		 * build without it. The static switch exemption was retired on that reasoning and had to be
+		 * put back -- a full build went 55/0/0 to 54/1/2 the moment it was actually removed.
 		 */
 		TSharedPtr<FJsonValue> RewriteObjectReferences(const TSharedPtr<FJsonValue>& Value)
 		{
