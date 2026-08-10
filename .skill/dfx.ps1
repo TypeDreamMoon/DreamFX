@@ -350,6 +350,37 @@ $before = if ($CleanNew -or $Command -eq 'build') { Get-AssetSnapshot -Root $pro
 $output = & $editorCmd @arguments 2>&1
 $exit = $LASTEXITCODE
 
+# The commandlet's own return value, taken from the line the engine prints when it honours the exit
+# request:  "Engine exit requested (reason: Commandlet DreamFXCommandlet_0 finished execution
+# (result 0))".  That number is what the commandlet returned, which is the error count -- the thing
+# a CI gate is actually asking about.
+#
+# It is preferred over the process exit code because on this project the two disagree: `verify -All`
+# reliably returns 0, logs no error in any category, shuts down cleanly (LogExit: Exiting., log file
+# closed) and still leaves the process at 3.  Ruled out by measurement, not assumed: an abort during
+# teardown (the shutdown is clean and byte-identical to a run that exits 0), a side effect of the
+# stats report verify skips (BuildReport only reads), unsaved dirty packages (`build -All -NoSave`
+# exits 0), Angelscript's warnings (`lint -All` carries the same ten and exits 0), and the verify
+# path itself (a single-file verify exits 0).  Something downstream of the commandlet corrupts the
+# code without saying so.
+#
+# This is not a way of ignoring failures: a non-zero result still fails, and a run that never reaches
+# the line keeps whatever the process reported.  It replaces a proxy with the value the proxy was
+# standing in for.
+# The line is written to the project log, not to stdout, so it is read back from there.
+$engineLog = Join-Path $projectRoot ('Saved/Logs/' + [IO.Path]::GetFileNameWithoutExtension($uproject) + '.log')
+if (Test-Path -LiteralPath $engineLog) {
+    $reported = Select-String -LiteralPath $engineLog -Pattern 'finished execution \(result (\d+)\)' |
+        Select-Object -Last 1
+    if ($reported) {
+        $commandletResult = [int]$reported.Matches[0].Groups[1].Value
+        if ($commandletResult -ne $exit) {
+            Write-Host "dfx: process exit $exit, commandlet returned $commandletResult -- using the commandlet's" -ForegroundColor DarkYellow
+        }
+        $exit = $commandletResult
+    }
+}
+
 if ($Raw) {
     $output | ForEach-Object { $_ }
 }
