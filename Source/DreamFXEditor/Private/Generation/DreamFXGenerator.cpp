@@ -77,6 +77,16 @@ namespace UE::DreamFX::Editor
 			 * switch pass runs before the value pass a few lines below.
 			 */
 			bool bIsStaticSwitch = false;
+
+			/**
+			 * The switch's Niagara variable name, for the pin write.
+			 *
+			 * Recorded for the same reason as the flag above: the pin on the module node is named after
+			 * the variable, and Path carries the display spelling the external edit API addresses by --
+			 * `Life Cycle Mode`, not `LifeCycleMode`. The schema knows both while planning and neither
+			 * is derivable from the other, so the real name has to come along.
+			 */
+			FName SwitchVariableName;
 		};
 
 		/**
@@ -85,7 +95,8 @@ namespace UE::DreamFX::Editor
 		 * A range rather than a single entry because one argument can plan several writes, and the
 		 * caller records the start index before planning so it does not have to know how many.
 		 */
-		void MarkStaticSwitch(TArray<FPlannedInput>& Inputs, int32 FirstIndex, bool bIsStaticSwitch)
+		void MarkStaticSwitch(TArray<FPlannedInput>& Inputs, int32 FirstIndex, bool bIsStaticSwitch,
+			FName SwitchVariableName)
 		{
 			if (!bIsStaticSwitch)
 			{
@@ -94,6 +105,7 @@ namespace UE::DreamFX::Editor
 			for (int32 Index = FirstIndex; Index < Inputs.Num(); ++Index)
 			{
 				Inputs[Index].bIsStaticSwitch = true;
+				Inputs[Index].SwitchVariableName = SwitchVariableName;
 			}
 		}
 
@@ -985,7 +997,7 @@ namespace UE::DreamFX::Editor
 							bOk = false;
 						}
 
-						MarkStaticSwitch(OutInputs, FirstPlanned, InputSchema->bIsStaticSwitch);
+						MarkStaticSwitch(OutInputs, FirstPlanned, InputSchema->bIsStaticSwitch, InputSchema->Name);
 					}
 				};
 
@@ -1389,7 +1401,7 @@ namespace UE::DreamFX::Editor
 							bOk = false;
 						}
 
-						MarkStaticSwitch(Planned.Inputs, FirstPlanned, InputSchema->bIsStaticSwitch);
+						MarkStaticSwitch(Planned.Inputs, FirstPlanned, InputSchema->bIsStaticSwitch, InputSchema->Name);
 					}
 				};
 
@@ -2021,6 +2033,22 @@ namespace UE::DreamFX::Editor
 					FNiagaraAdapter::OnStaticSwitchWritten(InputAddress.System);
 				}
 			};
+
+			// A switch declared by the module itself is a pin on the module's own node, and writing that
+			// pin is what the stack UI does -- the external edit API cannot carry a static switch at
+			// all, because the static flag is part of type equality and cannot survive the payload.
+			//
+			// Restricted to depth one on purpose. A switch can also belong to a *dynamic input* nested
+			// in an argument (`SpriteSize = RandomRangeVector2D(RandomnessMode = ...)`), and that node
+			// is reached through the module's override pin chain -- which needs
+			// GetStackFunctionInputOverridePin, public but unexported. Those keep the old path until
+			// that traversal exists; routing them here found no pin and turned writes that used to
+			// land into failures.
+			if (Input.bIsStaticSwitch && Input.Path.Num() == 1 && !Input.SwitchVariableName.IsNone())
+			{
+				return FNiagaraAdapter::SetStaticSwitchByPin(
+					InputAddress, Input.SwitchVariableName, Input.Value, OutErrors);
+			}
 
 			if (Input.Value.Mode == EInputValueMode::DynamicInput && Input.DynamicInputVersion.IsValid())
 			{

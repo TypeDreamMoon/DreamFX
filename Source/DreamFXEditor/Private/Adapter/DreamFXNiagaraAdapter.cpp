@@ -2,6 +2,7 @@
 
 #include "DreamFXModule.h"
 
+#include "EdGraphSchema_Niagara.h"
 #include "NiagaraCommon.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraDataInterfaceCurveBase.h"
@@ -921,18 +922,15 @@ namespace UE::DreamFX::Editor
 
 	void FNiagaraAdapter::OnStaticSwitchWritten(UNiagaraSystem* System)
 	{
-		// The engine's external write path now refreshes the owning module item synchronously after
-		// a static switch lands (MoonEngine, SetStackInputData) -- the inputs the switch revealed
-		// exist in the live context by the time this runs, so the epoch survives the write. The flag
-		// is the A/B and the escape hatch if that engine behaviour ever regresses.
-		if (GRebuildContextOnSwitch)
-		{
-			EndStructuralEpoch(System);
-			return;
-		}
-
-		++GStats.StaticSwitchCalls;
-		++GStats.RefreshedInPlaceCalls;
+		// Unconditional since switches moved to the pin route. The engine's external write path used
+		// to refresh the owning module item synchronously, which let the epoch survive a switch; a pin
+		// default written straight onto the node has no such courtesy -- nothing tells the live edit
+		// context that a whole set of sibling inputs just came into existence. Every later call would
+		// be reading a view model built before the switch.
+		//
+		// So the previous in-place path, and the -RebuildOnSwitch flag that A/B'd it, are both gone.
+		// One rebuild per switch write is the price of not needing the engine patch at all.
+		EndStructuralEpoch(System);
 	}
 
 	void FNiagaraAdapter::SetWriteScopeEnabled(bool bEnabled)
@@ -2772,6 +2770,114 @@ namespace UE::DreamFX::Editor
 		// it had. Refreshing is what re-derives it, and until it runs every topology read describes a
 		// module that is half one version and half the other.
 		Node->RefreshFromExternalChanges();
+		return true;
+	}
+
+	bool FNiagaraAdapter::SetStaticSwitchByPin(const FStackAddress& ModuleAddress, FName SwitchVariableName,
+		const FInputValue& Value, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("SetStaticSwitchByPin"));
+
+		UNiagaraNodeFunctionCall* Node = FindModuleNode(ModuleAddress);
+		if (Node == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("No module node named '%s' to write a static switch on."),
+				*ModuleAddress.ModuleName.ToString()));
+			return false;
+		}
+
+		const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
+		UNiagaraGraph* CalledGraph = Node->GetCalledGraph();
+		if (Schema == nullptr || CalledGraph == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Module '%s' has no called graph to read switches from."),
+				*ModuleAddress.ModuleName.ToString()));
+			return false;
+		}
+
+		// UNiagaraNodeFunctionCall::FindStaticSwitchInputPin is public but unexported, so its two steps
+		// are repeated here: the switch set comes from the *called* graph -- the pin's own type does not
+		// carry the static flag, which is what made the first attempt find nothing -- and the pin on the
+		// node is named after the variable.
+		TArray<UEdGraphPin*> InputPins;
+		Node->GetInputPins(InputPins);
+
+		UEdGraphPin* SwitchPin = nullptr;
+		FNiagaraTypeDefinition SwitchType;
+		const TArray<FNiagaraVariable> SwitchVariables = CalledGraph->FindStaticSwitchInputs();
+		for (const FNiagaraVariable& SwitchVariable : SwitchVariables)
+		{
+			if (!SwitchVariable.GetName().IsEqual(SwitchVariableName))
+			{
+				continue;
+			}
+			for (UEdGraphPin* Pin : InputPins)
+			{
+				if (Pin != nullptr && SwitchVariableName.IsEqual(Pin->GetFName()))
+				{
+					SwitchPin = Pin;
+					SwitchType = SwitchVariable.GetType();
+					break;
+				}
+			}
+			break;
+		}
+
+		if (SwitchPin == nullptr)
+		{
+			// Explicit, never silent: a switch the node does not have means the module changed under
+			// the source, and quietly doing nothing would leave the graph on the old branch.
+			TArray<FString> Available;
+			for (const FNiagaraVariable& SwitchVariable : SwitchVariables)
+			{
+				Available.Add(SwitchVariable.GetName().ToString());
+			}
+			OutErrors.Add(FString::Printf(
+				TEXT("Module '%s' has no static switch named '%s'. Switches this module declares: %s."),
+				*ModuleAddress.ModuleName.ToString(), *SwitchVariableName.ToString(),
+				Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(none)")));
+			return false;
+		}
+
+		FNiagaraVariable LocalValue(SwitchType, NAME_None);
+		LocalValue.AllocateData();
+
+		if (Value.Mode == EInputValueMode::Literal
+			&& Value.LiteralBytes.Num() == LocalValue.GetSizeInBytes())
+		{
+			LocalValue.SetData(Value.LiteralBytes.GetData());
+		}
+		else if (Value.Mode == EInputValueMode::Enum && Value.EnumType != nullptr)
+		{
+			const int64 EntryValue = Value.EnumType->GetValueByName(Value.EnumEntryName);
+			if (EntryValue == INDEX_NONE || LocalValue.GetSizeInBytes() != sizeof(int32))
+			{
+				OutErrors.Add(FString::Printf(TEXT("'%s' is not an entry of enum '%s'."),
+					*Value.EnumEntryName.ToString(), *Value.EnumType->GetName()));
+				return false;
+			}
+			const int32 Narrowed = static_cast<int32>(EntryValue);
+			LocalValue.SetData(reinterpret_cast<const uint8*>(&Narrowed));
+		}
+		else
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("A static switch takes a compile-time constant; '%s' was given a value this write path cannot encode."),
+				*SwitchVariableName.ToString()));
+			return false;
+		}
+
+		FString PinDefaultValue;
+		if (!Schema->TryGetPinDefaultValueFromNiagaraVariable(LocalValue, PinDefaultValue))
+		{
+			OutErrors.Add(FString::Printf(TEXT("Niagara could not encode a %s value as a pin default for '%s'."),
+				*SwitchType.GetName(), *SwitchVariableName.ToString()));
+			return false;
+		}
+
+		SwitchPin->Modify();
+		SwitchPin->DefaultValue = PinDefaultValue;
+		Node->MarkNodeRequiresSynchronization(TEXT("DreamFX static switch write"), /*bRaiseGraphNeedsRecompile=*/true);
 		return true;
 	}
 

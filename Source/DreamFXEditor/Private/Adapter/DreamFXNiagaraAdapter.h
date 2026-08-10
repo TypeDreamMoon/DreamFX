@@ -855,6 +855,26 @@ namespace UE::DreamFX::Editor
 			TArray<FString>& OutErrors);
 
 		/**
+		 * Writes a static switch by setting the default value on its pin, the way the stack UI does.
+		 *
+		 * The external edit API cannot carry a static switch at all, and not for want of an argument:
+		 * SetStackInputData builds the incoming type from the payload's UScriptStruct alone, the static
+		 * flag is part of type equality and cannot survive that trip, so the comparison rejects every
+		 * static input no matter what the caller passes. MoonEngine carries a one-line exemption for it.
+		 *
+		 * But the engine's own stack UI never uses that path for a static switch either. A static
+		 * parameter is not a rapid-iteration candidate, so UNiagaraStackFunctionInput::SetLocalValue
+		 * takes its other branch -- "for static switch inputs the override pin is on the owning function
+		 * call node" -- and that branch is four steps built entirely from exported symbols and public
+		 * fields. So this is not a workaround for the API; it is the same thing the editor does.
+		 *
+		 * The static-flagged type comes off the pin rather than being synthesized, which is what makes
+		 * the whole approach work: the flag that cannot be sent through the API is already sitting there.
+		 */
+		static bool SetStaticSwitchByPin(const FStackAddress& ModuleAddress, FName SwitchVariableName,
+			const FInputValue& Value, TArray<FString>& OutErrors);
+
+		/**
 		 * Writes a dynamic input into an input and binds the node it creates to a script version.
 		 *
 		 * Dynamic inputs are versioned exactly as modules are, and the revisions are just as
