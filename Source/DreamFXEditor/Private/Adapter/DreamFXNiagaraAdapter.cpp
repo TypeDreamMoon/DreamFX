@@ -2823,11 +2823,13 @@ namespace UE::DreamFX::Editor
 			// The module declares no switch by this name, which is the ordinary answer for an ordinary
 			// input. The caller writes it the normal way.
 			//
-			// -DreamFXTraceSwitchLookup prints what the module actually declares against what was
-			// asked for. It exists because an input can be static-typed to the engine and still be
-			// absent from this list: a switch a module *propagates* from an inner call surfaces as an
-			// input on the outer module with no pin on the outer node. Nothing short of printing both
-			// sides distinguishes that from a plain name mismatch -- it is what identified the case.
+			// -DreamFXTraceSwitchLookup prints what the module declares, and its node's pins, against
+			// what was asked for. It exists because an input can be static-typed to the engine and
+			// still be absent from both: a `Module.X` parameter whose type carries the static flag is
+			// not a switch node, so its override pin sits on the map-set node instead -- the other
+			// home SetLocalValue names. Printing all three sides is what told those apart from a plain
+			// name mismatch, and the declared list agreeing with the pin list is what ruled out the
+			// called graph being the wrong one.
 			if (FParse::Param(FCommandLine::Get(), TEXT("DreamFXTraceSwitchLookup")))
 			{
 				TArray<FString> Declared;
