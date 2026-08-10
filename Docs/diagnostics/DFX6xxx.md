@@ -14,7 +14,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2750`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2827`
 <!-- generated:end DFX6001 -->
 
 **Cause.** A Niagara compile error, mapped back to the source line of the module that raised it.
@@ -32,7 +32,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2772`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2860`
 <!-- generated:end DFX6002 -->
 
 **Cause.** A Niagara compile warning, mapped back to source.
@@ -50,7 +50,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2813`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2901`
 <!-- generated:end DFX6003 -->
 
 **Cause.** A Niagara stack issue at error level -- an unmet module dependency, most often. Stack issues are only readable where Slate exists, so these appear in the editor and in the corpus suite but not in a headless build (`GetStackIssues` is not headless-safe).
@@ -68,7 +68,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2817`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2905`
 <!-- generated:end DFX6004 -->
 
 **Cause.** A Niagara stack issue at warning level. A deprecated module reports here.
@@ -86,7 +86,7 @@
 Niagara compilation of '%s' did not succeed (status %s).
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2902`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3190`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2990`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3278`
 <!-- generated:end DFX6005 -->
 
 **Cause.** The system's compile did not reach a successful state. Individual errors are reported as DFX6001 above this.
@@ -119,15 +119,21 @@ Niagara could not compile the body of '%s':\n%s
 **Message**
 
 ```
-This build has no Niagara fast-edit API (DREAMFX_HAS_NIAGARA_FAST_EDIT=0), so the generator could not set that parameter's default mode to Value, and Niagara rejects reading it before something writes it. Two ways out: write the parameter earlier in the same stack than whatever reads it -- for an 'Emitter.<Module>.<Output>' name that means moving the module that produces it ahead of its readers -- or build against an engine carrying the MoonEngine Niagara additions. If nothing writes it anywhere, the read is a genuine defect that the other engine was hiding.
+Nothing in this system writes that parameter, so there is no graph parameter for a default to sit on and Niagara refuses the read. This is a defect in the effect rather than a limit of this engine -- an engine carrying the MoonEngine Niagara additions creates the parameter and quietly hands back the type's zero, so the same source builds there and the effect silently does nothing (a scale that reads an unwritten value draws nothing either way). Fix it at the source: write the parameter before whatever reads it -- for an 'Emitter.<Module>.<Output>' name, move the module that produces it ahead of its readers -- or drop the read. DreamFX will not invent the parameter to make the build pass; that would hide the defect on every engine instead of one.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2765`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2853`
 <!-- generated:end DFX6007 -->
 
-**Cause.** Attached to a DFX6001 "read before being set", and only on a build without the fast-edit API. A parameter a link writes gets an entry whose default mode is `FailIfPreviouslyNotSet`, and setting that mode to `Value` needs an engine call this build does not have --- so Niagara refuses a read that would otherwise have compiled. The DFX6001 is real either way; this note exists because the *reason* differs from engine to engine, and without it the same source looks broken on one machine and fine on another.
+**Cause.** Attached to a DFX6001 "read before being set". **Nothing anywhere in the system writes the parameter**, so no link write ever created it and there is no graph parameter for a default to sit on.
 
-**Fix.** Reorder so the write happens before the read: for an `Emitter.<Module>.<Output>` name, move the module that produces it above its readers in the stack. Building against MoonEngine also clears it. If nothing writes the parameter anywhere in the system, neither will help --- the read is a genuine defect that the other engine's default was covering.
+This note used to say the stock API could not write a default mode at all. It can --- `UNiagaraGraph::GetScriptVariable` is exported and `DefaultMode` is public on what it returns, so defaults land on any engine (2026-08-10). What is left is the narrower case above, and it is **a defect in the effect, not a limit of the engine**.
+
+The two engines disagree only about whether you are told. MoonEngine's defaults call creates the parameter and hands back the type's zero, so the build passes --- and the effect silently does nothing. `NS_Spawn_Ground_Root` is the worked example: nothing writes `Particles.MySize`, so `MeshUniformScale = 1.0 * Particles.MySize` is a decal scaled to zero. It has been drawing nothing on both engines all along; only one of them said so.
+
+**Fix.** At the source, not in the pipeline. Write the parameter before whatever reads it --- for an `Emitter.<Module>.<Output>` name, move the module that produces it above its readers --- or drop the read. Building on MoonEngine makes the message go away without making the effect work.
+
+**Why DreamFX does not just create the parameter.** It could: `FGraphSurgeon::AddParameter` already creates one by reflection for the `.dfm` path. Deliberately not wired in (decision record, `Plan/open-problems-fixes.md`, 2026-08-10) --- it would hide the defect on every engine instead of one, and this project chooses visible over convenient. Reopen only for an asset of the same shape that has a **real L3 behavioural difference**.
 
 **Not** a reason to distrust the build. It is an explanation attached to an error, never an error of its own.
 

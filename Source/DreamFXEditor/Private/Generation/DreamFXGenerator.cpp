@@ -2827,11 +2827,22 @@ namespace UE::DreamFX::Editor
 					Diagnostics.Error(TEXT("DFX6001"), Location, Message);
 
 #if !DREAMFX_HAS_NIAGARA_FAST_EDIT
-					// A read-before-set is the one failure this engine configuration causes by itself,
-					// so say so rather than leaving the author to wonder why the same source builds
-					// elsewhere. On MoonEngine the generator answers this by setting the parameter's
-					// default mode to Value, which makes an unset read yield the type's default; the
-					// stock API exposes no way to write that mode, so Niagara's refusal stands.
+					// This used to say the stock API had no way to write a default mode. It has: the
+					// graph's script variable is reachable and its DefaultMode is public, so defaults
+					// now land on this engine too. What is left is narrower and worth naming exactly --
+					// a parameter that *no link write ever created*, because nothing in the system
+					// writes it. There is no graph parameter to give a default to.
+					//
+					// Which makes it an asset-level defect, not an engine gap, and the two engines
+					// disagree only about whether you are told: MoonEngine's defaults call creates the
+					// parameter and hands back the type's zero, so the build passes and the defect is
+					// invisible. NS_Spawn_Ground_Root is the worked example -- nothing writes
+					// Particles.MySize, so `MeshUniformScale = 1.0 * Particles.MySize` is a decal
+					// scaled to zero, and it has been drawing nothing on both engines all along.
+					//
+					// DreamFX deliberately does not create the parameter to make this pass; see the
+					// decision record in Plan/open-problems-fixes.md (2026-08-10). The pipeline's job
+					// is to keep the defect visible, not to supply a value the source never asked for.
 					//
 					// Matched on the message text, which is localised -- hence both spellings. Missing
 					// the match costs an explanation, never a diagnosis, so a loose match is the right
@@ -2840,7 +2851,7 @@ namespace UE::DreamFX::Editor
 						|| Event.Message.Contains(TEXT("在设置之前被读取")))
 					{
 						Diagnostics.Info(TEXT("DFX6007"), Location,
-							TEXT("This build has no Niagara fast-edit API (DREAMFX_HAS_NIAGARA_FAST_EDIT=0), so the generator could not set that parameter's default mode to Value, and Niagara rejects reading it before something writes it. Two ways out: write the parameter earlier in the same stack than whatever reads it -- for an 'Emitter.<Module>.<Output>' name that means moving the module that produces it ahead of its readers -- or build against an engine carrying the MoonEngine Niagara additions. If nothing writes it anywhere, the read is a genuine defect that the other engine was hiding."));
+							TEXT("Nothing in this system writes that parameter, so there is no graph parameter for a default to sit on and Niagara refuses the read. This is a defect in the effect rather than a limit of this engine -- an engine carrying the MoonEngine Niagara additions creates the parameter and quietly hands back the type's zero, so the same source builds there and the effect silently does nothing (a scale that reads an unwritten value draws nothing either way). Fix it at the source: write the parameter before whatever reads it -- for an 'Emitter.<Module>.<Output>' name, move the module that produces it ahead of its readers -- or drop the read. DreamFX will not invent the parameter to make the build pass; that would hide the defect on every engine instead of one."));
 					}
 #endif
 				}
