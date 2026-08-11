@@ -614,28 +614,41 @@ namespace UE::DreamFX::Editor
 				// build of the four packs partway through: 45 of these across the 11 _LevelUpSpawn
 				// systems, and the first one reached takes the run down with it.
 				//
-				// Rewriting the path to the mirror's equivalent is not available either: the mirror's
-				// subobjects are named independently (`Black_0` where the source has `Black_3`), so a
-				// textual rewrite would produce a dangling reference instead of a crashing one. Until
-				// intra-system references have a real representation (plan-v5 R4-3), this is a gap --
-				// declared out loud in the file header, which is the whole point of having one.
+				// Rewriting the path to the mirror's equivalent textually is not available: the mirror's
+				// subobjects are named independently (`Black_0` where the source has `Black_3`). But the
+				// names that ARE stable across the pair -- the emitter handle, and a renderer's position
+				// under it -- are enough to carry the reference symbolically (plan-v5 R4-3, landed with
+				// the 2026-08-11 round): the path becomes `dfxself://emitter/<handle>` or
+				// `dfxself://renderer/<handle>/<index>`, and the rebuild resolves it against the mirror's
+				// own subobjects once they all exist. A shape the translation cannot name -- a deeper
+				// chain, a handle whose name will not fit a token -- keeps the drop-and-gap it always
+				// had; the appError that a verbatim copy causes is not a failure mode to reintroduce.
 				const FString OwnPackage = Context.System != nullptr
 					? Context.System->GetOutermost()->GetName() : FString();
+				FString CarriedJson = Value.DataInterfaceJson;
 				if (!OwnPackage.IsEmpty() && Value.DataInterfaceJson.Contains(OwnPackage + TEXT(".")))
 				{
-					if (Context.Unsupported != nullptr)
+					FString Translated;
+					if (FNiagaraAdapter::TranslateSelfReferences(Context.System, Value.DataInterfaceJson, Translated))
 					{
-						Context.Unsupported->AddUnique(
-							TEXT("data interface input referencing this system's own emitters or renderers"));
+						CarriedJson = MoveTemp(Translated);
 					}
-					UE_LOG(LogDreamFX, Warning,
-						TEXT("Dropping a data interface configuration on '%s': it references a subobject of the system being read, which a mirror cannot legally hold."),
-						*InputAddress.ModuleName.ToString());
-					return FString();
+					else
+					{
+						if (Context.Unsupported != nullptr)
+						{
+							Context.Unsupported->AddUnique(
+								TEXT("data interface input referencing this system's own emitters or renderers, in a shape the symbolic form cannot carry"));
+						}
+						UE_LOG(LogDreamFX, Warning,
+							TEXT("Dropping a data interface configuration on '%s': it references a subobject of the system being read in a shape 'dfxself://' cannot name."),
+							*InputAddress.ModuleName.ToString());
+						return FString();
+					}
 				}
 
 				FString Blob;
-				if (!Value.DataInterfaceJson.IsEmpty() && JsonTextToSourceString(Value.DataInterfaceJson, Blob))
+				if (!CarriedJson.IsEmpty() && JsonTextToSourceString(CarriedJson, Blob))
 				{
 					return Blob;
 				}
@@ -1794,9 +1807,20 @@ namespace UE::DreamFX::Editor
 					: FString();
 				if (ModuleSourceName.IsEmpty())
 				{
-					Result.UnsupportedFeatures.AddUnique(FString::Printf(
-						TEXT("module '%s' has no resolvable script asset (scratch pad or missing reference)"),
-						*Module.ModuleName.ToString()));
+					// The two states are different diagnoses and used to share one message. A null
+					// script is a dangling node in the SOURCE asset -- Up_Root's 'NMS_infiniteDeactivate'
+					// sits next to a healthy '001' duplicate that does the actual work, and the husk's
+					// script pointer is simply gone (measured 2026-08-11; the asset it once named still
+					// exists on disk). That is authoring residue to fix in the asset, not a DreamFX
+					// representation gap, and saying "scratch pad" for it sent an investigation to the
+					// wrong place.
+					Result.UnsupportedFeatures.AddUnique(Module.Script == nullptr
+						? FString::Printf(
+							TEXT("module '%s' carries a null script reference -- a dangling node in the source asset, omitted"),
+							*Module.ModuleName.ToString())
+						: FString::Printf(
+							TEXT("module '%s' has no resolvable script asset (scratch pad or missing reference)"),
+							*Module.ModuleName.ToString()));
 					UE_LOG(LogDreamFX, Warning,
 						TEXT("Module '%s' has no name an import could resolve; it is omitted from the export."),
 						*Module.ModuleName.ToString());

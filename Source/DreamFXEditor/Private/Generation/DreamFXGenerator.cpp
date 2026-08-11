@@ -2039,8 +2039,29 @@ namespace UE::DreamFX::Editor
 		 * for it lands on the newest version, so a pinned chain has to be rebound immediately after
 		 * (R1b). Every other value mode is an ordinary write.
 		 */
-		bool ApplyPlannedInput(const FStackAddress& InputAddress, const FPlannedInput& Input, TArray<FString>& OutErrors)
+		/**
+		 * A data-interface write whose JSON carries `dfxself://` tokens, parked until every emitter
+		 * and renderer exists. The tokens name renderers by (emitter handle, index), and at stack
+		 * time the renderers have not been added yet -- resolving inline would fail on exactly the
+		 * references this mechanism exists to carry.
+		 */
+		struct FDeferredSelfReference
 		{
+			FStackAddress Address;
+			FInputValue Value;
+			FSourceLocation Location;
+		};
+
+		bool ApplyPlannedInput(const FStackAddress& InputAddress, const FPlannedInput& Input, TArray<FString>& OutErrors,
+			TArray<FDeferredSelfReference>* OutDeferredSelfRefs = nullptr)
+		{
+			if (OutDeferredSelfRefs != nullptr && Input.Value.Mode == EInputValueMode::DataInterface
+				&& FNiagaraAdapter::ContainsSelfReferenceToken(Input.Value.DataInterfaceJson))
+			{
+				OutDeferredSelfRefs->Add({InputAddress, Input.Value, Input.Location});
+				return true;
+			}
+
 			// Writing a static switch changes which other inputs are visible, and a pin write tells the
 			// live edit context nothing, so the epoch has to end. Keyed on what actually happened
 			// rather than on the plan's flag: the flag is false for a module whose topology could not
@@ -2108,7 +2129,8 @@ namespace UE::DreamFX::Editor
 		}
 
 		bool ApplyStack(const FStackAddress& OwnerAddress, const FPlannedStack& Stack,
-			FDiagnosticSink& Diagnostics, TMap<FName, FSourceLocation>& OutModuleLocations)
+			FDiagnosticSink& Diagnostics, TMap<FName, FSourceLocation>& OutModuleLocations,
+			TArray<FDeferredSelfReference>* OutDeferredSelfRefs = nullptr)
 		{
 			bool bOk = true;
 
@@ -2221,7 +2243,7 @@ namespace UE::DreamFX::Editor
 							AsInput.Location = Parameter.Location;
 
 							Errors.Reset();
-							if (!ApplyPlannedInput(ModuleAddress.WithInput(Parameter.Name), AsInput, Errors))
+							if (!ApplyPlannedInput(ModuleAddress.WithInput(Parameter.Name), AsInput, Errors, OutDeferredSelfRefs))
 							{
 								ReportAdapterErrors(Errors, TEXT("DFX5025"), Parameter.Location, Diagnostics);
 								bOk = false;
@@ -2232,7 +2254,7 @@ namespace UE::DreamFX::Editor
 						for (const FPlannedInput& Nested : Parameter.NestedInputs)
 						{
 							Errors.Reset();
-							if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Nested.Path), Nested, Errors))
+							if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Nested.Path), Nested, Errors, OutDeferredSelfRefs))
 							{
 								ReportAdapterErrors(Errors, TEXT("DFX5025"), Nested.Location, Diagnostics);
 								bOk = false;
@@ -2259,7 +2281,7 @@ namespace UE::DreamFX::Editor
 				for (const FPlannedInput& Input : Module.Inputs)
 				{
 					Errors.Reset();
-					if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input.Path), Input, Errors))
+					if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input.Path), Input, Errors, OutDeferredSelfRefs))
 					{
 						Refused.Add(&Input);
 					}
@@ -2278,7 +2300,7 @@ namespace UE::DreamFX::Editor
 					for (const FPlannedInput* Input : Refused)
 					{
 						Errors.Reset();
-						if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input->Path), *Input, Errors))
+						if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input->Path), *Input, Errors, OutDeferredSelfRefs))
 						{
 							ReportAdapterErrors(Errors, TEXT("DFX5021"), Input->Location, Diagnostics);
 							bOk = false;
@@ -2641,9 +2663,11 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
+			TArray<FDeferredSelfReference> DeferredSelfRefs;
+
 			for (const FPlannedStack& Stack : Plan.SystemStacks)
 			{
-				if (!ApplyStack(SystemAddress, Stack, Diagnostics, OutModuleLocations))
+				if (!ApplyStack(SystemAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs))
 				{
 					return false;
 				}
@@ -2693,7 +2717,7 @@ namespace UE::DreamFX::Editor
 
 				for (const FPlannedStack& Stack : Emitter.Stacks)
 				{
-					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations))
+					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs))
 					{
 						return false;
 					}
@@ -2769,6 +2793,30 @@ namespace UE::DreamFX::Editor
 							return false;
 						}
 					}
+				}
+			}
+
+			// Deferred self-references land now, when every emitter and renderer they can name
+			// exists. The write is the ordinary SetInput with the tokens swapped for the mirror's own
+			// subobject paths -- which is the entire trick: emitter handles and renderer positions are
+			// the two names that survive the original/mirror boundary, and everything else about the
+			// reference is recovered from them on this side.
+			for (const FDeferredSelfReference& Deferred : DeferredSelfRefs)
+			{
+				Errors.Reset();
+				FString ResolvedJson;
+				FInputValue Resolved = Deferred.Value;
+				if (!FNiagaraAdapter::ResolveSelfReferenceTokens(System, Resolved.DataInterfaceJson,
+						ResolvedJson, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5025"), Deferred.Location, Diagnostics);
+					return false;
+				}
+				Resolved.DataInterfaceJson = MoveTemp(ResolvedJson);
+				if (!FNiagaraAdapter::SetInput(Deferred.Address, Resolved, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5025"), Deferred.Location, Diagnostics);
+					return false;
 				}
 			}
 

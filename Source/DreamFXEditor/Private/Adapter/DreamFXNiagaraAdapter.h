@@ -836,6 +836,30 @@ namespace UE::DreamFX::Editor
 			FGuid& OutParentVersion, TArray<FString>& OutErrors);
 
 		/**
+		 * The two halves of representing a data-interface value that points back into its own system.
+		 *
+		 * A configuration like SubUVAnimation's SpriteRenderer binding holds an object path into the
+		 * asset being read (`...NS_X:Black_3.NiagaraSpriteRendererProperties_2`). Carried verbatim it
+		 * makes the mirror reference the original's private subobject -- SavePackage dies on it --
+		 * and a textual rewrite to the mirror's names is impossible because subobject autonames are
+		 * assigned independently (`Black_0` where the source says `Black_3`).
+		 *
+		 * So the reference is carried symbolically, in the two names that ARE stable across the pair:
+		 * the emitter handle (`dfxself://emitter/<handle>`) and the renderer's position under it
+		 * (`dfxself://renderer/<handle>/<index>`; creation order is declaration order on both sides).
+		 *
+		 * TranslateSelfReferences is the export direction: every own-package object path in the JSON
+		 * becomes a token, or the whole call returns false and the caller keeps its drop-and-gap.
+		 * ResolveSelfReferenceTokens is the rebuild direction, and it must run only after every
+		 * emitter AND renderer exists -- which is later than the stack writes, hence the deferral in
+		 * the generator rather than a resolve inside SetInput.
+		 */
+		static bool TranslateSelfReferences(UNiagaraSystem* System, const FString& Json, FString& OutJson);
+		static bool ResolveSelfReferenceTokens(UNiagaraSystem* System, const FString& Json,
+			FString& OutJson, TArray<FString>& OutErrors);
+		static bool ContainsSelfReferenceToken(const FString& Json);
+
+		/**
 		 * Closes every compile launch site on the system for the scope's lifetime.
 		 *
 		 * A generation window performs hundreds of structural edits, and several engine paths compile

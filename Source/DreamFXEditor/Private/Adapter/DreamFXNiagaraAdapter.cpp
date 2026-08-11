@@ -2885,6 +2885,229 @@ namespace UE::DreamFX::Editor
 		return false;
 	}
 
+	namespace
+	{
+		constexpr const TCHAR* SelfReferenceScheme = TEXT("dfxself://");
+
+		/** Whether a character can appear inside an object path or a self-reference token. */
+		bool IsObjectPathChar(TCHAR Character)
+		{
+			return FChar::IsAlnum(Character) || Character == TEXT('_') || Character == TEXT('.')
+				|| Character == TEXT(':') || Character == TEXT('/') || Character == TEXT('-')
+				|| Character == TEXT('+');
+		}
+
+		/** The emitter handle whose live instance object carries the given subobject name. */
+		const FNiagaraEmitterHandle* HandleForInstanceName(UNiagaraSystem* System, const FString& InstanceName)
+		{
+			for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+			{
+				const FVersionedNiagaraEmitter Instance = Handle.GetInstance();
+				if (Instance.Emitter != nullptr && Instance.Emitter->GetName() == InstanceName)
+				{
+					return &Handle;
+				}
+			}
+			return nullptr;
+		}
+
+		/** The emitter handle by its stable stack name. */
+		const FNiagaraEmitterHandle* HandleForName(UNiagaraSystem* System, const FString& HandleName)
+		{
+			for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+			{
+				if (Handle.GetName().ToString() == HandleName)
+				{
+					return &Handle;
+				}
+			}
+			return nullptr;
+		}
+	}
+
+	bool FNiagaraAdapter::ContainsSelfReferenceToken(const FString& Json)
+	{
+		return Json.Contains(SelfReferenceScheme);
+	}
+
+	bool FNiagaraAdapter::TranslateSelfReferences(UNiagaraSystem* System, const FString& Json, FString& OutJson)
+	{
+		if (System == nullptr)
+		{
+			return false;
+		}
+		const FString Needle = System->GetOutermost()->GetName() + TEXT(".");
+
+		FString Result;
+		Result.Reserve(Json.Len());
+		int32 Cursor = 0;
+		while (true)
+		{
+			const int32 Found = Json.Find(Needle, ESearchCase::CaseSensitive, ESearchDir::FromStart, Cursor);
+			if (Found == INDEX_NONE)
+			{
+				Result += Json.Mid(Cursor);
+				break;
+			}
+			Result += Json.Mid(Cursor, Found - Cursor);
+
+			int32 End = Found;
+			while (End < Json.Len() && IsObjectPathChar(Json[End]))
+			{
+				++End;
+			}
+			const FString Path = Json.Mid(Found, End - Found);
+
+			// <Package>.<Asset>:<EmitterInstance>[.<Renderer>] -- anything else is not a shape this
+			// can name symbolically, and the caller falls back to the drop-and-gap it always did.
+			FString Subobjects;
+			if (!Path.Split(TEXT(":"), nullptr, &Subobjects))
+			{
+				return false;
+			}
+			TArray<FString> Segments;
+			Subobjects.ParseIntoArray(Segments, TEXT("."));
+
+			const FNiagaraEmitterHandle* Handle = Segments.Num() >= 1
+				? HandleForInstanceName(System, Segments[0]) : nullptr;
+			if (Handle == nullptr)
+			{
+				return false;
+			}
+			const FString HandleName = Handle->GetName().ToString();
+
+			// A handle name outside the token's own character set cannot be carried; refuse rather
+			// than write a token the other side would mis-parse.
+			for (TCHAR Character : HandleName)
+			{
+				if (!FChar::IsAlnum(Character) && Character != TEXT('_'))
+				{
+					return false;
+				}
+			}
+
+			if (Segments.Num() == 1)
+			{
+				Result += FString::Printf(TEXT("%semitter/%s"), SelfReferenceScheme, *HandleName);
+			}
+			else if (Segments.Num() == 2)
+			{
+				int32 RendererIndex = INDEX_NONE;
+				if (const FVersionedNiagaraEmitterData* Data = Handle->GetEmitterData())
+				{
+					int32 Index = 0;
+					Data->ForEachRenderer([&](UNiagaraRendererProperties* Renderer)
+					{
+						if (Renderer != nullptr && Renderer->GetName() == Segments[1])
+						{
+							RendererIndex = Index;
+						}
+						++Index;
+					});
+				}
+				if (RendererIndex == INDEX_NONE)
+				{
+					return false;
+				}
+				Result += FString::Printf(TEXT("%srenderer/%s/%d"), SelfReferenceScheme, *HandleName, RendererIndex);
+			}
+			else
+			{
+				return false;
+			}
+
+			Cursor = End;
+		}
+
+		OutJson = MoveTemp(Result);
+		return true;
+	}
+
+	bool FNiagaraAdapter::ResolveSelfReferenceTokens(UNiagaraSystem* System, const FString& Json,
+		FString& OutJson, TArray<FString>& OutErrors)
+	{
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot resolve self-references without a system."));
+			return false;
+		}
+
+		FString Result;
+		Result.Reserve(Json.Len());
+		int32 Cursor = 0;
+		const int32 SchemeLen = FCString::Strlen(SelfReferenceScheme);
+		while (true)
+		{
+			const int32 Found = Json.Find(SelfReferenceScheme, ESearchCase::CaseSensitive, ESearchDir::FromStart, Cursor);
+			if (Found == INDEX_NONE)
+			{
+				Result += Json.Mid(Cursor);
+				break;
+			}
+			Result += Json.Mid(Cursor, Found - Cursor);
+
+			int32 End = Found + SchemeLen;
+			while (End < Json.Len() && (FChar::IsAlnum(Json[End]) || Json[End] == TEXT('_') || Json[End] == TEXT('/')))
+			{
+				++End;
+			}
+			const FString Token = Json.Mid(Found + SchemeLen, End - Found - SchemeLen);
+
+			TArray<FString> Parts;
+			Token.ParseIntoArray(Parts, TEXT("/"));
+
+			const FNiagaraEmitterHandle* Handle = Parts.Num() >= 2 ? HandleForName(System, Parts[1]) : nullptr;
+			if (Handle == nullptr || Handle->GetInstance().Emitter == nullptr)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("Self-reference '%s%s' names an emitter this system does not have."),
+					SelfReferenceScheme, *Token));
+				return false;
+			}
+
+			if (Parts.Num() == 2 && Parts[0] == TEXT("emitter"))
+			{
+				Result += Handle->GetInstance().Emitter->GetPathName();
+			}
+			else if (Parts.Num() == 3 && Parts[0] == TEXT("renderer"))
+			{
+				const int32 WantedIndex = FCString::Atoi(*Parts[2]);
+				UNiagaraRendererProperties* Target = nullptr;
+				if (const FVersionedNiagaraEmitterData* Data = Handle->GetEmitterData())
+				{
+					int32 Index = 0;
+					Data->ForEachRenderer([&](UNiagaraRendererProperties* Renderer)
+					{
+						if (Index == WantedIndex)
+						{
+							Target = Renderer;
+						}
+						++Index;
+					});
+				}
+				if (Target == nullptr)
+				{
+					OutErrors.Add(FString::Printf(
+						TEXT("Self-reference '%s%s' names renderer %d on '%s', which has no renderer at that index yet. Renderer references resolve after every renderer is added -- a caller seeing this resolved too early."),
+						SelfReferenceScheme, *Token, WantedIndex, *Parts[1]));
+					return false;
+				}
+				Result += Target->GetPathName();
+			}
+			else
+			{
+				OutErrors.Add(FString::Printf(TEXT("Unrecognised self-reference '%s%s'."),
+					SelfReferenceScheme, *Token));
+				return false;
+			}
+
+			Cursor = End;
+		}
+
+		OutJson = MoveTemp(Result);
+		return true;
+	}
+
 	bool FNiagaraAdapter::WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,
 		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
 	{
