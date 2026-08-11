@@ -1003,6 +1003,13 @@ namespace UE::DreamFX::Editor
 		static bool FocusSimulationStageForRead(const FStackAddress& EmitterAddress, int32 StageIndex,
 			TArray<FString>& OutErrors);
 
+		/**
+		 * What a freshly added generic stage holds, read off the CDO. The decompiler judges Stage
+		 * header arguments against this, so an argument is written exactly when a rebuild that
+		 * omitted it would produce something else.
+		 */
+		static void GetSimulationStageDefaults(FSimulationStageSummary& OutDefaults);
+
 		/** The live emitter instance behind a handle name, for callers that must copy it somewhere. */
 		static UNiagaraEmitter* GetEmitterInstance(const FStackAddress& EmitterAddress);
 

@@ -205,11 +205,23 @@ namespace UE::DreamFX::Editor
 			FSourceLocation Location;
 		};
 
+		/**
+		 * A `Stage name(...)` block: the stage's spec plus its module stack. Applied one stage at a
+		 * time through the zero-usage-id slice, in declaration order, which is also stage run order.
+		 */
+		struct FPlannedSimulationStage
+		{
+			FSimulationStageSpec Spec;
+			FPlannedStack Stack;
+			FSourceLocation Location;
+		};
+
 		struct FPlannedEmitter
 		{
 			FName Name;
 			TArray<FPlannedStack> Stacks;
 			TArray<FPlannedEventHandler> EventHandlers;
+			TArray<FPlannedSimulationStage> SimulationStages;
 			TArray<FPlannedRenderer> Renderers;
 			TArray<FPlannedParameterDefault> ParameterDefaults;
 			FString PropertiesJson;
@@ -1957,7 +1969,26 @@ namespace UE::DreamFX::Editor
 				{
 					if (Stack.Kind == EStackKind::SimulationStage)
 					{
-						// The parser already reported this as reserved; do not double-report.
+						// The write side creates-or-reuses a stage by its name, so two blocks with one
+						// name would silently become one stage holding whichever stack ran last.
+						if (Planned.SimulationStages.ContainsByPredicate(
+							[&Stack](const FPlannedSimulationStage& Existing)
+							{ return Existing.Spec.Name == Stack.Stage.Name; }))
+						{
+							Diagnostics.Error(TEXT("DFX5032"), Stack.Location,
+								FString::Printf(TEXT("Emitter '%s' declares two Stage blocks named '%s'. Stages are identified by name; rename one."),
+									*Emitter.Name, *Stack.Stage.Name));
+							bOk = false;
+							continue;
+						}
+						FPlannedSimulationStage PlannedStage;
+						PlannedStage.Spec = Stack.Stage;
+						PlannedStage.Location = Stack.Location;
+						if (!PlanStack(Stack, EmitterContext, Diagnostics, PlannedStage.Stack, OutPlan.Dependencies))
+						{
+							bOk = false;
+						}
+						Planned.SimulationStages.Add(MoveTemp(PlannedStage));
 						continue;
 					}
 					if (Stack.Kind == EStackKind::EventHandler)
@@ -2886,28 +2917,123 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
-			// Deferred self-references land now, when every emitter and renderer they can name
-			// exists. The write is the ordinary SetInput with the tokens swapped for the mirror's own
-			// subobject paths -- which is the entire trick: emitter handles and renderer positions are
-			// the two names that survive the original/mirror boundary, and everything else about the
-			// reference is recovered from them on this side.
-			for (const FDeferredSelfReference& Deferred : DeferredSelfRefs)
+			// Deferred self-references land through here once every emitter and renderer they can
+			// name exists. The write is the ordinary SetInput with the tokens swapped for the
+			// mirror's own subobject paths -- which is the entire trick: emitter handles and renderer
+			// positions are the two names that survive the original/mirror boundary, and everything
+			// else about the reference is recovered from them on this side.
+			auto ResolveSelfReferences = [&System, &Diagnostics](
+				const TArray<FDeferredSelfReference>& References) -> bool
 			{
+				TArray<FString> ResolveErrors;
+				for (const FDeferredSelfReference& Deferred : References)
+				{
+					ResolveErrors.Reset();
+					FString ResolvedJson;
+					FInputValue Resolved = Deferred.Value;
+					if (!FNiagaraAdapter::ResolveSelfReferenceTokens(System, Resolved.DataInterfaceJson,
+							ResolvedJson, ResolveErrors))
+					{
+						ReportAdapterErrors(ResolveErrors, TEXT("DFX5025"), Deferred.Location, Diagnostics);
+						return false;
+					}
+					Resolved.DataInterfaceJson = MoveTemp(ResolvedJson);
+					if (!FNiagaraAdapter::SetInput(Deferred.Address, Resolved, ResolveErrors))
+					{
+						ReportAdapterErrors(ResolveErrors, TEXT("DFX5025"), Deferred.Location, Diagnostics);
+						return false;
+					}
+				}
+				return true;
+			};
+
+			// Simulation stages land after the events, one at a time through the zero-usage-id
+			// slice: Begin parks the stage's script on the zero id, the ordinary rails write its
+			// stack, End moves it to its durable id. Two departures from the event pass follow from
+			// the slice. Self-references inside a stage resolve before End -- the input's address
+			// only means this stage while it holds the slice -- which is sound here because every
+			// emitter and renderer already exists. And removal always runs, so a deleted Stage
+			// block actually deletes; declaration order is stage order, so the loop index is the
+			// stage's home index.
+			for (const FPlannedEmitter& Emitter : Plan.Emitters)
+			{
+				const FStackAddress EmitterAddress = SystemAddress.WithEmitter(Emitter.Name);
+
+				// Read off the live emitter rather than the source Settings: a `from` emitter can be
+				// GPU without this .dfs ever saying so. Niagara's own complaint for a CPU stage is a
+				// compile error naming no source line; this one names the emitter and the fix.
+				if (Emitter.SimulationStages.Num() > 0)
+				{
+					FString PropertiesJson;
+					Errors.Reset();
+					if (FNiagaraAdapter::GetEmitterProperties(EmitterAddress, PropertiesJson, Errors)
+						&& !PropertiesJson.Contains(TEXT("GPUComputeSim")))
+					{
+						Diagnostics.Error(TEXT("DFX5033"), Emitter.SimulationStages[0].Location,
+							FString::Printf(TEXT("Emitter '%s' declares Stage blocks but simulates on the CPU. Simulation stages are a GPU feature: set `SimTarget = GPU` in the emitter's Settings."),
+								*Emitter.Name.ToString()));
+						return false;
+					}
+				}
+
+				for (int32 StageIndex = 0; StageIndex < Emitter.SimulationStages.Num(); ++StageIndex)
+				{
+					const FPlannedSimulationStage& Stage = Emitter.SimulationStages[StageIndex];
+					Errors.Reset();
+					if (!FNiagaraAdapter::BeginSimulationStageEdit(EmitterAddress, Stage.Spec,
+						StageIndex, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5032"), Stage.Location, Diagnostics);
+						return false;
+					}
+
+					// Same reason as the event pass: regeneration reuses the output node, and the
+					// previous build's module nodes still hang off it.
+					Errors.Reset();
+					if (!FNiagaraAdapter::ClearScriptStack(
+						EmitterAddress.WithScript(Stage.Stack.ScriptName), Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5032"), Stage.Location, Diagnostics);
+						return false;
+					}
+
+					TArray<FDeferredSelfReference> StageSelfRefs;
+					if (!ApplyStack(EmitterAddress, Stage.Stack, Diagnostics, OutModuleLocations,
+						&StageSelfRefs))
+					{
+						return false;
+					}
+					if (!ResolveSelfReferences(StageSelfRefs))
+					{
+						return false;
+					}
+
+					Errors.Reset();
+					if (!FNiagaraAdapter::EndSimulationStageEdit(EmitterAddress, Stage.Spec, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5032"), Stage.Location, Diagnostics);
+						return false;
+					}
+				}
+
+				TArray<FName> DeclaredNames;
+				for (const FPlannedSimulationStage& Stage : Emitter.SimulationStages)
+				{
+					DeclaredNames.Add(FName(*Stage.Spec.Name));
+				}
+				int32 RemovedCount = 0;
 				Errors.Reset();
-				FString ResolvedJson;
-				FInputValue Resolved = Deferred.Value;
-				if (!FNiagaraAdapter::ResolveSelfReferenceTokens(System, Resolved.DataInterfaceJson,
-						ResolvedJson, Errors))
+				if (!FNiagaraAdapter::RemoveUndeclaredSimulationStages(EmitterAddress, DeclaredNames,
+					RemovedCount, Errors))
 				{
-					ReportAdapterErrors(Errors, TEXT("DFX5025"), Deferred.Location, Diagnostics);
+					ReportAdapterErrors(Errors, TEXT("DFX5032"), Emitter.Location, Diagnostics);
 					return false;
 				}
-				Resolved.DataInterfaceJson = MoveTemp(ResolvedJson);
-				if (!FNiagaraAdapter::SetInput(Deferred.Address, Resolved, Errors))
-				{
-					ReportAdapterErrors(Errors, TEXT("DFX5025"), Deferred.Location, Diagnostics);
-					return false;
-				}
+			}
+
+			if (!ResolveSelfReferences(DeferredSelfRefs))
+			{
+				return false;
 			}
 
 			// Again, now that the stacks and renderers have run: writing a link to `User.X` exposes X

@@ -227,12 +227,25 @@ if ($Command -eq 'corpus') {
     )
 
     $output = & $editorCmd @corpusArguments 2>&1
+    $editorExit = $LASTEXITCODE
     $lines = @($output | ForEach-Object { "$_" })
 
     # The controller writes Result={Success} / Result={Fail}; the process exit code says nothing about
-    # whether any test passed, so these two counts are the verdict.
+    # whether any test passed, so these two counts are the verdict. The exit code DOES say whether the
+    # process survived: a crash mid-suite leaves the crashed test with no Result line at all, and the
+    # counts alone then read "n passed" as if the suite were n tests long. That is how an assert in
+    # test 6 of 9 once reported "corpus OK (5 passed)".
     $passed = @($lines | Where-Object { $_.Contains('Result={Success}') }).Count
     $failed = @($lines | Where-Object { $_.Contains('Result={Fail}') }).Count
+
+    if ($editorExit -ne 0 -and $failed -eq 0) {
+        foreach ($line in ($lines | Select-Object -Last 40)) {
+            Write-Host ($line -replace '^\[[^\]]*\]\[\s*\d+\]', '') -ForegroundColor DarkGray
+        }
+        Write-Host ''
+        Write-Host "dfx: corpus CRASHED (editor exit $editorExit after $passed passed); the log tail above is the crash site" -ForegroundColor Red
+        exit 1
+    }
 
     foreach ($line in $lines) {
         if ($Raw) { Write-Host $line; continue }

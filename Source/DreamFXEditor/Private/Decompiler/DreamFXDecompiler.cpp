@@ -1374,17 +1374,14 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
-		 * Records an emitter's simulation stages as gaps. The same family as the event handlers
-		 * above, and the same blindness with a bigger blast radius: stages live in
-		 * FVersionedNiagaraEmitterData::SimulationStages, not in the six regular stacks, so no stack
-		 * walk sees them -- the export carries no trace, the rebuilt emitter runs no stages, and a
-		 * Grid3D fluid comes back as nothing at all.
+		 * Records the simulation stages an export still cannot carry. The family gap this once
+		 * documented wholesale is closed -- generic stages export as `Stage name(...)` blocks --
+		 * so what remains is the residue: a custom C++ stage class has no text form, and a stage
+		 * whose script object is gone has no stack to read.
 		 *
-		 * The old "simulation stages had zero corpus hits" datum was measured through this very
-		 * blindness -- the event handlers scored zero on the same report while the packs were full of
-		 * them. A blind reader's zero justifies nothing; this note reads the serialized array
-		 * directly, which is also what makes it the census instrument. Representation is planned
-		 * (plan-stages); until it lands, this is the difference between a named gap and a mystery.
+		 * Kept as its own note (rather than folded into the writer) because the asset-level array
+		 * read is what made this the census instrument, and the old "zero corpus hits" datum stands
+		 * as the warning: a blind reader's zero justifies nothing.
 		 */
 		void NoteSimulationStages(const FStackAddress& EmitterAddress, FName EmitterName,
 			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
@@ -1397,31 +1394,28 @@ namespace UE::DreamFX::Editor
 				return;
 			}
 
+			int32 Unrepresented = 0;
 			for (const FNiagaraAdapter::FSimulationStageSummary& Stage : Stages)
 			{
-				FString Detail;
-				if (Stage.bIsGeneric)
+				if (Stage.bIsGeneric && !Stage.bScriptMissing)
 				{
-					Detail = Stage.DataInterfaceBindingName.IsEmpty()
-							|| Stage.DataInterfaceBindingName == TEXT("None")
-						? FString::Printf(TEXT("%s, %s iteration(s)"),
-							*Stage.IterationSourceName, *Stage.NumIterationsText)
-						: FString::Printf(TEXT("over DI '%s', %s iteration(s)"),
-							*Stage.DataInterfaceBindingName, *Stage.NumIterationsText);
+					continue;
 				}
-				else
-				{
-					Detail = FString::Printf(TEXT("custom stage class %s"), *Stage.StageClassName);
-				}
+				++Unrepresented;
 				Result.UnsupportedFeatures.AddUnique(FString::Printf(
-					TEXT("emitter '%s' has a simulation stage ('%s', %s%s) -- stages are not represented, so the rebuilt emitter runs none of them"),
-					*EmitterName.ToString(), *Stage.StageName.ToString(), *Detail,
-					Stage.bEnabled ? TEXT("") : TEXT(", disabled")));
+					TEXT("emitter '%s' has a simulation stage ('%s', %s) this export cannot represent -- the rebuilt emitter does not run it"),
+					*EmitterName.ToString(), *Stage.StageName.ToString(),
+					!Stage.bIsGeneric
+						? *FString::Printf(TEXT("custom stage class %s"), *Stage.StageClassName)
+						: TEXT("its script object is missing")));
 			}
 
-			Diagnostics.Warning(TEXT("DFX8016"), FSourceLocation(),
-				FString::Printf(TEXT("Emitter '%s' carries %d simulation stage(s) this export cannot represent. The rebuilt emitter will run none of them -- a stage-driven simulation (Grid3D fluid and its kind) comes back as nothing. The gap header names each stage."),
-					*EmitterName.ToString(), Stages.Num()));
+			if (Unrepresented > 0)
+			{
+				Diagnostics.Warning(TEXT("DFX8016"), FSourceLocation(),
+					FString::Printf(TEXT("Emitter '%s' carries %d simulation stage(s) this export cannot represent (custom stage class or missing script). The gap header names each one."),
+						*EmitterName.ToString(), Unrepresented));
+			}
 		}
 
 		/**
@@ -1487,187 +1481,16 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
-		 * A whole `Emitter ... { ... }` block, header line included.
-		 *
-		 * Split out so a .dfe export can reuse it verbatim (plan-v3 E2): a standalone emitter document
-		 * differs from an emitter inside a system only in that header line, and keeping two writers for
-		 * one body is how the two forms drift apart.
+		 * One stack's modules plus the block close, written after the caller emitted the
+		 * `... = {` header line. Factored out of WriteEmitterBlock so simulation stages --
+		 * whose stacks are read one at a time through the focus slice -- go through exactly
+		 * the writer the six fixed stacks and the event stack go through.
 		 */
-		/**
-		 * @param bSystemScope  write only the stacks, with no wrapper block, no Settings and no
-		 *                      renderers -- the shape the two system-scope stacks need.
-		 *
-		 * The system scope reuses this rather than getting a writer of its own because the module
-		 * walk is the whole body of the function and a second copy of it would drift. It had no
-		 * writer at all until plan-v5: `SystemSpawn` and `SystemUpdate` appeared 0 times across all
-		 * 24 exports while `EmitterUpdate` appeared 199 times, so every Set Parameters at system
-		 * scope was silently dropped -- which is why rebuilt systems failed to compile with
-		 * "变量 Emitter.SubSize 在设置之前被读取": the module reading it survived, the one writing it
-		 * did not. `EmitterAddress` is then the bare system address, which is exactly what
-		 * GetScriptStackInfo wants.
-		 */
-		void WriteEmitterBlock(FWriter& Writer, const FString& HeaderLine, const FContext& Context,
-			FModuleLibrary& Modules, const FStackAddress& EmitterAddress, const FEmitterInfo& Info,
-			FDecompileResult& Result, FDiagnosticSink& Diagnostics, bool bSystemScope = false,
-			const TMap<FName, FStackAddress>* StackAddressOverrides = nullptr)
+		void WriteStackModules(FWriter& Writer, const FContext& Context, FModuleLibrary& Modules,
+			const FStackAddress& StackOwner, const FScriptStackInfo& Stack, EStackKind StackKind,
+			FDecompileResult& Result)
 		{
 			TArray<FString> Errors;
-
-			if (!bSystemScope)
-			{
-				Writer.Line(HeaderLine);
-				Writer.Line(TEXT("{"));
-				Writer.Push();
-			}
-
-		if (!bSystemScope)
-		{
-			FString Json;
-			Errors.Reset();
-			if (FNiagaraAdapter::GetEmitterProperties(EmitterAddress, Json, Errors))
-			{
-				FString DefaultsError;
-				const FString* Defaults = Modules.GetEmitterDefaults(DefaultsError);
-
-				TArray<FString> Lines;
-				WriteChangedSettings(Writer, Json, Defaults ? *Defaults : FString(),
-					EmitterSettingFields, Lines);
-				if (Lines.Num() > 0)
-				{
-					Writer.Line(TEXT("Settings = {"));
-					Writer.Push();
-					for (const FString& Line : Lines)
-					{
-						Writer.Line(Line);
-					}
-					Writer.Pop();
-					Writer.Line(TEXT("}"));
-					Writer.Blank();
-				}
-			}
-		}
-
-		// What a read of a parameter produces when nothing set it earlier in the stack. Written after
-		// Settings and before the stacks because that is the order it applies in.
-		{
-			TArray<FParameterDefault> ParameterDefaults;
-			Errors.Reset();
-			if (FNiagaraAdapter::GetParameterDefaults(EmitterAddress, ParameterDefaults, Errors)
-				&& ParameterDefaults.Num() > 0)
-			{
-				TArray<FString> Lines;
-				for (const FParameterDefault& Default : ParameterDefaults)
-				{
-					const FString Name = ToNameToken(Default.Variable.GetName().ToString());
-					const FString TypeName = FValueLowering::DescribeDeclaredType(Default.Variable.GetType());
-
-					if (Default.Mode == FParameterDefault::EMode::Binding)
-					{
-						Lines.Add(FString::Printf(TEXT("%s %s = %s;"), *TypeName, *Name,
-							*ToNameToken(Default.Binding.ToString())));
-						continue;
-					}
-					if (Default.Mode != FParameterDefault::EMode::Value)
-					{
-						// Custom means a sub-graph computes the default, which has no text form.
-						Result.UnsupportedFeatures.AddUnique(FString::Printf(
-							TEXT("custom (sub-graph) default for parameter '%s'"),
-							*Default.Variable.GetName().ToString()));
-						continue;
-					}
-
-					const FString ValueSource = ValueToSource(Context,
-						EmitterAddress, Default.Value, Default.Variable.GetType(), 0);
-					if (ValueSource.IsEmpty())
-					{
-						Result.UnsupportedFeatures.AddUnique(FString::Printf(
-							TEXT("default value for parameter '%s'"), *Default.Variable.GetName().ToString()));
-						continue;
-					}
-					Lines.Add(FString::Printf(TEXT("%s %s = %s;"), *TypeName, *Name, *ValueSource));
-				}
-
-				if (Lines.Num() > 0)
-				{
-					Lines.Sort();
-					Writer.Line(TEXT("Defaults = {"));
-					Writer.Push();
-					for (const FString& Line : Lines)
-					{
-						Writer.Line(Line);
-					}
-					Writer.Pop();
-					Writer.Line(TEXT("}"));
-					Writer.Blank();
-				}
-
-		}
-	}
-
-		for (const FScriptStackInfo& Stack : Info.Stacks)
-		{
-			if (Stack.Modules.Num() == 0)
-			{
-				continue;
-			}
-
-			EStackKind StackKind;
-			if (!FNiagaraAdapter::StackForScriptName(Stack.ScriptName, StackKind))
-			{
-				Result.UnsupportedFeatures.AddUnique(FString::Printf(TEXT("stack %s"), *Stack.ScriptName.ToString()));
-				continue;
-			}
-
-			// The event stack is read off a /Temp copy whose usage ids were zeroed -- the original's
-			// random ids are unresolvable through the stack references -- so its module reads need
-			// the copy's address while everything else keeps the original's.
-			const FStackAddress StackOwner =
-				(StackAddressOverrides != nullptr && StackAddressOverrides->Contains(Stack.ScriptName))
-					? (*StackAddressOverrides)[Stack.ScriptName]
-					: EmitterAddress;
-
-			if (StackKind == EStackKind::EventHandler)
-			{
-				// The header speaks the handler's spec. Read from the ORIGINAL emitter -- the copy's
-				// host has no source emitter to resolve the name against.
-				TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
-				TArray<FString> HandlerErrors;
-				FNiagaraAdapter::GetEmitterEventHandlers(EmitterAddress, Handlers, HandlerErrors);
-				if (Handlers.Num() != 1)
-				{
-					// Whatever put this stack here should have guaranteed exactly one; refusing to
-					// invent a header is better than writing one that rebuilds differently.
-					Result.UnsupportedFeatures.AddUnique(
-						TEXT("event stack whose handler count changed while it was being read"));
-					continue;
-				}
-				const FNiagaraAdapter::FEventHandlerSummary& Handler = Handlers[0];
-
-				FString Header = FString::Printf(TEXT("OnEvent(Source = %s, Event = \"%s\", Mode = %s, SpawnNumber = %d"),
-					*ToNameToken(Handler.SourceEmitterName), *Handler.SourceEventName.ToString(),
-					*Handler.ExecutionMode, Handler.SpawnNumber);
-				if (Handler.MaxEventsPerFrame != 0)
-				{
-					Header += FString::Printf(TEXT(", MaxEventsPerFrame = %d"), Handler.MaxEventsPerFrame);
-				}
-				if (!Handler.bUpdateAttributeInitialValues)
-				{
-					Header += TEXT(", UpdateAttributeInitialValues = false");
-				}
-				if (Handler.bRandomSpawnNumber)
-				{
-					Header += TEXT(", RandomSpawnNumber = true");
-				}
-				if (Handler.MinSpawnNumber != 0)
-				{
-					Header += FString::Printf(TEXT(", MinSpawnNumber = %d"), Handler.MinSpawnNumber);
-				}
-				Writer.Line(Header + TEXT(") = {"));
-			}
-			else
-			{
-				Writer.Line(FString::Printf(TEXT("%s = {"), LexStackKind(StackKind)));
-			}
 			Writer.Push();
 
 			for (const FModuleInfo& Module : Stack.Modules)
@@ -2037,6 +1860,197 @@ namespace UE::DreamFX::Editor
 			Writer.Blank();
 		}
 
+		/**
+		 * A whole `Emitter ... { ... }` block, header line included.
+		 *
+		 * Split out so a .dfe export can reuse it verbatim (plan-v3 E2): a standalone emitter document
+		 * differs from an emitter inside a system only in that header line, and keeping two writers for
+		 * one body is how the two forms drift apart.
+		 */
+		/**
+		 * @param bSystemScope  write only the stacks, with no wrapper block, no Settings and no
+		 *                      renderers -- the shape the two system-scope stacks need.
+		 *
+		 * The system scope reuses this rather than getting a writer of its own because the module
+		 * walk is the whole body of the function and a second copy of it would drift. It had no
+		 * writer at all until plan-v5: `SystemSpawn` and `SystemUpdate` appeared 0 times across all
+		 * 24 exports while `EmitterUpdate` appeared 199 times, so every Set Parameters at system
+		 * scope was silently dropped -- which is why rebuilt systems failed to compile with
+		 * "变量 Emitter.SubSize 在设置之前被读取": the module reading it survived, the one writing it
+		 * did not. `EmitterAddress` is then the bare system address, which is exactly what
+		 * GetScriptStackInfo wants.
+		 *
+		 * @param bLeaveOpen  do not write the emitter's closing brace. The caller that asks for
+		 *                    this owes the `}`: simulation stage blocks are written by the caller
+		 *                    -- reading one means mutating usage ids on the host copy, which no
+		 *                    read scope may be open across -- and they belong inside the block.
+		 */
+		void WriteEmitterBlock(FWriter& Writer, const FString& HeaderLine, const FContext& Context,
+			FModuleLibrary& Modules, const FStackAddress& EmitterAddress, const FEmitterInfo& Info,
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics, bool bSystemScope = false,
+			const TMap<FName, FStackAddress>* StackAddressOverrides = nullptr,
+			bool bLeaveOpen = false)
+		{
+			TArray<FString> Errors;
+
+			if (!bSystemScope)
+			{
+				Writer.Line(HeaderLine);
+				Writer.Line(TEXT("{"));
+				Writer.Push();
+			}
+
+		if (!bSystemScope)
+		{
+			FString Json;
+			Errors.Reset();
+			if (FNiagaraAdapter::GetEmitterProperties(EmitterAddress, Json, Errors))
+			{
+				FString DefaultsError;
+				const FString* Defaults = Modules.GetEmitterDefaults(DefaultsError);
+
+				TArray<FString> Lines;
+				WriteChangedSettings(Writer, Json, Defaults ? *Defaults : FString(),
+					EmitterSettingFields, Lines);
+				if (Lines.Num() > 0)
+				{
+					Writer.Line(TEXT("Settings = {"));
+					Writer.Push();
+					for (const FString& Line : Lines)
+					{
+						Writer.Line(Line);
+					}
+					Writer.Pop();
+					Writer.Line(TEXT("}"));
+					Writer.Blank();
+				}
+			}
+		}
+
+		// What a read of a parameter produces when nothing set it earlier in the stack. Written after
+		// Settings and before the stacks because that is the order it applies in.
+		{
+			TArray<FParameterDefault> ParameterDefaults;
+			Errors.Reset();
+			if (FNiagaraAdapter::GetParameterDefaults(EmitterAddress, ParameterDefaults, Errors)
+				&& ParameterDefaults.Num() > 0)
+			{
+				TArray<FString> Lines;
+				for (const FParameterDefault& Default : ParameterDefaults)
+				{
+					const FString Name = ToNameToken(Default.Variable.GetName().ToString());
+					const FString TypeName = FValueLowering::DescribeDeclaredType(Default.Variable.GetType());
+
+					if (Default.Mode == FParameterDefault::EMode::Binding)
+					{
+						Lines.Add(FString::Printf(TEXT("%s %s = %s;"), *TypeName, *Name,
+							*ToNameToken(Default.Binding.ToString())));
+						continue;
+					}
+					if (Default.Mode != FParameterDefault::EMode::Value)
+					{
+						// Custom means a sub-graph computes the default, which has no text form.
+						Result.UnsupportedFeatures.AddUnique(FString::Printf(
+							TEXT("custom (sub-graph) default for parameter '%s'"),
+							*Default.Variable.GetName().ToString()));
+						continue;
+					}
+
+					const FString ValueSource = ValueToSource(Context,
+						EmitterAddress, Default.Value, Default.Variable.GetType(), 0);
+					if (ValueSource.IsEmpty())
+					{
+						Result.UnsupportedFeatures.AddUnique(FString::Printf(
+							TEXT("default value for parameter '%s'"), *Default.Variable.GetName().ToString()));
+						continue;
+					}
+					Lines.Add(FString::Printf(TEXT("%s %s = %s;"), *TypeName, *Name, *ValueSource));
+				}
+
+				if (Lines.Num() > 0)
+				{
+					Lines.Sort();
+					Writer.Line(TEXT("Defaults = {"));
+					Writer.Push();
+					for (const FString& Line : Lines)
+					{
+						Writer.Line(Line);
+					}
+					Writer.Pop();
+					Writer.Line(TEXT("}"));
+					Writer.Blank();
+				}
+
+		}
+	}
+
+		for (const FScriptStackInfo& Stack : Info.Stacks)
+		{
+			if (Stack.Modules.Num() == 0)
+			{
+				continue;
+			}
+
+			EStackKind StackKind;
+			if (!FNiagaraAdapter::StackForScriptName(Stack.ScriptName, StackKind))
+			{
+				Result.UnsupportedFeatures.AddUnique(FString::Printf(TEXT("stack %s"), *Stack.ScriptName.ToString()));
+				continue;
+			}
+
+			// The event stack is read off a /Temp copy whose usage ids were zeroed -- the original's
+			// random ids are unresolvable through the stack references -- so its module reads need
+			// the copy's address while everything else keeps the original's.
+			const FStackAddress StackOwner =
+				(StackAddressOverrides != nullptr && StackAddressOverrides->Contains(Stack.ScriptName))
+					? (*StackAddressOverrides)[Stack.ScriptName]
+					: EmitterAddress;
+
+			if (StackKind == EStackKind::EventHandler)
+			{
+				// The header speaks the handler's spec. Read from the ORIGINAL emitter -- the copy's
+				// host has no source emitter to resolve the name against.
+				TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
+				TArray<FString> HandlerErrors;
+				FNiagaraAdapter::GetEmitterEventHandlers(EmitterAddress, Handlers, HandlerErrors);
+				if (Handlers.Num() != 1)
+				{
+					// Whatever put this stack here should have guaranteed exactly one; refusing to
+					// invent a header is better than writing one that rebuilds differently.
+					Result.UnsupportedFeatures.AddUnique(
+						TEXT("event stack whose handler count changed while it was being read"));
+					continue;
+				}
+				const FNiagaraAdapter::FEventHandlerSummary& Handler = Handlers[0];
+
+				FString Header = FString::Printf(TEXT("OnEvent(Source = %s, Event = \"%s\", Mode = %s, SpawnNumber = %d"),
+					*ToNameToken(Handler.SourceEmitterName), *Handler.SourceEventName.ToString(),
+					*Handler.ExecutionMode, Handler.SpawnNumber);
+				if (Handler.MaxEventsPerFrame != 0)
+				{
+					Header += FString::Printf(TEXT(", MaxEventsPerFrame = %d"), Handler.MaxEventsPerFrame);
+				}
+				if (!Handler.bUpdateAttributeInitialValues)
+				{
+					Header += TEXT(", UpdateAttributeInitialValues = false");
+				}
+				if (Handler.bRandomSpawnNumber)
+				{
+					Header += TEXT(", RandomSpawnNumber = true");
+				}
+				if (Handler.MinSpawnNumber != 0)
+				{
+					Header += FString::Printf(TEXT(", MinSpawnNumber = %d"), Handler.MinSpawnNumber);
+				}
+				Writer.Line(Header + TEXT(") = {"));
+			}
+			else
+			{
+				Writer.Line(FString::Printf(TEXT("%s = {"), LexStackKind(StackKind)));
+			}
+			WriteStackModules(Writer, Context, Modules, StackOwner, Stack, StackKind, Result);
+		}
+
 		// A range-for over a ternary would bind a temporary array; the system scope simply has no
 		// renderers to walk.
 		for (const FRendererInfo& Renderer : Info.Renderers)
@@ -2112,10 +2126,102 @@ namespace UE::DreamFX::Editor
 			Writer.Line(TEXT("}"));
 			}
 
-			if (!bSystemScope)
+			if (!bSystemScope && !bLeaveOpen)
 			{
 				Writer.Pop();
 				Writer.Line(TEXT("}"));
+			}
+		}
+
+		/**
+		 * Every simulation stage block of one emitter, written from the host copy.
+		 *
+		 * A stage's stack resolves only while that stage holds the zero usage id, so each one is
+		 * focused just before its modules are read. The focus is a mutation of the host, which is
+		 * why the caller must have closed any read scope on the host system before calling this,
+		 * and why each stage opens a fresh scope for its own reads.
+		 *
+		 * Header arguments are judged against the CDO: what a freshly added stage already is goes
+		 * unsaid, so a bare `Stage Name = {}` is a stage the engine would make anyway.
+		 */
+		void WriteSimulationStageBlocks(FWriter& Writer, const FContext& Context,
+			FModuleLibrary& Modules, const FStackAddress& HostEmitterAddress,
+			const TArray<FNiagaraAdapter::FSimulationStageSummary>& Stages,
+			FDecompileResult& Result)
+		{
+			FNiagaraAdapter::FSimulationStageSummary Defaults;
+			FNiagaraAdapter::GetSimulationStageDefaults(Defaults);
+			const FName StageScriptName = FNiagaraAdapter::ScriptNameForStack(EStackKind::SimulationStage);
+
+			for (int32 StageIndex = 0; StageIndex < Stages.Num(); ++StageIndex)
+			{
+				const FNiagaraAdapter::FSimulationStageSummary& Stage = Stages[StageIndex];
+				if (!Stage.bIsGeneric || Stage.bScriptMissing)
+				{
+					// NoteSimulationStages already recorded the gap; there is no stack to write.
+					continue;
+				}
+
+				TArray<FString> Errors;
+				if (!FNiagaraAdapter::FocusSimulationStageForRead(HostEmitterAddress, StageIndex, Errors))
+				{
+					Result.UnsupportedFeatures.AddUnique(FString::Printf(
+						TEXT("simulation stage '%s' could not be focused for reading -- its stack is not exported"),
+						*Stage.StageName.ToString()));
+					continue;
+				}
+
+				FNiagaraAdapter::FReadScope StageScope(HostEmitterAddress.System);
+				FScriptStackInfo StackInfo;
+				Errors.Reset();
+				if (!FNiagaraAdapter::GetScriptStackInfo(
+					HostEmitterAddress.WithScript(StageScriptName), StackInfo, Errors))
+				{
+					Result.UnsupportedFeatures.AddUnique(FString::Printf(
+						TEXT("simulation stage '%s''s stack could not be read -- it is not exported"),
+						*Stage.StageName.ToString()));
+					continue;
+				}
+
+				TArray<FString> Arguments;
+				if (!Stage.DataInterfaceBindingName.IsEmpty())
+				{
+					Arguments.Add(FString::Printf(TEXT("DataInterface = \"%s\""),
+						*Stage.DataInterfaceBindingName));
+				}
+				// Saying DataInterface already says the iteration; anything else that differs from
+				// a fresh stage is spelled out. Both can appear at once -- an explicit Iteration
+				// wins over the implication on the way back in, so even that asset round-trips.
+				const bool bImpliedIteration = !Stage.DataInterfaceBindingName.IsEmpty()
+					&& Stage.IterationSourceName == TEXT("DataInterface");
+				if (!bImpliedIteration && !Stage.IterationSourceName.IsEmpty()
+					&& Stage.IterationSourceName != Defaults.IterationSourceName)
+				{
+					Arguments.Add(FString::Printf(TEXT("Iteration = %s"), *Stage.IterationSourceName));
+				}
+				if (Stage.NumIterationsText == TEXT("<bound>"))
+				{
+					// A parameter drives the count; Stage(NumIterations = ...) can only say a number.
+					Result.UnsupportedFeatures.AddUnique(FString::Printf(
+						TEXT("simulation stage '%s' drives its iteration count from a parameter -- the rebuilt stage keeps the default count"),
+						*Stage.StageName.ToString()));
+				}
+				else if (!Stage.NumIterationsText.IsEmpty()
+					&& Stage.NumIterationsText != Defaults.NumIterationsText)
+				{
+					Arguments.Add(FString::Printf(TEXT("NumIterations = %s"), *Stage.NumIterationsText));
+				}
+				if (Stage.bEnabled != Defaults.bEnabled)
+				{
+					Arguments.Add(Stage.bEnabled ? TEXT("Enabled = true") : TEXT("Enabled = false"));
+				}
+
+				const FString Name = ToNameToken(Stage.StageName.ToString());
+				Writer.Line(Arguments.Num() == 0
+					? FString::Printf(TEXT("Stage %s = {"), *Name)
+					: FString::Printf(TEXT("Stage %s(%s) = {"), *Name, *FString::Join(Arguments, TEXT(", "))));
+				WriteStackModules(Writer, Context, Modules, HostEmitterAddress, StackInfo,
+					EStackKind::SimulationStage, Result);
 			}
 		}
 	}
@@ -2336,62 +2442,81 @@ namespace UE::DreamFX::Editor
 			NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics, /*bSingleIsRepresented=*/true);
 			NoteSimulationStages(EmitterAddress, EmitterName, Result, Diagnostics);
 
-			// One event handler reads through a /Temp copy whose usage ids are zeroed: the original's
-			// event script carries a random usage id, and the stack references can only resolve the
-			// zero one (the same fact the write side builds on). The copy is mutated so the original
-			// never is, and only its event stack is read -- everything else stays on the original.
+			// Event handlers and simulation stages both read through a /Temp copy: the original's
+			// off-stack scripts carry random usage ids, and the stack references can only resolve
+			// the zero one (the same fact the write side builds on). The copy is mutated so the
+			// original never is -- the event handler's id is zeroed once, stages are focused onto
+			// the zero id one at a time -- and only those stacks are read through it; everything
+			// else stays on the original.
 			TMap<FName, FStackAddress> StackOverrides;
-			TOptional<FGCObjectScopeGuard> EventHostGuard;
-			TOptional<FNiagaraAdapter::FReadScope> EventReadScope;
+			TOptional<FGCObjectScopeGuard> HostGuard;
+			TOptional<FNiagaraAdapter::FReadScope> HostReadScope;
+			FStackAddress HostEmitter;
+			bool bHostReady = false;
+
+			TArray<FNiagaraAdapter::FSimulationStageSummary> StageSummaries;
+			{
+				TArray<FString> StageErrors;
+				FNiagaraAdapter::GetEmitterSimulationStages(EmitterAddress, StageSummaries, StageErrors);
+			}
+			const bool bWantStageBlocks = StageSummaries.ContainsByPredicate(
+				[](const FNiagaraAdapter::FSimulationStageSummary& Stage)
+				{ return Stage.bIsGeneric && !Stage.bScriptMissing; });
+
 			{
 				TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
 				TArray<FString> HandlerErrors;
 				FNiagaraAdapter::GetEmitterEventHandlers(EmitterAddress, Handlers, HandlerErrors);
-				if (Handlers.Num() == 1)
+				const bool bWantEventStack = Handlers.Num() == 1;
+				if (bWantEventStack || bWantStageBlocks)
 				{
 					const FName EventScriptName = FNiagaraAdapter::ScriptNameForStack(EStackKind::EventHandler);
 					bool bEventStackReady = false;
 
 					TArray<FString> HostErrors;
 					bool bHostCreated = false;
-					UNiagaraSystem* EventHost = FNiagaraAdapter::AcquireSystem(
-						TEXT("/Temp/DreamFX"), TEXT("DreamFXEventReadHost"), bHostCreated, HostErrors);
+					UNiagaraSystem* Host = FNiagaraAdapter::AcquireSystem(
+						TEXT("/Temp/DreamFX"), TEXT("DreamFXOffStackReadHost"), bHostCreated, HostErrors);
 					UNiagaraEmitter* Instance = FNiagaraAdapter::GetEmitterInstance(EmitterAddress);
-					if (EventHost != nullptr && Instance != nullptr)
+					if (Host != nullptr && Instance != nullptr)
 					{
-						EventHostGuard.Emplace(EventHost);
+						HostGuard.Emplace(Host);
 
 						// A previous emitter's copy may still be in the host; start clean.
 						TArray<FName> Existing;
 						TArray<FString> ScratchErrors;
-						if (FNiagaraAdapter::GetEmitterNames(EventHost, Existing, ScratchErrors))
+						if (FNiagaraAdapter::GetEmitterNames(Host, Existing, ScratchErrors))
 						{
 							for (FName Name : Existing)
 							{
 								ScratchErrors.Reset();
 								FNiagaraAdapter::RemoveEmitter(
-									FStackAddress(EventHost).WithEmitter(Name), ScratchErrors);
+									FStackAddress(Host).WithEmitter(Name), ScratchErrors);
 							}
 						}
 
-						const FStackAddress HostEmitter = FStackAddress(EventHost).WithEmitter(EmitterName);
+						HostEmitter = FStackAddress(Host).WithEmitter(EmitterName);
 						ScratchErrors.Reset();
-						if (FNiagaraAdapter::AddEmitterFromTemplate(EventHost, Instance, EmitterName, ScratchErrors)
-							&& FNiagaraAdapter::ZeroEventHandlerUsageIds(HostEmitter, ScratchErrors))
+						if (FNiagaraAdapter::AddEmitterFromTemplate(Host, Instance, EmitterName, ScratchErrors))
 						{
-							EventReadScope.Emplace(EventHost);
-
-							FScriptStackInfo EventStack;
-							ScratchErrors.Reset();
-							if (FNiagaraAdapter::GetScriptStackInfo(
-								HostEmitter.WithScript(EventScriptName), EventStack, ScratchErrors))
+							bHostReady = true;
+							if (bWantEventStack
+								&& FNiagaraAdapter::ZeroEventHandlerUsageIds(HostEmitter, ScratchErrors))
 							{
-								Info.Stacks.Add(MoveTemp(EventStack));
-								StackOverrides.Add(EventScriptName, HostEmitter);
-								bEventStackReady = true;
+								HostReadScope.Emplace(Host);
+
+								FScriptStackInfo EventStack;
+								ScratchErrors.Reset();
+								if (FNiagaraAdapter::GetScriptStackInfo(
+									HostEmitter.WithScript(EventScriptName), EventStack, ScratchErrors))
+								{
+									Info.Stacks.Add(MoveTemp(EventStack));
+									StackOverrides.Add(EventScriptName, HostEmitter);
+									bEventStackReady = true;
+								}
 							}
 						}
-						if (!bEventStackReady)
+						if (bWantEventStack && !bEventStackReady)
 						{
 							UE_LOG(LogDreamFX, Warning,
 								TEXT("Could not read emitter '%s''s event stack through a host copy: %s"),
@@ -2399,7 +2524,7 @@ namespace UE::DreamFX::Editor
 						}
 					}
 
-					if (!bEventStackReady)
+					if (bWantEventStack && !bEventStackReady)
 					{
 						// The header would otherwise claim a handler the body does not carry.
 						Result.UnsupportedFeatures.AddUnique(FString::Printf(
@@ -2409,9 +2534,26 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
+			const bool bStagesToWrite = bWantStageBlocks && bHostReady;
+			if (bWantStageBlocks && !bHostReady)
+			{
+				Result.UnsupportedFeatures.AddUnique(FString::Printf(
+					TEXT("emitter '%s' has simulation stages whose stacks could not be read through a host copy -- they are not exported"),
+					*EmitterName.ToString()));
+			}
+
 			WriteEmitterBlock(Writer, FString::Printf(TEXT("Emitter %s"), *ToNameToken(EmitterName.ToString())),
 				Context, Modules, EmitterAddress, Info, Result, Diagnostics, /*bSystemScope=*/false,
-				StackOverrides.Num() > 0 ? &StackOverrides : nullptr);
+				StackOverrides.Num() > 0 ? &StackOverrides : nullptr, /*bLeaveOpen=*/bStagesToWrite);
+			if (bStagesToWrite)
+			{
+				// Focusing a stage mutates the host's usage ids; the shared read context must not
+				// survive that, so the scope closes here and each stage opens its own.
+				HostReadScope.Reset();
+				WriteSimulationStageBlocks(Writer, Context, Modules, HostEmitter, StageSummaries, Result);
+				Writer.Pop();
+				Writer.Line(TEXT("}"));
+			}
 			Writer.Blank();
 		}
 
@@ -2479,8 +2621,10 @@ namespace UE::DreamFX::Editor
 		FGCObjectScopeGuard HostGuard(Host);
 
 		// Opened only now: the emitter was copied into the host above, and a shared context may not
-		// span a mutation of the system it describes.
-		FNiagaraAdapter::FReadScope ReadScope(Host);
+		// span a mutation of the system it describes. Optional because writing simulation stage
+		// blocks mutates the host again (the focus slice), so the scope has to close first.
+		TOptional<FNiagaraAdapter::FReadScope> ReadScope;
+		ReadScope.Emplace(Host);
 
 		const FStackAddress EmitterAddress = FStackAddress(Host).WithEmitter(EmitterName);
 
@@ -2525,11 +2669,32 @@ namespace UE::DreamFX::Editor
 			Context.ExtractedScriptFolder = Context.RootMountPoint / FPaths::GetPath(MirrorRelative) / TEXT("Scripts");
 		}
 
+		// Stages have no cross-emitter reference, so unlike events they export on this path too --
+		// read straight off the host copy, which carries the original's stage array.
+		TArray<FNiagaraAdapter::FSimulationStageSummary> StageSummaries;
+		{
+			TArray<FString> StageErrors;
+			FNiagaraAdapter::GetEmitterSimulationStages(EmitterAddress, StageSummaries, StageErrors);
+		}
+		const bool bStagesToWrite = StageSummaries.ContainsByPredicate(
+			[](const FNiagaraAdapter::FSimulationStageSummary& Stage)
+			{ return Stage.bIsGeneric && !Stage.bScriptMissing; });
+
 		FWriter Writer;
 		WriteEmitterBlock(Writer,
 			FString::Printf(TEXT("Emitter(Name=\"%s\", Root=\"%s\")"),
 				*DocumentName, *RootToken),
-			Context, Modules, EmitterAddress, Info, Result, Diagnostics);
+			Context, Modules, EmitterAddress, Info, Result, Diagnostics, /*bSystemScope=*/false,
+			/*StackAddressOverrides=*/nullptr, /*bLeaveOpen=*/bStagesToWrite);
+		if (bStagesToWrite)
+		{
+			// Same rule as the system path: the focus slice mutates the host, so the shared read
+			// context closes first and each stage block opens its own.
+			ReadScope.Reset();
+			WriteSimulationStageBlocks(Writer, Context, Modules, EmitterAddress, StageSummaries, Result);
+			Writer.Pop();
+			Writer.Line(TEXT("}"));
+		}
 
 		NoteUnmountedDependencies(Emitter, Result.UnsupportedFeatures);
 

@@ -33,8 +33,5 @@ Attributes hang off a declaration in brackets: `[ Group="Burst"; SortPriority=10
 
 - **Emitter inheritance.** `from` is copy, not inherit (R3). Editing a `.dfe` does not reach back into
   systems that already copied it until they are rebuilt.
-- **Event handlers and named simulation stages.** `OnEvent <name> = { }` and `Stage <name> = { }`
-  parse, so the syntax is settled, but neither generates (DFX2012). The 2026-08-07 coverage sweep
-  found zero uses of either across the project — see [coverage-2026-08-07.md](../coverage-2026-08-07.md).
 - **`MaterialParam`.** Reserved (L8), not implemented (DFX5093).
 - **Anything that would need a general expression compiler.** See L6 in [values.md](values.md).

@@ -45,6 +45,7 @@ namespace UE::DreamFX
 			bool ParseParameterBlock(TArray<FParameterDecl>& OutParameters);
 			bool ParseStackBlock(FStack& OutStack);
 			bool ParseEventHandlerArguments(FEventHandlerSpec& OutSpec);
+			bool ParseSimulationStageArguments(FSimulationStageSpec& OutSpec);
 			bool ParseEmitterDeclaration(FEmitter& OutEmitter);
 			bool ParseRendererDeclaration(FRenderer& OutRenderer);
 
@@ -1088,20 +1089,26 @@ namespace UE::DreamFX
 				}
 				else if (Keyword == TEXT("Stage"))
 				{
-					// Reserved by L1 / section 7. Parsed so the syntax stays stable, then rejected --
-					// silently dropping a whole stack would be far worse than a clear "not yet".
+					// A simulation stage: a named particle stack that runs after the update, plus the
+					// stage properties (iteration source, DI binding, count, enabled) in the same
+					// parenthesised attribute form OnEvent uses. The arguments are optional because,
+					// unlike an event handler, a bare stage is meaningful: an enabled
+					// particles-iteration stage that runs once, the engine's own default.
 					const FSourceLocation Location = Token.Location;
 					Lexer.Next();
 					FStack Stack;
 					Stack.Kind = EStackKind::SimulationStage;
 					Stack.Location = Location;
-					ExpectIdentifier(Stack.Name);
-					if (ParseStackBlock(Stack))
+					if (ExpectIdentifier(Stack.Name))
 					{
-						OutEmitter.Stacks.Add(MoveTemp(Stack));
+						Stack.Stage.Name = Stack.Name;
+						const bool bArgumentsOk = !Lexer.Peek().IsSymbol(TEXT("("))
+							|| ParseSimulationStageArguments(Stack.Stage);
+						if (bArgumentsOk && ParseStackBlock(Stack))
+						{
+							OutEmitter.Stacks.Add(MoveTemp(Stack));
+						}
 					}
-					Diagnostics.Error(TEXT("DFX2012"), Location,
-						TEXT("'Stage' blocks are reserved syntax and are not supported in v1."));
 				}
 				else if (Keyword == TEXT("OnEvent"))
 				{
@@ -1156,7 +1163,7 @@ namespace UE::DreamFX
 					else
 					{
 						ErrorAtCurrent(TEXT("DFX2014"),
-							FString::Printf(TEXT("Unknown emitter section '%s'. Expected Settings, Defaults, EmitterSpawn, EmitterUpdate, ParticleSpawn, ParticleUpdate or a renderer declaration."),
+							FString::Printf(TEXT("Unknown emitter section '%s'. Expected Settings, Defaults, EmitterSpawn, EmitterUpdate, ParticleSpawn, ParticleUpdate, Stage, OnEvent or a renderer declaration."),
 								*Keyword));
 						Lexer.Next();
 						if (Lexer.Peek().IsSymbol(TEXT("=")))
@@ -1312,6 +1319,120 @@ namespace UE::DreamFX
 				return false;
 			}
 			return true;
+		}
+
+		/**
+		 * The parenthesised arguments of a `Stage name(...)` block, in the OnEvent attribute style.
+		 *
+		 * Iteration is an identifier naming an ENiagaraIterationSource entry (Particles,
+		 * DataInterface, DirectSet). DataInterface is the bound grid parameter -- a dotted name like
+		 * Emitter.PressureGrid, written as a string or as bare identifiers -- and saying it already
+		 * says the iteration is DataInterface, so Iteration may then be omitted. NumIterations is an
+		 * integer, Enabled is true/false. Whether the DataInterface parameter actually exists is a
+		 * build-time question, answered where the emitter's parameters do.
+		 */
+		bool FParserImpl::ParseSimulationStageArguments(FSimulationStageSpec& OutSpec)
+		{
+			if (!Expect(TEXT("(")))
+			{
+				return false;
+			}
+
+			// `Stage X() = {}` reads as all defaults, same as no parentheses at all.
+			if (Lexer.Peek().IsSymbol(TEXT(")")))
+			{
+				Lexer.Next();
+				return true;
+			}
+
+			do
+			{
+				FString Key;
+				const FSourceLocation KeyLocation = Lexer.Peek().Location;
+				if (!ExpectIdentifier(Key) || !Expect(TEXT("=")))
+				{
+					return false;
+				}
+
+				const FToken& ValueToken = Lexer.Peek();
+
+				// A dotted parameter name: "Emitter.PressureGrid" as one string, or as the same
+				// identifier-dot-identifier sequence an assignment's left side would be.
+				auto ReadDottedName = [this, &ValueToken](FString& Out)
+				{
+					if (ValueToken.Kind == ETokenKind::String)
+					{
+						Out = Lexer.Next().Text;
+						return true;
+					}
+					if (ValueToken.Kind != ETokenKind::Identifier)
+					{
+						return false;
+					}
+					Out = Lexer.Next().Text;
+					while (Lexer.TryConsumeSymbol(TEXT(".")))
+					{
+						FString Part;
+						if (!ExpectIdentifier(Part))
+						{
+							return false;
+						}
+						Out += TEXT(".") + Part;
+					}
+					return true;
+				};
+
+				bool bOk = true;
+				if (Key == TEXT("Iteration"))
+				{
+					bOk = ExpectIdentifier(OutSpec.Iteration);
+				}
+				else if (Key == TEXT("DataInterface"))
+				{
+					bOk = ReadDottedName(OutSpec.DataInterface);
+				}
+				else if (Key == TEXT("NumIterations"))
+				{
+					if (ValueToken.Kind == ETokenKind::Number)
+					{
+						OutSpec.NumIterations = static_cast<int32>(Lexer.Next().Number);
+					}
+					else
+					{
+						bOk = false;
+					}
+				}
+				else if (Key == TEXT("Enabled"))
+				{
+					if (ValueToken.Kind == ETokenKind::Identifier
+						&& (ValueToken.Text == TEXT("true") || ValueToken.Text == TEXT("false")))
+					{
+						OutSpec.Enabled = Lexer.Next().Text == TEXT("true");
+					}
+					else
+					{
+						bOk = false;
+					}
+				}
+				else
+				{
+					Diagnostics.Error(TEXT("DFX2026"), KeyLocation,
+						FString::Printf(TEXT("Unknown Stage argument '%s'. Expected Iteration, DataInterface, NumIterations or Enabled."),
+							*Key));
+					return false;
+				}
+
+				if (!bOk)
+				{
+					Diagnostics.Error(TEXT("DFX2026"), ValueToken.Location,
+						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: Iteration is an identifier, DataInterface is a dotted parameter name, NumIterations is an integer and Enabled is true/false."),
+							*Key));
+					return false;
+				}
+			}
+			while (Lexer.TryConsumeSymbol(TEXT(",")));
+
+			return Expect(TEXT(")"));
 		}
 
 		bool FParserImpl::ParseEmitterDeclaration(FEmitter& OutEmitter)

@@ -3169,6 +3169,59 @@ namespace UE::DreamFX::Editor
 		return false;
 	}
 
+	namespace
+	{
+		void SummarizeSimulationStage(const UNiagaraSimulationStageBase& Stage,
+			FNiagaraAdapter::FSimulationStageSummary& Summary)
+		{
+			Summary.StageName = Stage.SimulationStageName;
+			Summary.StageClassName = Stage.GetClass()->GetName();
+			Summary.bEnabled = Stage.bEnabled != 0;
+			Summary.bScriptMissing = Stage.Script == nullptr;
+			Summary.ScriptUsageId = Stage.Script != nullptr ? Stage.Script->GetUsageId() : FGuid();
+
+			const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(&Stage);
+			if (Generic == nullptr)
+			{
+				return;
+			}
+			Summary.bIsGeneric = true;
+			// StaticEnum<ENiagaraIterationSource> has no exported specialization; the enum object
+			// itself is reachable by path, which is all a name lookup needs. It is declared in
+			// NiagaraCore (NiagaraCore.h), not the Niagara module its consumers live in.
+			if (const UEnum* SourceEnum = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraCore.ENiagaraIterationSource")))
+			{
+				Summary.IterationSourceName = SourceEnum->GetNameStringByValue(
+					static_cast<int64>(Generic->IterationSource));
+			}
+			// NAME_None prints as the string "None", which an emptiness check happily passes and a
+			// Stage header then binds a data interface literally named None. Unbound = empty here.
+			const FName BoundVariableName = Generic->DataInterface.BoundVariable.GetName();
+			Summary.DataInterfaceBindingName = BoundVariableName.IsNone()
+				? FString() : BoundVariableName.ToString();
+
+			// The count is a binding-with-value: a plain number in every corpus asset, but a
+			// parameter can drive it, in which case the number here would be a lie. The Has check
+			// first -- the getter *asserts* on an empty default array, and the raw CDO ships one
+			// (its constructor-time seeding is skipped), which took the whole commandlet down.
+			if (!Generic->NumIterations.HasDefaultValueEditorOnly())
+			{
+				Summary.NumIterationsText = FString();
+			}
+			else if (Generic->NumIterations.GetDefaultValueEditorOnly().Num() == sizeof(int32))
+			{
+				const TConstArrayView<uint8> IterationBytes = Generic->NumIterations.GetDefaultValueEditorOnly();
+				int32 Iterations = 0;
+				FMemory::Memcpy(&Iterations, IterationBytes.GetData(), sizeof(int32));
+				Summary.NumIterationsText = LexToString(Iterations);
+			}
+			else
+			{
+				Summary.NumIterationsText = TEXT("<bound>");
+			}
+		}
+	}
+
 	bool FNiagaraAdapter::GetEmitterSimulationStages(const FStackAddress& EmitterAddress,
 		TArray<FSimulationStageSummary>& OutStages, TArray<FString>& OutErrors)
 	{
@@ -3196,42 +3249,7 @@ namespace UE::DreamFX::Editor
 				{
 					continue;
 				}
-				FSimulationStageSummary& Summary = OutStages.AddDefaulted_GetRef();
-				Summary.StageName = Stage->SimulationStageName;
-				Summary.StageClassName = Stage->GetClass()->GetName();
-				Summary.bEnabled = Stage->bEnabled != 0;
-				Summary.bScriptMissing = Stage->Script == nullptr;
-				Summary.ScriptUsageId = Stage->Script != nullptr ? Stage->Script->GetUsageId() : FGuid();
-
-				const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
-				if (Generic == nullptr)
-				{
-					continue;
-				}
-				Summary.bIsGeneric = true;
-				// StaticEnum<ENiagaraIterationSource> has no exported specialization; the enum object
-				// itself is reachable by path, which is all a name lookup needs. It is declared in
-				// NiagaraCore (NiagaraCore.h), not the Niagara module its consumers live in.
-				if (const UEnum* SourceEnum = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraCore.ENiagaraIterationSource")))
-				{
-					Summary.IterationSourceName = SourceEnum->GetNameStringByValue(
-						static_cast<int64>(Generic->IterationSource));
-				}
-				Summary.DataInterfaceBindingName = Generic->DataInterface.BoundVariable.GetName().ToString();
-
-				// The count is a binding-with-value: a plain number in every corpus asset, but a
-				// parameter can drive it, in which case the number here would be a lie.
-				const TConstArrayView<uint8> IterationBytes = Generic->NumIterations.GetDefaultValueEditorOnly();
-				if (IterationBytes.Num() == sizeof(int32))
-				{
-					int32 Iterations = 0;
-					FMemory::Memcpy(&Iterations, IterationBytes.GetData(), sizeof(int32));
-					Summary.NumIterationsText = LexToString(Iterations);
-				}
-				else
-				{
-					Summary.NumIterationsText = TEXT("<bound>");
-				}
+				SummarizeSimulationStage(*Stage, OutStages.AddDefaulted_GetRef());
 			}
 			return true;
 		}
@@ -3239,6 +3257,18 @@ namespace UE::DreamFX::Editor
 		OutErrors.Add(FString::Printf(TEXT("'%s' has no emitter named '%s'."),
 			*EmitterAddress.System->GetName(), *EmitterAddress.EmitterName.ToString()));
 		return false;
+	}
+
+	void FNiagaraAdapter::GetSimulationStageDefaults(FSimulationStageSummary& OutDefaults)
+	{
+		// The suppression baseline for the decompiler's Stage headers: what a freshly added stage
+		// actually holds, not a hand-written table of what the defaults are believed to be (the
+		// switch-suppression case is the record of what a wrong baseline costs). A transient
+		// instance rather than the CDO, and measurably so: the CDO's NumIterations binding carries
+		// no default bytes -- construction-time seeding skips it -- while every stage the write
+		// side creates is seeded. The baseline must be what stages ARE.
+		UNiagaraSimulationStageGeneric* Fresh = NewObject<UNiagaraSimulationStageGeneric>(GetTransientPackage());
+		SummarizeSimulationStage(*Fresh, OutDefaults);
 	}
 
 	namespace

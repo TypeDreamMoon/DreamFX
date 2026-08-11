@@ -483,6 +483,24 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
+		// And a zero-id simulation stage, for the same reason on the newer family. Begin without End
+		// is deliberate: elsewhere the slice moves the stage to its durable id when the edit is over,
+		// but the probe wants this stack addressable for the library's whole lifetime, and there is
+		// exactly one stage here, so nobody else ever needs the slice.
+		{
+			UE::DreamFX::FSimulationStageSpec ProbeStage;
+			ProbeStage.Name = TEXT("ProbeStage");
+			TArray<FString> StageErrors;
+			if (!FNiagaraAdapter::BeginSimulationStageEdit(
+				FStackAddress(ProbeSystem).WithEmitter(TEXT("Probe")), ProbeStage,
+				/*DeclarationIndex=*/0, StageErrors))
+			{
+				UE_LOG(LogDreamFX, Warning,
+					TEXT("The schema probe system has no simulation stage stack (%s); modules cannot be probed as they appear in Stage."),
+					*FString::Join(StageErrors, TEXT(" | ")));
+			}
+		}
+
 		return true;
 	}
 

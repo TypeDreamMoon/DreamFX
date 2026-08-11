@@ -1,0 +1,15 @@
+// A Stage header takes exactly Iteration, DataInterface, NumIterations and Enabled; anything else
+// must be named as unknown rather than skipped, because a dropped argument is a stage that quietly
+// runs with different properties than the source says.
+// EXPECT DFX2026
+System(Name="Corpus/NS_BadStageArgument", Root="Plugin.DreamFX")
+{
+    Emitter Motes
+    {
+        Settings = { SimTarget = GPU; }
+
+        Stage Settle(ExecuteBehavior = Always) = {
+            ScaleColor();
+        }
+    }
+}

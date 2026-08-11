@@ -1,0 +1,57 @@
+// plan-stages V4: the iteration-source argument in the round-trip corpus.
+//
+// A data-interface-iteration stage with no bound data interface, disabled -- the exact shape the
+// census found on NiagaraShore's `Blur`. The unbound form matters on its own: `Iteration =
+// DataInterface` must survive without a DataInterface argument to imply it from, and a disabled
+// stage must keep its stack. (The BOUND form -- DataInterface = "Emitter.SomeGrid" -- lives with
+// the real Groom and fluid assets: a from-scratch fixture cannot say it, because a data
+// interface parameter is created by the modules that link it, and minimal fixtures have none.)
+System(Name="Corpus/NS_SimulationStageIteration", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime  = 0.0;
+        FixedBounds = box(-100, -100, -100, 100, 100, 100);
+    }
+
+    Emitter Field
+    {
+        Settings = {
+            SimTarget          = GPU;
+            LocalSpace         = false;
+            Determinism        = true;
+            RandomSeed         = 3;
+            AllocationMode     = Fixed;
+            PreAllocationCount = 64;
+            FixedBounds        = box(-100, -100, -100, 100, 100, 100);
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 20.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 2.0,
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 2.0
+            );
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+        }
+
+        Stage Blur(Iteration = DataInterface, Enabled = false) = {
+            ScaleColor();
+        }
+
+        SpriteRenderer Core
+        {
+            Alignment  = Unaligned;
+            FacingMode = FaceCamera;
+            SortMode   = None;
+        }
+    }
+}

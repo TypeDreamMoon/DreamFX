@@ -1,0 +1,65 @@
+// plan-stages V4: simulation stages in the round-trip corpus.
+//
+// Two stages on a GPU emitter, written through the zero-usage-id time slice: the first is a bare
+// stage (everything the CDO already says stays unsaid), the second carries the two properties the
+// census found doing real work -- an iteration count and a disabled flag. The second stage also
+// folds assignments into a Set Parameters module, because the stage stack rides the same rails as
+// the six fixed stacks and this fixture is what keeps that claim honest. A decompiler that dropped
+// a stage, reordered them, or invented a header argument fails here byte by byte.
+System(Name="Corpus/NS_SimulationStage", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime  = 0.0;
+        FixedBounds = box(-100, -100, -100, 100, 100, 100);
+    }
+
+    Emitter Motes
+    {
+        Settings = {
+            SimTarget          = GPU;
+            LocalSpace         = false;
+            Determinism        = true;
+            RandomSeed         = 9;
+            AllocationMode     = Fixed;
+            PreAllocationCount = 128;
+            FixedBounds        = box(-100, -100, -100, 100, 100, 100);
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 50.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 1.0,
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 4.0
+            );
+            SystemLocation();
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            GravityForce(Gravity = (0, 0, -200));
+            SolveForcesAndVelocity();
+        }
+
+        Stage Settle = {
+            ScaleColor();
+        }
+
+        Stage Sharpen(NumIterations = 4, Enabled = false) = {
+            ScaleColor();
+            Particles.Moon.StageMark = 1.0;
+        }
+
+        SpriteRenderer Core
+        {
+            Alignment  = Unaligned;
+            FacingMode = FaceCamera;
+            SortMode   = None;
+        }
+    }
+}
