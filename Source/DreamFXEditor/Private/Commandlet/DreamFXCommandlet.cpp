@@ -945,8 +945,16 @@ namespace
 			// tool while a Grid3D fluid renders nothing. One fact per stage -- class plus full
 			// property text, the shape the data interfaces use below. The script object is identity
 			// (its content arrives through the export and the simulation), the outer version guid too.
+			//
+			// DataInterface is reduced to its bound NAME. The raw struct text prints the binding's
+			// type handle, and that handle is serialization residue: on authored content it resolves
+			// to an unrelated type in any later session (GroomRods' PressureGrid reads as Vector4f)
+			// while the asset simulates fine, because the engine resolves the grid by name at
+			// compile time and never reads the stored type. Comparing the handle would fail every
+			// rebuilt mirror against noise the engine itself ignores.
 			{
-				static const TSet<FName> StageSkip = { TEXT("Script"), TEXT("OuterEmitterVersion") };
+				static const TSet<FName> StageSkip =
+					{ TEXT("Script"), TEXT("OuterEmitterVersion"), TEXT("DataInterface") };
 				int32 StageIndex = 0;
 				for (const UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
 				{
@@ -954,6 +962,11 @@ namespace
 					{
 						TArray<FString> StageFacts;
 						AppendPropertyFacts(TEXT(""), Stage, Stage->GetClass(), StageSkip, SelfPackage, StageFacts);
+						if (const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage))
+						{
+							StageFacts.Add(FString::Printf(TEXT("DataInterface = %s"),
+								*Generic->DataInterface.BoundVariable.GetName().ToString()));
+						}
 						StageFacts.Sort();
 						OutFacts.Add(FString::Printf(TEXT("emitter %s simulation stage %d:%s { %s }"),
 							*EmitterName, StageIndex, *Stage->GetClass()->GetName(),

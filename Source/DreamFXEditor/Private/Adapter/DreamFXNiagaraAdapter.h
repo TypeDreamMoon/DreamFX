@@ -943,7 +943,8 @@ namespace UE::DreamFX::Editor
 			bool bIsGeneric = false;
 			/** ENiagaraIterationSource entry name; empty when not generic. */
 			FString IterationSourceName;
-			/** The bound data interface variable, when iterating over one. */
+			/** The bound data interface variable, when iterating over one. Name only: the stored
+			 * type is serialization residue the engine never reads (see FSimulationStageSpec). */
 			FString DataInterfaceBindingName;
 			/** The iteration count's default as text, or "<bound>" when driven by a parameter. */
 			FString NumIterationsText;

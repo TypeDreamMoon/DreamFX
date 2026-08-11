@@ -133,13 +133,11 @@ Emitter '%s' declares two Stage blocks named '%s'. Stages are identified by name
 **Cause.** One emitter declares two `Stage` blocks with the same name. The write side
 creates-or-reuses a stage by its name (the engine UI's own identity for stages), so both blocks
 would land on one stage and it would silently hold whichever stack was written last. The same code
-carries adapter-reported stage failures at build time — a slice that was never closed, a
-`DataInterface` argument naming a parameter the emitter does not have by the time the stage's
-modules are written, a stage on the asset whose class is not the engine's generic stage.
+carries adapter-reported stage failures at build time — a slice that was never closed, a stage on
+the asset whose class is not the engine's generic stage.
 
-**Fix.** For the duplicate: rename one block. For the `DataInterface` case: the parameter has to
-exist on the emitter — in practice the stage's own modules create it by linking it; check the
-spelling against what the modules link.
+**Fix.** Rename one of the blocks. Stages within one emitter are identified by name, so each needs
+its own.
 
 ## DFX5033
 

@@ -408,8 +408,8 @@ Unknown Stage argument '%s'. Expected Iteration, DataInterface, NumIterations or
 **Cause.** A `Stage name(...)` header carries an argument the grammar does not know, or one whose
 value has the wrong shape. The four arguments are `Iteration` (an identifier naming an
 `ENiagaraIterationSource` entry: `Particles`, `DataInterface`, `DirectSet`), `DataInterface` (the
-bound grid parameter's dotted name, as a string or bare identifiers), `NumIterations` (an integer)
-and `Enabled` (`true`/`false`). Everything is optional — a bare `Stage name = { }` is an enabled
+bound grid's dotted name, as a string or bare identifiers), `NumIterations` (an integer) and
+`Enabled` (`true`/`false`). Everything is optional — a bare `Stage name = { }` is an enabled
 particles-iteration stage that runs once.
 
 **Fix.** Spell the argument as the list above; a stage property beyond these four (execute

@@ -1357,15 +1357,18 @@ namespace UE::DreamFX
 				const FToken& ValueToken = Lexer.Peek();
 
 				// A dotted parameter name: "Emitter.PressureGrid" as one string, or as the same
-				// identifier-dot-identifier sequence an assignment's left side would be.
-				auto ReadDottedName = [this, &ValueToken](FString& Out)
+				// identifier-dot-identifier sequence an assignment's left side would be. Peeked
+				// fresh rather than through ValueToken -- the DataInterface form may consume a
+				// DI<...> type first, after which that reference describes a consumed token.
+				auto ReadDottedName = [this](FString& Out)
 				{
-					if (ValueToken.Kind == ETokenKind::String)
+					const FToken& NameToken = Lexer.Peek();
+					if (NameToken.Kind == ETokenKind::String)
 					{
 						Out = Lexer.Next().Text;
 						return true;
 					}
-					if (ValueToken.Kind != ETokenKind::Identifier)
+					if (NameToken.Kind != ETokenKind::Identifier)
 					{
 						return false;
 					}

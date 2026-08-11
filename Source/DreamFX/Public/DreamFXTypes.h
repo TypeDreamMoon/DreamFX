@@ -291,7 +291,12 @@ namespace UE::DreamFX
 		FString Name;
 		/** ENiagaraIterationSource entry (Particles / DataInterface / DirectSet). Empty = Particles. */
 		FString Iteration;
-		/** The bound data interface variable ("Emitter.PressureGrid"); implies DataInterface iteration. */
+		/**
+		 * The bound data interface variable ("Emitter.PressureGrid"); implies DataInterface
+		 * iteration. A name with no type, deliberately: the engine resolves the iteration grid by
+		 * name at compile time and never reads the binding's stored type -- authored assets ship
+		 * with type handles that resolve to garbage in later sessions and work anyway.
+		 */
 		FString DataInterface;
 		TOptional<int32> NumIterations;
 		TOptional<bool> Enabled;

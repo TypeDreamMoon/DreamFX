@@ -200,23 +200,27 @@ Emitter Fluid
 ```
 
 A stage is a particle stack that runs after `ParticleUpdate`, on a GPU emitter (`SimTarget = GPU`;
-a CPU emitter refuses stages at compile time). Declaration order is run order, and each block is a
+a CPU emitter with a `Stage` block is DFX5033). Declaration order is run order, and each block is a
 stack like any other — module calls, folded assignments, `disabled`, all of it.
 
 The header holds the stage's own properties, written only when they differ from a freshly added
-stage: `DataInterface` names the grid parameter the stage iterates over (one thread per cell rather
-than per particle) and already implies the iteration source; `Iteration` says it explicitly
-(`Particles`, `DataInterface`, `DirectSet`) for the shapes that need it, such as a
-data-interface iteration with nothing bound; `NumIterations` repeats the stage (default 1);
-`Enabled = false` parks it. Unknown or misshapen arguments are DFX2026. Two `Stage` blocks with one
-name is DFX5032 — stages are identified by name, and the build would otherwise quietly keep
-whichever stack ran last.
+stage: `DataInterface` names the grid the stage iterates over (one thread per cell rather than per
+particle) and already implies the iteration source; `Iteration` says it explicitly (`Particles`,
+`DataInterface`, `DirectSet`) for the shapes that need it, such as a data-interface iteration with
+nothing bound; `NumIterations` repeats the stage (default 1); `Enabled = false` parks it. Unknown
+or misshapen arguments are DFX2026. Two `Stage` blocks with one name is DFX5032 — stages are
+identified by name, and the build would otherwise quietly keep whichever stack ran last.
 
-The `DataInterface` parameter must exist on the emitter by the time the stage's modules have been
-written — in practice the modules that use the grid also link it, which creates it. A count driven
-by a *parameter* rather than a number is not representable; the export says so and the rebuilt
-stage keeps the default count. A stage of a custom C++ stage class (anything that is not the
-engine's generic stage) stays a gap with its own header line (DFX8016).
+`DataInterface` is a name, and the name is the whole contract: the engine resolves the iteration
+grid by name at compile time and never reads the binding's stored type (authored assets ship with
+type handles that resolve to garbage in later sessions, and simulate fine). The grid itself is
+usually materialized by a module's internal writes — it does not need to be a declared parameter
+for the binding to work, and a misspelt name surfaces as the stage compiling against a grid that
+does not exist.
+
+A count driven by a *parameter* rather than a number is not representable; the export says so and
+the rebuilt stage keeps the default count. A stage of a custom C++ stage class (anything that is
+not the engine's generic stage) stays a gap with its own header line (DFX8016).
 
 ## `Defaults` — what a read produces when nothing wrote
 

@@ -3199,6 +3199,11 @@ namespace UE::DreamFX::Editor
 			const FName BoundVariableName = Generic->DataInterface.BoundVariable.GetName();
 			Summary.DataInterfaceBindingName = BoundVariableName.IsNone()
 				? FString() : BoundVariableName.ToString();
+			// The name is the whole story. The binding's stored TYPE is not read back on purpose:
+			// on authored content the serialized type handle resolves to an unrelated type in any
+			// later session (GroomRods' PressureGrid binding reads as Vector4f here) and the assets
+			// simulate correctly anyway -- the engine resolves the iteration grid by name at
+			// compile time and never consults the stored type.
 
 			// The count is a binding-with-value: a plain number in every corpus asset, but a
 			// parameter can drive it, in which case the number here would be a lie. The Has check
@@ -3937,15 +3942,24 @@ namespace UE::DreamFX::Editor
 		}
 		if (!Spec.DataInterface.IsEmpty())
 		{
+			// The engine resolves the iteration grid BY NAME at compile time; the binding's stored
+			// type is never read back. The proof is the authored content itself: GroomRods ships
+			// with a PressureGrid binding whose serialized type handle resolves to Vector4f in any
+			// later session, and simulates correctly. So the graph lookup is a courtesy -- when the
+			// emitter declares the parameter, the binding carries its real type and reads nicely in
+			// the UI -- and its failure is not an error: the usual fluid grid is materialized by a
+			// module's internal writes, which the graph's declared parameters never include. The
+			// base DI class stands in, and a typo'd name surfaces exactly where it would in the
+			// engine: as the stage compiling against a grid that does not exist.
 			const FName BindingName(*Spec.DataInterface);
 			FNiagaraTypeDefinition BindingType;
 			if (!FindGraphVariableTypeByName(*Graph, BindingName, BindingType)
 				|| !BindingType.IsDataInterface())
 			{
-				OutErrors.Add(FString::Printf(
-					TEXT("Stage '%s' binds data interface '%s', but the emitter graph declares no data interface parameter of that name. Declare it (a module input or a Defaults entry) before the Stage block names it."),
-					*Spec.Name, *Spec.DataInterface));
-				return false;
+				BindingType = FNiagaraTypeDefinition(UNiagaraDataInterface::StaticClass());
+				UE_LOG(LogDreamFX, Verbose,
+					TEXT("Stage '%s': '%s' is not among the emitter graph's declared parameters; the binding is written name-first with the base DI type, which is all the compiler reads."),
+					*Spec.Name, *Spec.DataInterface);
 			}
 			Stage->DataInterface.BoundVariable = FNiagaraVariable(BindingType, BindingName);
 		}
