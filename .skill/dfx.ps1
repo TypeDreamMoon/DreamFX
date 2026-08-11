@@ -49,7 +49,7 @@ param(
     # schema — print one module's input signature
     # list   — print every module (or, with -DynamicInputs, every dynamic input) on the search paths
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'corpus')]
+    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'asset-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'corpus')]
     [string]$Command,
 
     # build/verify: path to a .dfs (absolute, or relative to the working directory).
@@ -305,6 +305,10 @@ switch ($Command) {
         $arguments += '-MirrorDiff'
         if ($Path) { $arguments += "-Path=$Path" }
         if ($NoCompile) { $arguments += '-NoCompile' }
+    }
+    'asset-diff' {
+        $arguments += '-AssetDiff'
+        if ($Path) { $arguments += "-Path=$Path" }
     }
     'coverage' {
         $arguments += '-Coverage'

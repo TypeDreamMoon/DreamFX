@@ -17,9 +17,14 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "NiagaraDataInterface.h"
+#include "NiagaraEmitter.h"
+#include "NiagaraEmitterHandle.h"
+#include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "Schema/DreamFXModuleLibrary.h"
+#include "UObject/UObjectHash.h"
 
 using namespace UE::DreamFX;
 using namespace UE::DreamFX::Editor;
@@ -732,6 +737,357 @@ namespace
 		return Failed + Missing + CompileFailed;
 	}
 
+	// ---------------------------------------------------------------- asset diff
+	//
+	// The house rule's enforcer (plan.md design principle 5): proving anything about an asset takes
+	// asset-level evidence, and until this existed the only routine comparison channel WAS the
+	// export -- both sides of L1 are the same lossy exporter's output, so a loss on the export side
+	// is structurally invisible there. This walks the assets themselves by reflection and compares
+	// facts as multisets: what each side has that the other does not, never "first difference".
+
+	/**
+	 * Identity noise scrubbed out of a fact, so two assets that differ only in who they are compare
+	 * equal: 32-hex guids, `_123` autoname suffixes (subobject names, node names), and references to
+	 * the asset's own package. Everything else -- values, real names, resolution state -- survives.
+	 */
+	FString ScrubIdentity(const FString& Text, const FString& SelfPackage)
+	{
+		FString Out;
+		Out.Reserve(Text.Len());
+
+		int32 Index = 0;
+		while (Index < Text.Len())
+		{
+			if (!SelfPackage.IsEmpty() && FCString::Strncmp(&Text[Index], *SelfPackage, SelfPackage.Len()) == 0)
+			{
+				Out += TEXT("<self>");
+				Index += SelfPackage.Len();
+				continue;
+			}
+
+			const TCHAR Character = Text[Index];
+
+			auto IsHex = [](TCHAR C) { return FChar::IsDigit(C) || (C >= 'A' && C <= 'F'); };
+			// Only a MAXIMAL run of exactly 32 hex characters is a guid. FLT_MAX prints as 39
+			// decimal digits, whose 32-character tail this used to eat.
+			if (IsHex(Character) && (Index == 0 || !IsHex(Text[Index - 1])))
+			{
+				int32 Run = Index;
+				while (Run < Text.Len() && IsHex(Text[Run]))
+				{
+					++Run;
+				}
+				if (Run - Index == 32)
+				{
+					Out += TEXT("<guid>");
+					Index = Run;
+					continue;
+				}
+			}
+
+			if (Character == TEXT('_') && Index + 1 < Text.Len() && FChar::IsDigit(Text[Index + 1]))
+			{
+				int32 Run = Index + 1;
+				while (Run < Text.Len() && FChar::IsDigit(Text[Run]))
+				{
+					++Run;
+				}
+				if (Run >= Text.Len() || !FChar::IsAlpha(Text[Run]))
+				{
+					Out += TEXT("~");
+					Index = Run;
+					continue;
+				}
+			}
+
+			Out.AppendChar(Character);
+			++Index;
+		}
+		return Out;
+	}
+
+	/** One fact per top-level reflected property, skipping transients and an explicit list. */
+	void AppendPropertyFacts(const FString& Prefix, const void* Container, const UStruct* Struct,
+		const TSet<FName>& Skip, const FString& SelfPackage, TArray<FString>& OutFacts)
+	{
+		for (TFieldIterator<FProperty> It(Struct); It; ++It)
+		{
+			FProperty* Property = *It;
+			if (Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated)
+				|| Skip.Contains(Property->GetFName()))
+			{
+				continue;
+			}
+			FString Value;
+			Property->ExportText_InContainer(0, Value, Container, Container, nullptr, PPF_None);
+			OutFacts.Add(FString::Printf(TEXT("%s %s = %s"),
+				*Prefix, *Property->GetName(), *ScrubIdentity(Value, SelfPackage)));
+		}
+	}
+
+	/**
+	 * Rapid-iteration and exposed parameter stores, one fact per parameter with its value bytes.
+	 *
+	 * The module segment of a name has its trailing digits stripped ("Collision001" and "Collision"
+	 * are one module authored twice under Niagara's uniquifier), which is what let this tool see
+	 * that Down_Root's original DOES carry Advanced Aging Rate -- the claim "the original has no
+	 * value at all" had been read off the lossy export.
+	 */
+	void AppendParameterStoreFacts(const FString& Prefix, FNiagaraParameterStore& Store,
+		TArray<FString>& OutFacts)
+	{
+		TArrayView<const FNiagaraVariableWithOffset> Variables = Store.ReadParameterVariables();
+		const TArray<uint8>& Data = Store.GetParameterDataArray();
+
+		for (const FNiagaraVariableWithOffset& Variable : Variables)
+		{
+			FString Name = Variable.GetName().ToString();
+			TArray<FString> Segments;
+			Name.ParseIntoArray(Segments, TEXT("."));
+			if (Segments.Num() >= 3)
+			{
+				FString& Module = Segments[2];
+				while (Module.Len() > 0 && FChar::IsDigit(Module[Module.Len() - 1]))
+				{
+					Module.LeftChopInline(1, EAllowShrinking::No);
+				}
+				Name = FString::Join(Segments, TEXT("."));
+			}
+
+			FString Value;
+			if (Variable.IsDataInterface() || Variable.IsUObject())
+			{
+				Value = TEXT("<object>");
+			}
+			else if (Variable.Offset >= 0 && Variable.Offset + Variable.GetSizeInBytes() <= Data.Num())
+			{
+				Value = BytesToHex(Data.GetData() + Variable.Offset, Variable.GetSizeInBytes());
+			}
+			else
+			{
+				Value = TEXT("<no data>");
+			}
+
+			OutFacts.Add(FString::Printf(TEXT("%s %s (%s) = %s"),
+				*Prefix, *Name, *Variable.GetType().GetName(), *Value));
+		}
+	}
+
+	/** Every comparable fact about one system, unsorted; the caller compares as a multiset. */
+	void DescribeSystem(UNiagaraSystem* System, TArray<FString>& OutFacts)
+	{
+		const FString SelfPackage = System->GetOutermost()->GetName();
+
+		// Identity, wiring and editor bookkeeping. Graphs and scripts are deliberately absent as
+		// objects -- their observable content arrives through the parameter stores here, the export
+		// (L1) and the simulation (L3); their node soup is all identity.
+		static const TSet<FName> EmitterDataSkip = {
+			TEXT("GraphSource"), TEXT("SpawnScriptProps"), TEXT("UpdateScriptProps"),
+			TEXT("EventHandlerScriptProps"), TEXT("SimulationStages"), TEXT("GPUComputeScript"),
+			TEXT("EmitterSpawnScriptProps"), TEXT("EmitterUpdateScriptProps"),
+			TEXT("ScratchPads"), TEXT("ParentScratchPads"),
+			TEXT("VersionedParent"), TEXT("VersionedParentAtLastMerge"),
+			TEXT("RendererProperties"), TEXT("MessageStore"), TEXT("Version"),
+		};
+		static const TSet<FName> RendererSkip = { TEXT("MessageStore"), TEXT("StackMessages") };
+
+		if (UNiagaraScript* SystemSpawn = System->GetSystemSpawnScript())
+		{
+			AppendParameterStoreFacts(TEXT("ri system-spawn"), SystemSpawn->RapidIterationParameters, OutFacts);
+		}
+		if (UNiagaraScript* SystemUpdate = System->GetSystemUpdateScript())
+		{
+			AppendParameterStoreFacts(TEXT("ri system-update"), SystemUpdate->RapidIterationParameters, OutFacts);
+		}
+		AppendParameterStoreFacts(TEXT("user"), System->GetExposedParameters(), OutFacts);
+
+		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+		{
+			const FString EmitterName = Handle.GetName().ToString();
+			const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+			if (Data == nullptr)
+			{
+				OutFacts.Add(FString::Printf(TEXT("emitter %s has no data"), *EmitterName));
+				continue;
+			}
+
+			OutFacts.Add(FString::Printf(TEXT("emitter %s enabled = %s"),
+				*EmitterName, Handle.GetIsEnabled() ? TEXT("true") : TEXT("false")));
+
+			// Parentage is a first-class fact, not a property to scrub: an inheriting original and
+			// its flattened mirror SHOULD read differently here, and this line is where that shows.
+			const FVersionedNiagaraEmitter Parent = Data->GetParent();
+			OutFacts.Add(FString::Printf(TEXT("emitter %s parent = %s"),
+				*EmitterName, Parent.Emitter != nullptr ? *Parent.Emitter->GetPathName() : TEXT("none")));
+
+			AppendPropertyFacts(FString::Printf(TEXT("emitter %s"), *EmitterName),
+				Data, FVersionedNiagaraEmitterData::StaticStruct(), EmitterDataSkip, SelfPackage, OutFacts);
+
+			TArray<UNiagaraScript*> Scripts;
+			Data->GetScripts(Scripts, /*bCompilableOnly=*/true);
+			for (UNiagaraScript* Script : Scripts)
+			{
+				if (Script == nullptr)
+				{
+					continue;
+				}
+				const FString Prefix = FString::Printf(TEXT("ri %s %s"),
+					*EmitterName, *StaticEnum<ENiagaraScriptUsage>()->GetNameStringByValue(
+						static_cast<int64>(Script->GetUsage())));
+				AppendParameterStoreFacts(Prefix, Script->RapidIterationParameters, OutFacts);
+			}
+
+			int32 RendererIndex = 0;
+			Data->ForEachRenderer([&](UNiagaraRendererProperties* Renderer)
+			{
+				if (Renderer != nullptr)
+				{
+					AppendPropertyFacts(
+						FString::Printf(TEXT("emitter %s renderer %d:%s"),
+							*EmitterName, RendererIndex, *Renderer->GetClass()->GetName()),
+						Renderer, Renderer->GetClass(), RendererSkip, SelfPackage, OutFacts);
+				}
+				++RendererIndex;
+			});
+		}
+
+		// Data interfaces live as subobjects wherever a module input placed them. One fact per
+		// interface, class plus full property text, so a DI whose configuration fails to round-trip
+		// shows up as a one-in/one-out pair instead of hiding behind an object path.
+		TArray<UObject*> Inner;
+		GetObjectsWithOuter(System->GetOutermost(), Inner, /*bIncludeNestedObjects=*/true);
+		for (UObject* Object : Inner)
+		{
+			UNiagaraDataInterface* Interface = Cast<UNiagaraDataInterface>(Object);
+			if (Interface == nullptr)
+			{
+				continue;
+			}
+			// The cooked LUT family is derived from Curve at save time; comparing it repeats the
+			// curve comparison with extra baked noise.
+			static const TSet<FName> InterfaceSkip = {
+				TEXT("CurveCookedEditorCache"), TEXT("ShaderLUT"), TEXT("LUTMinTime"),
+				TEXT("LUTMaxTime"), TEXT("LUTInvTimeRange"), TEXT("LUTNumSamplesMinusOne"),
+			};
+			TArray<FString> InterfaceFacts;
+			AppendPropertyFacts(TEXT(""), Interface, Interface->GetClass(), InterfaceSkip, SelfPackage, InterfaceFacts);
+			InterfaceFacts.Sort();
+			OutFacts.Add(FString::Printf(TEXT("di %s { %s }"),
+				*Interface->GetClass()->GetName(), *FString::Join(InterfaceFacts, TEXT("; "))));
+		}
+	}
+
+	/**
+	 * `-AssetDiff`: compare every original against its mirror at the asset level, as fact multisets.
+	 *
+	 * The independent mirror the round of 2026-08-11 asked for: it does not touch the exporter, so
+	 * an export-side loss that L1 cannot see (both L1 sides being the exporter's own output) lands
+	 * here as a fact one side has and the other does not.
+	 */
+	int32 RunAssetDiff(const FString& SearchRoot)
+	{
+		const TArray<FString> Roots = ParseContentRoots(SearchRoot);
+		TArray<FAssetData> Assets;
+		FindSystems(Roots, /*bIncludeMirrors=*/false, Assets);
+
+		UE_LOG(LogDreamFX, Display, TEXT("=== DreamFX asset diff over %d Niagara system(s) under %s ==="),
+			Assets.Num(), *FString::Join(Roots, TEXT(", ")));
+
+		int32 Same = 0;
+		int32 Different = 0;
+		int32 Missing = 0;
+
+		for (const FAssetData& Asset : Assets)
+		{
+			const FString PackagePath = Asset.PackageName.ToString();
+
+			FString RootToken;
+			FString MountPoint;
+			FString RootError;
+			if (!FDreamFXPaths::ResolveRootTokenForPackage(PackagePath, RootToken, MountPoint, RootError))
+			{
+				continue;
+			}
+			const FString MirrorPath = MountPoint / FDreamFXPaths::ToDecompiledNamespace(
+				PackagePath.RightChop(MountPoint.Len() + 1));
+
+			UNiagaraSystem* Original = Cast<UNiagaraSystem>(Asset.GetAsset());
+			UNiagaraSystem* Mirror = LoadObject<UNiagaraSystem>(nullptr,
+				*FDreamFXPaths::ToObjectPath(MirrorPath));
+			if (Mirror == nullptr)
+			{
+				++Missing;
+				UE_LOG(LogDreamFX, Warning, TEXT("  MISSING %s -> %s was never built"), *PackagePath, *MirrorPath);
+				continue;
+			}
+			if (Original == nullptr)
+			{
+				++Missing;
+				UE_LOG(LogDreamFX, Warning, TEXT("  MISSING %s could not be loaded"), *PackagePath);
+				continue;
+			}
+
+			TArray<FString> LeftFacts;
+			TArray<FString> RightFacts;
+			DescribeSystem(Original, LeftFacts);
+			DescribeSystem(Mirror, RightFacts);
+
+			TMap<FString, int32> Counts;
+			for (const FString& Fact : LeftFacts)
+			{
+				Counts.FindOrAdd(Fact)++;
+			}
+			for (const FString& Fact : RightFacts)
+			{
+				Counts.FindOrAdd(Fact)--;
+			}
+
+			TArray<FString> OnlyOriginal;
+			TArray<FString> OnlyMirror;
+			for (const TPair<FString, int32>& Entry : Counts)
+			{
+				for (int32 Copy = 0; Copy < FMath::Abs(Entry.Value); ++Copy)
+				{
+					(Entry.Value > 0 ? OnlyOriginal : OnlyMirror).Add(Entry.Key);
+				}
+			}
+			OnlyOriginal.Sort();
+			OnlyMirror.Sort();
+
+			if (OnlyOriginal.Num() == 0 && OnlyMirror.Num() == 0)
+			{
+				++Same;
+				UE_LOG(LogDreamFX, Display, TEXT("  SAME    %s (%d fact(s))"), *PackagePath, LeftFacts.Num());
+				continue;
+			}
+
+			++Different;
+			UE_LOG(LogDreamFX, Error,
+				TEXT("  DIFF    %s: original %d fact(s), mirror %d; %d only-original, %d only-mirror"),
+				*PackagePath, LeftFacts.Num(), RightFacts.Num(), OnlyOriginal.Num(), OnlyMirror.Num());
+
+			constexpr int32 MaxReported = 60;
+			auto ReportSide = [](const TCHAR* Side, const TArray<FString>& Facts)
+			{
+				for (int32 Index = 0; Index < FMath::Min(Facts.Num(), MaxReported); ++Index)
+				{
+					UE_LOG(LogDreamFX, Error, TEXT("            %s | %s"), Side, *Facts[Index].Left(400));
+				}
+				if (Facts.Num() > MaxReported)
+				{
+					UE_LOG(LogDreamFX, Error, TEXT("            %s | ... and %d more"),
+						Side, Facts.Num() - MaxReported);
+				}
+			};
+			ReportSide(TEXT("original"), OnlyOriginal);
+			ReportSide(TEXT("mirror  "), OnlyMirror);
+		}
+
+		UE_LOG(LogDreamFX, Display, TEXT("=== asset diff: %d same, %d different, %d missing ==="),
+			Same, Different, Missing);
+		return Different;
+	}
+
 	/**
 	 * R4's safe rename. `-Rename=<asset>:<old>:<new>` renames the emitter on the asset, keeping its
 	 * handle, so the source edit plus a rebuild reuses it instead of building a new one.
@@ -937,6 +1293,13 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 		FString SearchRoot;
 		FParse::Value(*Params, TEXT("Path="), SearchRoot);
 		return RunDecompileAll(SearchRoot);
+	}
+
+	if (FParse::Param(*Params, TEXT("AssetDiff")))
+	{
+		FString SearchRoot;
+		FParse::Value(*Params, TEXT("-Path="), SearchRoot);
+		return RunAssetDiff(SearchRoot);
 	}
 
 	if (FParse::Param(*Params, TEXT("MirrorDiff")))

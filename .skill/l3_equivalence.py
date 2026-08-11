@@ -82,9 +82,47 @@ def _iter_mirror_pairs():
             yield original_path, mirror_path
 
 
+# The channels beyond the particle count, and how to read each. Chosen for what the round of
+# 2026-08-11 proved invisible: NE_C's mirror agreed with its original frame-for-frame on COUNT
+# while carrying no Color, Scale or Position at all -- the user's eyes were the first detector.
+# Mean plus per-component min/max is enough to catch both "attribute missing" (reads empty while
+# particles exist) and "attribute wrong" (colour scaled differently, sizes off), without storing
+# every particle.
+CHANNELS = (
+    ("Position", "position"),
+    ("Color", "color"),
+    ("Scale", "vector"),
+    ("SpriteSize", "vector2"),
+)
+
+
+def _components(value):
+    """The numeric components of whatever a Read*Attribute call yields."""
+    for axis in ("x", "y", "z", "w", "r", "g", "b", "a"):
+        if not hasattr(value, axis):
+            continue
+        return [getattr(value, axis) for axis in
+                [a for a in ("x", "y", "z", "w", "r", "g", "b", "a") if hasattr(value, a)]]
+    return [float(value)]
+
+
+def _aggregate(values):
+    """[mean..., min..., max...] over each component, or None for an empty read."""
+    if not values:
+        return None
+    rows = [_components(v) for v in values]
+    width = len(rows[0])
+    cols = [[row[i] for row in rows] for i in range(width)]
+    return ([sum(c) / len(c) for c in cols] + [min(c) for c in cols] + [max(c) for c in cols])
+
+
 def _counts_per_frame(system_path):
     """
-    Particle count per emitter per frame, as {emitter_name: [n0, n1, ...]}.
+    Per-emitter series, as {emitter: {"n": [n0, ...], "<Channel>": [aggregate0, ...]}}.
+
+    A channel frame is an [mean+min+max] list, None while the emitter has no particles that frame,
+    or the string "absent" when particles exist and the attribute reads empty -- the distinction is
+    the whole point, because "absent" is exactly the state every text-level check missed on NE_C.
 
     Returns None when the system will not load or will not capture, so a broken asset is
     reported as such instead of silently comparing as empty.
@@ -122,9 +160,34 @@ def _counts_per_frame(system_path):
             if captured is None or captured.get_num_frames() == 0:
                 continue
             for emitter in captured.get_emitter_names():
+                name = str(emitter)
+                entry = series.setdefault(name, {"n": []})
+
                 positions = captured.read_position_attribute(
                     attribute_name="Position", emitter_name=emitter, frame_index=0)
-                series.setdefault(str(emitter), []).append(len(positions))
+                count = len(positions)
+                entry["n"].append(count)
+
+                for channel, kind in CHANNELS:
+                    if kind == "position":
+                        values = positions
+                    elif kind == "color":
+                        values = captured.read_color_attribute(
+                            attribute_name=channel, emitter_name=emitter, frame_index=0)
+                    elif kind == "vector":
+                        values = captured.read_vector_attribute(
+                            attribute_name=channel, emitter_name=emitter, frame_index=0)
+                    else:
+                        values = captured.read_vector2_attribute(
+                            attribute_name=channel, emitter_name=emitter, frame_index=0)
+
+                    if count == 0:
+                        frame_value = None
+                    elif len(values) == 0:
+                        frame_value = "absent"
+                    else:
+                        frame_value = _aggregate(values)
+                    entry.setdefault(channel, []).append(frame_value)
     finally:
         component.deactivate()
         # DestroyComponent takes the caller: "may not be used to destroy a component that is owned
@@ -135,12 +198,27 @@ def _counts_per_frame(system_path):
     return series
 
 
-def _align(values):
-    """Drops leading zeros, so two identical runs sampled a frame apart compare equal."""
-    for index, value in enumerate(values):
+def _first_active(counts):
+    """Index of the first non-zero frame, or None for an emitter that never spawns."""
+    for index, value in enumerate(counts):
         if value != 0:
-            return values[index:]
-    return []
+            return index
+    return None
+
+
+def _channel_mismatch(name, left_entry, right_entry, shift_left, shift_right):
+    """The first channel-level disagreement between two emitters' series, or None."""
+    for channel, _ in CHANNELS:
+        a = left_entry.get(channel, [])[shift_left:]
+        b = right_entry.get(channel, [])[shift_right:]
+        span = min(len(a), len(b))
+        for frame in range(span):
+            if (a[frame] == "absent") != (b[frame] == "absent"):
+                side = "mirror" if a[frame] != "absent" else "original"
+                return f"'{name}' {channel} is absent on the {side} side"
+            if a[frame] != b[frame]:
+                return f"'{name}' {channel} differs (frame {frame} after alignment)"
+    return None
 
 
 def _compare(left, right):
@@ -155,14 +233,25 @@ def _compare(left, right):
         return "exact"
 
     for name in left:
-        a, b = _align(left[name]), _align(right[name])
+        counts_a, counts_b = left[name]["n"], right[name]["n"]
+        start_a, start_b = _first_active(counts_a), _first_active(counts_b)
+        if (start_a is None) != (start_b is None):
+            return f"'{name}' is empty in one side"
+        shift_a, shift_b = start_a or 0, start_b or 0
+
+        a, b = counts_a[shift_a:], counts_b[shift_b:]
         span = min(len(a), len(b))
         if a[:span] != b[:span]:
             return f"'{name}' differs beyond a frame shift"
-        if sum(left[name]) == 0 and sum(right[name]) != 0:
-            return f"'{name}' is empty in one side"
-        if max(left[name] or [0]) != max(right[name] or [0]):
+        if max(counts_a or [0]) != max(counts_b or [0]):
             return f"'{name}' peaks differ"
+
+        # Counts agreeing is where the old check stopped, and where NE_C hid: its mirror matched
+        # frame-for-frame on count while carrying no Color, Scale or Position at all. The channels
+        # are compared under the same alignment the counts established.
+        mismatch = _channel_mismatch(name, left[name], right[name], shift_a, shift_b)
+        if mismatch is not None:
+            return mismatch
     return "phased"
 
 
