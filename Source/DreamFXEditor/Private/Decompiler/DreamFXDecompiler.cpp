@@ -1267,6 +1267,41 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
+		 * Records that an emitter inherits from a parent asset, in the gap header and the log both.
+		 *
+		 * What is and is not lost here was measured, not presumed (2026-08-11, NE_C002): an inheriting
+		 * emitter's own graph is the full merged copy, so the export carries the whole effective stack
+		 * and the rebuilt emitter behaves like the original. What the flattening does lose is the LINK
+		 * -- the mirror is an independent emitter, so an edit to the parent asset propagates to the
+		 * original and silently not to the mirror. That divergence is permanent and invisible at
+		 * rebuild time, which is exactly the kind of loss the gap header exists to keep visible.
+		 */
+		void NoteInheritedEmitter(const FStackAddress& EmitterAddress, FName EmitterName,
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
+		{
+			FString ParentPath;
+			FGuid ParentVersion;
+			TArray<FString> Errors;
+			if (!FNiagaraAdapter::GetEmitterParent(EmitterAddress, ParentPath, ParentVersion, Errors)
+				|| ParentPath.IsEmpty())
+			{
+				return;
+			}
+
+			Result.UnsupportedFeatures.AddUnique(FString::Printf(
+				TEXT("emitter '%s' inherits from '%s'%s -- the export carries the merged stack, but the ")
+				TEXT("rebuilt emitter is independent: future edits to that parent will not reach it"),
+				*EmitterName.ToString(), *ParentPath,
+				ParentVersion.IsValid()
+					? *FString::Printf(TEXT(" (version %s)"), *ParentVersion.ToString(EGuidFormats::DigitsWithHyphens))
+					: TEXT("")));
+
+			Diagnostics.Warning(TEXT("DFX8014"), FSourceLocation(),
+				FString::Printf(TEXT("Emitter '%s' inherits from '%s'. The export flattens the inheritance: the merged stack is carried in full, but the rebuilt emitter no longer follows the parent, so later parent edits will change the original and not the mirror."),
+					*EmitterName.ToString(), *ParentPath));
+		}
+
+		/**
 		 * The comment block every export opens with, including what the export could not carry.
 		 *
 		 * plan-v3 E4-0. Until now an unrepresentable feature was a warning in a commandlet log, which
@@ -2071,6 +2106,8 @@ namespace UE::DreamFX::Editor
 				continue;
 			}
 
+			NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
+
 			WriteEmitterBlock(Writer, FString::Printf(TEXT("Emitter %s"), *ToNameToken(EmitterName.ToString())),
 				Context, Modules, EmitterAddress, Info, Result, Diagnostics);
 			Writer.Blank();
@@ -2154,6 +2191,10 @@ namespace UE::DreamFX::Editor
 					*EmitterName.ToString(), *FString::Join(Errors, TEXT(" | "))));
 			return Result;
 		}
+
+		// The host copy keeps the original's parent link, so the same check the system walk makes
+		// works here unchanged.
+		NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
 
 		FModuleLibrary Modules;
 
