@@ -14,7 +14,7 @@
 Cannot decompile a null system.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1903`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1998`
 <!-- generated:end DFX8000 -->
 
 **Cause.** The asset path resolved to nothing, or to something that is not a Niagara System.
@@ -32,7 +32,7 @@ Cannot decompile a null system.
 Could not read emitters: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2086`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2181`
 <!-- generated:end DFX8001 -->
 
 **Cause.** The system's emitters could not be read.
@@ -50,7 +50,7 @@ Could not read emitters: %s
 Skipping emitter '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2103`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2198`
 <!-- generated:end DFX8002 -->
 
 **Cause.** One emitter could not be exported; the rest of the system still was.
@@ -68,7 +68,7 @@ Skipping emitter '%s': %s
 Cannot decompile a null emitter.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2134`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2230`
 <!-- generated:end DFX8003 -->
 
 **Cause.** The Export .dfe entry point was reached with nothing selected, or the selected asset failed to load.
@@ -86,7 +86,7 @@ Cannot decompile a null emitter.
 Could not create a host system to read the emitter through: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2146`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2242`
 <!-- generated:end DFX8004 -->
 
 **Cause.** Reading an emitter needs an owning system: every reader in the Niagara external edit API addresses through one. The throwaway host under `/Temp/DreamFX` could not be created.
@@ -104,7 +104,7 @@ Could not create a host system to read the emitter through: %s
 Could not copy emitter '%s' into a host system: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2170`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2266`
 <!-- generated:end DFX8005 -->
 
 **Cause.** The emitter could not be copied into the host system. Niagara's `AddEmitter` rejected it as a template.
@@ -122,7 +122,7 @@ Could not copy emitter '%s' into a host system: %s
 Could not read emitter '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2189`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2285`
 <!-- generated:end DFX8006 -->
 
 **Cause.** The emitter was copied into the host, but its topology could not be read back.
@@ -200,7 +200,7 @@ Because DFX8010 already ruled out every *known* gap, a mismatch here is a real d
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2949`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2997`
 <!-- generated:end DFX8013 -->
 
 **Cause.** The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its
@@ -231,10 +231,30 @@ yet (DFX8010).
 Emitter '%s' inherits from '%s'. The export flattens the inheritance: the merged stack is carried in full, but the rebuilt emitter no longer follows the parent, so later parent edits will change the original and not the mirror.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1299`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1312`
 <!-- generated:end DFX8014 -->
 
 **Cause.** The emitter inherits from a parent emitter asset (`VersionedParent` on the asset). The export flattens that inheritance --- and what that does and does not lose was measured before this warning was worded (2026-08-11, `NE_C`/`NE_C002` of `NS_Spawn_Teleport_Root`): an inheriting emitter's own graph *is* the full merged copy, so the export carries the complete effective stack and the rebuilt emitter behaves like the original. What the flattening loses is the **link**. The mirror is an independent emitter; an edit to the parent asset propagates into the original through Niagara's merge machinery and silently never reaches the mirror.
 
 **Fix.** Nothing, if the mirror is a migration snapshot --- the divergence only begins when someone edits the parent. If the parent is still being maintained, either re-export after parent edits (the merged stack picks them up), or keep authoring the original in the editor. A future `from "<parent asset>" inherit` form that rebuilds the link is designed but not committed; this warning is the record of what it would buy.
+
+## DFX8015
+
+<!-- generated:begin DFX8015 -->
+**Severity** warning
+
+**Message**
+
+```
+Emitter '%s' carries %d event handler(s), which this export cannot represent. The rebuilt emitter will receive no events -- an event-spawned emitter comes back permanently empty. The gap header names each handler's source emitter and event.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1351`
+<!-- generated:end DFX8015 -->
+
+**Cause.** The emitter carries event handlers (`EventHandlerScriptProps`), and DreamFX cannot represent them: the external edit API has no event surface --- its stack references hard-code the invalid usage id that only the four main stacks match --- so neither the handler's properties (source emitter, event name, spawn behaviour) nor the event stack's modules reach the export. The rebuilt emitter has no handlers at all, receives no events, and an event-SPAWNED emitter therefore renders nothing, permanently.
+
+This was a silent loss until 2026-08-11, when the Descend/Up ribbons and sparks --- all `LocationEvent` receivers --- came back empty with no gap line saying why. The "events had zero corpus hits" ruling that justified deferring support predated the content packs that use them.
+
+**Fix.** None at the source --- this is a capability gap, tracked with a full design in `Plan/plan-events.md` (source carried by emitter NAME, since the stored `SourceEmitterID` is a handle guid no rebuild can reproduce; the write side rides the existing stack rails through a zero usage id). Until it lands, treat any mirror of an event-using system as missing those emitters' behaviour; the gap header names each handler's source emitter and event.
 

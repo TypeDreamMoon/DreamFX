@@ -920,6 +920,24 @@ namespace
 			OutFacts.Add(FString::Printf(TEXT("emitter %s parent = %s"),
 				*EmitterName, Parent.Emitter != nullptr ? *Parent.Emitter->GetPathName() : TEXT("none")));
 
+			// Event handlers as dedicated facts, source spoken by NAME. The generic property walk
+			// used to SKIP EventHandlerScriptProps -- which is precisely how a mirror with no event
+			// handlers at all sailed through this tool while its event-spawned emitters rendered
+			// nothing (2026-08-11, Descend/Up). The raw struct would compare on the source handle
+			// guid and the script object path, both identity; the name form compares on meaning.
+			{
+				TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
+				TArray<FString> HandlerErrors;
+				FNiagaraAdapter::GetEmitterEventHandlers(
+					FStackAddress(System).WithEmitter(Handle.GetName()), Handlers, HandlerErrors);
+				for (const FNiagaraAdapter::FEventHandlerSummary& Handler : Handlers)
+				{
+					OutFacts.Add(FString::Printf(TEXT("emitter %s event handler: '%s' from '%s' (%s x%d)"),
+						*EmitterName, *Handler.SourceEventName.ToString(), *Handler.SourceEmitterName,
+						*Handler.ExecutionMode, Handler.SpawnNumber));
+				}
+			}
+
 			AppendPropertyFacts(FString::Printf(TEXT("emitter %s"), *EmitterName),
 				Data, FVersionedNiagaraEmitterData::StaticStruct(), EmitterDataSkip, SelfPackage, OutFacts);
 

@@ -1315,6 +1315,45 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
+		 * Records an emitter's event handlers as gaps. They are not represented at all: the external
+		 * edit API has no event surface (its stack references hard-code the invalid usage id only the
+		 * four main stacks carry), so neither the handler properties nor the event stack's modules
+		 * reach the export, and the rebuilt emitter receives nothing -- which on an event-spawned
+		 * emitter is an effect that never appears.
+		 *
+		 * This existed as a silent loss until 2026-08-11, when the Descend/Up ribbons and sparks --
+		 * all LocationEvent receivers -- came back empty and nothing in any header said why. The
+		 * "events had zero corpus hits" ruling that justified not building support predated the packs
+		 * that use them. Representation is designed (source carried by emitter NAME, the handle guid
+		 * being unreproducible) and tracked in the plan; until it lands, this line is the difference
+		 * between a named gap and a mystery.
+		 */
+		void NoteEventHandlers(const FStackAddress& EmitterAddress, FName EmitterName,
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
+		{
+			TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
+			TArray<FString> Errors;
+			if (!FNiagaraAdapter::GetEmitterEventHandlers(EmitterAddress, Handlers, Errors)
+				|| Handlers.Num() == 0)
+			{
+				return;
+			}
+
+			for (const FNiagaraAdapter::FEventHandlerSummary& Handler : Handlers)
+			{
+				Result.UnsupportedFeatures.AddUnique(FString::Printf(
+					TEXT("emitter '%s' has an event handler (event '%s' from emitter '%s', %s x%d) -- ")
+					TEXT("event handlers are not represented, so the rebuilt emitter receives nothing"),
+					*EmitterName.ToString(), *Handler.SourceEventName.ToString(),
+					*Handler.SourceEmitterName, *Handler.ExecutionMode, Handler.SpawnNumber));
+			}
+
+			Diagnostics.Warning(TEXT("DFX8015"), FSourceLocation(),
+				FString::Printf(TEXT("Emitter '%s' carries %d event handler(s), which this export cannot represent. The rebuilt emitter will receive no events -- an event-spawned emitter comes back permanently empty. The gap header names each handler's source emitter and event."),
+					*EmitterName.ToString(), Handlers.Num()));
+		}
+
+		/**
 		 * The comment block every export opens with, including what the export could not carry.
 		 *
 		 * plan-v3 E4-0. Until now an unrepresentable feature was a warning in a commandlet log, which
@@ -2163,6 +2202,7 @@ namespace UE::DreamFX::Editor
 			}
 
 			NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
+			NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics);
 
 			WriteEmitterBlock(Writer, FString::Printf(TEXT("Emitter %s"), *ToNameToken(EmitterName.ToString())),
 				Context, Modules, EmitterAddress, Info, Result, Diagnostics);
@@ -2248,9 +2288,10 @@ namespace UE::DreamFX::Editor
 			return Result;
 		}
 
-		// The host copy keeps the original's parent link, so the same check the system walk makes
-		// works here unchanged.
+		// The host copy keeps the original's parent link and event handlers, so the same checks the
+		// system walk makes work here unchanged.
 		NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
+		NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics);
 
 		FModuleLibrary Modules;
 

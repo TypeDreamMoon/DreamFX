@@ -3108,6 +3108,61 @@ namespace UE::DreamFX::Editor
 		return true;
 	}
 
+	bool FNiagaraAdapter::GetEmitterEventHandlers(const FStackAddress& EmitterAddress,
+		TArray<FEventHandlerSummary>& OutHandlers, TArray<FString>& OutErrors)
+	{
+		OutHandlers.Reset();
+		if (EmitterAddress.System == nullptr || EmitterAddress.EmitterName.IsNone())
+		{
+			OutErrors.Add(TEXT("Cannot read event handlers of an unaddressed emitter."));
+			return false;
+		}
+
+		for (const FNiagaraEmitterHandle& Handle : EmitterAddress.System->GetEmitterHandles())
+		{
+			if (Handle.GetName() != EmitterAddress.EmitterName)
+			{
+				continue;
+			}
+			const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+			if (Data == nullptr)
+			{
+				return true;
+			}
+			for (const FNiagaraEventScriptProperties& Event : Data->EventHandlerScriptProps)
+			{
+				FEventHandlerSummary& Summary = OutHandlers.AddDefaulted_GetRef();
+				Summary.SourceEventName = Event.SourceEventName;
+				Summary.SpawnNumber = static_cast<int32>(Event.SpawnNumber);
+				Summary.ExecutionMode = StaticEnum<EScriptExecutionMode>()
+					? StaticEnum<EScriptExecutionMode>()->GetNameStringByValue(static_cast<int64>(Event.ExecutionMode))
+					: FString::FromInt(static_cast<int32>(Event.ExecutionMode));
+
+				// The stored id is the source emitter's HANDLE guid. The name is the identity that
+				// survives a rebuild, so it is what any representation of this must speak in.
+				for (const FNiagaraEmitterHandle& Source : EmitterAddress.System->GetEmitterHandles())
+				{
+					if (Source.GetId() == Event.SourceEmitterID)
+					{
+						Summary.SourceEmitterName = Source.GetName().ToString();
+						break;
+					}
+				}
+				if (Summary.SourceEmitterName.IsEmpty())
+				{
+					Summary.SourceEmitterName = Event.SourceEmitterID.IsValid()
+						? FString::Printf(TEXT("<unresolved %s>"), *Event.SourceEmitterID.ToString())
+						: TEXT("<none>");
+				}
+			}
+			return true;
+		}
+
+		OutErrors.Add(FString::Printf(TEXT("'%s' has no emitter named '%s'."),
+			*EmitterAddress.System->GetName(), *EmitterAddress.EmitterName.ToString()));
+		return false;
+	}
+
 	bool FNiagaraAdapter::WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,
 		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
 	{

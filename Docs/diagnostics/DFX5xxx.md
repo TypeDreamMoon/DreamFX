@@ -50,7 +50,7 @@ This system declares no emitters, so it will produce nothing.
 '%s' is not declared in this source, so its existing modules are left as-is: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2638`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2660`
 <!-- generated:end DFX5003 -->
 
 **Cause.** Declaring a stack means taking it over; a stack this source never mentions keeps whatever it had. `CreateNiagaraSystem` puts a `SystemState` in `SystemUpdate`, and clearing it wholesale would make every `.dfs` without an explicit `SystemUpdate` produce a system that never runs. Informational so the difference is visible rather than silent.
@@ -68,7 +68,7 @@ This system declares no emitters, so it will produce nothing.
 No Material was set, so the engine default was applied: %s. Write 'Material = \"...\";' to choose your own.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2749`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2773`
 <!-- generated:end DFX5004 -->
 
 **Cause.** A renderer with no `Material` gets the engine default, which is why an untextured effect still draws.
@@ -122,7 +122,7 @@ SavePackage failed for '%s'.
 Only System documents can be generated right now; this file declares a %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3093`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3161`
 <!-- generated:end DFX5097 -->
 
 **Cause.** Only `.dfs` and `.dfm` produce assets. A `.dfe` is merged into its host by copy (R3) and has nothing of its own to generate.

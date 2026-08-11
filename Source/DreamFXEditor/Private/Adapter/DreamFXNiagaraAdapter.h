@@ -860,6 +860,27 @@ namespace UE::DreamFX::Editor
 		static bool ContainsSelfReferenceToken(const FString& Json);
 
 		/**
+		 * One event handler on an emitter, summarised in the names that mean something across a
+		 * rebuild: the source EMITTER by handle name (the stored SourceEmitterID is a handle guid,
+		 * which no rebuild can reproduce), the event, and the spawn behaviour.
+		 */
+		struct FEventHandlerSummary
+		{
+			FString SourceEmitterName;
+			FName SourceEventName;
+			FString ExecutionMode;
+			int32 SpawnNumber = 0;
+		};
+
+		/**
+		 * The event handlers an emitter carries. Read straight off the emitter data -- the external
+		 * edit API has no event surface at all (its stack references hard-code an invalid usage id,
+		 * which only the four main stacks match), so this is the one honest window into them.
+		 */
+		static bool GetEmitterEventHandlers(const FStackAddress& EmitterAddress,
+			TArray<FEventHandlerSummary>& OutHandlers, TArray<FString>& OutErrors);
+
+		/**
 		 * Closes every compile launch site on the system for the scope's lifetime.
 		 *
 		 * A generation window performs hundreds of structural edits, and several engine paths compile
