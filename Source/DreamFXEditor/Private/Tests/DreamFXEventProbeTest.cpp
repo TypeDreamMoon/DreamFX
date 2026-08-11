@@ -103,10 +103,14 @@ bool FDreamFXEventHandlerZeroUsageIdProbe::RunTest(const FString& Parameters)
 
 	// The handler itself: zero usage id, source spoken by name.
 	const FStackAddress Receiver = SystemAddress.WithEmitter(TEXT("Receiver"));
+	UE::DreamFX::FEventHandlerSpec Spec;
+	Spec.Source = TEXT("Source");
+	Spec.Event = TEXT("LocationEvent");
+	Spec.Mode = TEXT("SpawnedParticles");
+	Spec.SpawnNumber = 1;
 	Errors.Reset();
 	if (!TestTrue(TEXT("AddEventHandler"),
-		FNiagaraAdapter::AddEventHandler(Receiver, TEXT("Source"), TEXT("LocationEvent"),
-			TEXT("SpawnedParticles"), 1, Errors)))
+		FNiagaraAdapter::AddEventHandler(Receiver, Spec, Errors)))
 	{
 		AddError(FString::Join(Errors, TEXT(" | ")));
 		return false;
@@ -171,9 +175,9 @@ bool FDreamFXEventHandlerZeroUsageIdProbe::RunTest(const FString& Parameters)
 	// one handler, and the event stack must still resolve -- but the modules are gone with the old
 	// script, which is the rebuild's own job to repopulate, so only addressability is asserted.
 	Errors.Reset();
+	Spec.SpawnNumber = 2;
 	if (TestTrue(TEXT("AddEventHandler again (regeneration)"),
-		FNiagaraAdapter::AddEventHandler(Receiver, TEXT("Source"), TEXT("LocationEvent"),
-			TEXT("SpawnedParticles"), 2, Errors)))
+		FNiagaraAdapter::AddEventHandler(Receiver, Spec, Errors)))
 	{
 		Handlers.Reset();
 		FNiagaraAdapter::GetEmitterEventHandlers(Receiver, Handlers, Errors);

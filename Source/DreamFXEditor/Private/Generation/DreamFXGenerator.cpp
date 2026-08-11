@@ -194,10 +194,22 @@ namespace UE::DreamFX::Editor
 			FSourceLocation Location;
 		};
 
+		/**
+		 * An `OnEvent(...)` block: the handler's spec plus its module stack. Applied after every
+		 * emitter exists, because the spec names a source emitter that may be declared later.
+		 */
+		struct FPlannedEventHandler
+		{
+			FEventHandlerSpec Spec;
+			FPlannedStack Stack;
+			FSourceLocation Location;
+		};
+
 		struct FPlannedEmitter
 		{
 			FName Name;
 			TArray<FPlannedStack> Stacks;
+			TArray<FPlannedEventHandler> EventHandlers;
 			TArray<FPlannedRenderer> Renderers;
 			TArray<FPlannedParameterDefault> ParameterDefaults;
 			FString PropertiesJson;
@@ -1938,9 +1950,31 @@ namespace UE::DreamFX::Editor
 
 				for (const FStack& Stack : Source->Stacks)
 				{
-					if (Stack.Kind == EStackKind::SimulationStage || Stack.Kind == EStackKind::EventHandler)
+					if (Stack.Kind == EStackKind::SimulationStage)
 					{
-						// The parser already reported these as reserved; do not double-report.
+						// The parser already reported this as reserved; do not double-report.
+						continue;
+					}
+					if (Stack.Kind == EStackKind::EventHandler)
+					{
+						// One addressable event stack per emitter is what the zero usage id buys; a second
+						// handler would need an id the external API's references cannot carry.
+						if (Planned.EventHandlers.Num() > 0)
+						{
+							Diagnostics.Error(TEXT("DFX5031"), Stack.Location,
+								FString::Printf(TEXT("Emitter '%s' declares more than one OnEvent block. Only one event handler per emitter is representable; split the extra handlers into their own emitters."),
+									*Emitter.Name));
+							bOk = false;
+							continue;
+						}
+						FPlannedEventHandler Handler;
+						Handler.Spec = Stack.Handler;
+						Handler.Location = Stack.Location;
+						if (!PlanStack(Stack, EmitterContext, Diagnostics, Handler.Stack, OutPlan.Dependencies))
+						{
+							bOk = false;
+						}
+						Planned.EventHandlers.Add(MoveTemp(Handler));
 						continue;
 					}
 					FPlannedStack PlannedStack;
@@ -2792,6 +2826,57 @@ namespace UE::DreamFX::Editor
 							ReportAdapterErrors(Errors, TEXT("DFX5027"), Binding.Location, Diagnostics);
 							return false;
 						}
+					}
+				}
+			}
+
+			// Event handlers land now, when every emitter their specs can name exists -- a receiver
+			// may be declared before its source. The handler is created (or regenerated) with the
+			// zero usage id, the stack it owns is cleared of whatever a previous build wired to the
+			// reused output node, and the modules then go through the ordinary ApplyStack -- self-
+			// referential DI writes inside them defer like everyone else's, which is why this pass
+			// runs before the deferral resolves. An emitter whose source declares no handler gets a
+			// stale zero-id one removed, so a deleted OnEvent block actually deletes.
+			for (const FPlannedEmitter& Emitter : Plan.Emitters)
+			{
+				const FStackAddress EmitterAddress = SystemAddress.WithEmitter(Emitter.Name);
+
+				if (Emitter.EventHandlers.Num() == 0)
+				{
+					bool bRemoved = false;
+					Errors.Reset();
+					if (!FNiagaraAdapter::RemoveZeroIdEventHandler(EmitterAddress, bRemoved, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5031"), Emitter.Location, Diagnostics);
+						return false;
+					}
+					continue;
+				}
+
+				for (const FPlannedEventHandler& Handler : Emitter.EventHandlers)
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::AddEventHandler(EmitterAddress, Handler.Spec, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5031"), Handler.Location, Diagnostics);
+						return false;
+					}
+
+					// Regeneration reuses the output node, and the previous build's module nodes still
+					// hang off it; the stack is addressable now, so clear it the same way the main
+					// stacks are cleared before their rebuild.
+					Errors.Reset();
+					if (!FNiagaraAdapter::ClearScriptStack(
+						EmitterAddress.WithScript(Handler.Stack.ScriptName), Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5031"), Handler.Location, Diagnostics);
+						return false;
+					}
+
+					if (!ApplyStack(EmitterAddress, Handler.Stack, Diagnostics, OutModuleLocations,
+						&DeferredSelfRefs))
+					{
+						return false;
 					}
 				}
 			}

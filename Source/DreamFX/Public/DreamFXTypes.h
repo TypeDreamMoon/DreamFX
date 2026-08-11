@@ -252,11 +252,36 @@ namespace UE::DreamFX
 		FSourceLocation Location;
 	};
 
+	/**
+	 * The arguments of an `OnEvent(...)` block. Only meaningful on a stack whose Kind is
+	 * EventHandler.
+	 *
+	 * The source is an emitter NAME: the asset stores the source's handle guid, which no rebuild can
+	 * reproduce, so the name is the one spelling that survives the original/mirror boundary. The
+	 * engine's legacy EventReceivers array is deliberately not carried -- its own header calls it
+	 * legacy -- and neither are fields no corpus content sets; the asset-level diff is what promotes
+	 * a field into this struct.
+	 */
+	struct FEventHandlerSpec
+	{
+		FString Source;
+		FString Event;
+		/** EveryParticle or SpawnedParticles, validated where the engine enum is visible. */
+		FString Mode;
+		int32 SpawnNumber = 0;
+		TOptional<bool> UpdateAttributeInitialValues;
+		TOptional<int32> MaxEventsPerFrame;
+		TOptional<bool> RandomSpawnNumber;
+		TOptional<int32> MinSpawnNumber;
+	};
+
 	struct FStack
 	{
 		EStackKind Kind = EStackKind::ParticleUpdate;
 		/** Stage / event handler name; empty for the six built-in stacks. */
 		FString Name;
+		/** `OnEvent(...)` arguments; default-constructed on every other stack kind. */
+		FEventHandlerSpec Handler;
 		TArray<FStatement> Statements;
 		FSourceLocation Location;
 

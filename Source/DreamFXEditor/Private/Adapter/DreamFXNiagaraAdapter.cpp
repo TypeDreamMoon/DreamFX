@@ -3135,6 +3135,10 @@ namespace UE::DreamFX::Editor
 				FEventHandlerSummary& Summary = OutHandlers.AddDefaulted_GetRef();
 				Summary.SourceEventName = Event.SourceEventName;
 				Summary.SpawnNumber = static_cast<int32>(Event.SpawnNumber);
+				Summary.MaxEventsPerFrame = static_cast<int32>(Event.MaxEventsPerFrame);
+				Summary.bUpdateAttributeInitialValues = Event.UpdateAttributeInitialValues;
+				Summary.bRandomSpawnNumber = Event.bRandomSpawnNumber;
+				Summary.MinSpawnNumber = static_cast<int32>(Event.MinSpawnNumber);
 				Summary.ExecutionMode = StaticEnum<EScriptExecutionMode>()
 					? StaticEnum<EScriptExecutionMode>()->GetNameStringByValue(static_cast<int64>(Event.ExecutionMode))
 					: FString::FromInt(static_cast<int32>(Event.ExecutionMode));
@@ -3222,6 +3226,41 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
+		/** The graph's event output node with the given usage id, found by reflection. */
+		UNiagaraNode* FindEventOutputNode(UNiagaraGraph& Graph, const FGuid& UsageId)
+		{
+			for (UEdGraphNode* GraphNode : Graph.Nodes)
+			{
+				if (GraphNode == nullptr || GraphNode->GetClass()->GetName() != TEXT("NiagaraNodeOutput"))
+				{
+					continue;
+				}
+				const FProperty* TypeProperty = GraphNode->GetClass()->FindPropertyByName(TEXT("ScriptType"));
+				const FStructProperty* IdProperty = CastField<FStructProperty>(
+					GraphNode->GetClass()->FindPropertyByName(TEXT("ScriptTypeId")));
+				if (TypeProperty == nullptr || IdProperty == nullptr)
+				{
+					continue;
+				}
+				int64 UsageValue = 0;
+				if (const FEnumProperty* AsEnum = CastField<FEnumProperty>(TypeProperty))
+				{
+					UsageValue = AsEnum->GetUnderlyingProperty()->GetSignedIntPropertyValue(
+						AsEnum->ContainerPtrToValuePtr<void>(GraphNode));
+				}
+				else if (const FByteProperty* AsByte = CastField<FByteProperty>(TypeProperty))
+				{
+					UsageValue = AsByte->GetPropertyValue_InContainer(GraphNode);
+				}
+				if (UsageValue == static_cast<int64>(ENiagaraScriptUsage::ParticleEventScript)
+					&& *IdProperty->ContainerPtrToValuePtr<FGuid>(GraphNode) == UsageId)
+				{
+					return Cast<UNiagaraNode>(GraphNode);
+				}
+			}
+			return nullptr;
+		}
+
 		/** The node's first pin of the given direction whose type is a parameter map. */
 		UEdGraphPin* FindParameterMapPin(UNiagaraNode& Node, EEdGraphPinDirection Direction)
 		{
@@ -3239,8 +3278,7 @@ namespace UE::DreamFX::Editor
 	}
 
 	bool FNiagaraAdapter::AddEventHandler(const FStackAddress& EmitterAddress,
-		const FString& SourceEmitterName, FName SourceEventName, const FString& ExecutionModeName,
-		int32 SpawnNumber, TArray<FString>& OutErrors)
+		const UE::DreamFX::FEventHandlerSpec& Spec, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("AddEventHandler"));
 		UNiagaraSystem* System = EmitterAddress.System;
@@ -3258,21 +3296,23 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		const FNiagaraEmitterHandle* Source = HandleForName(System, SourceEmitterName);
+		const FNiagaraEmitterHandle* Source = HandleForName(System, Spec.Source);
 		if (Source == nullptr)
 		{
 			OutErrors.Add(FString::Printf(
 				TEXT("Event source emitter '%s' does not exist (yet). Handlers must be added after every emitter."),
-				*SourceEmitterName));
+				*Spec.Source));
 			return false;
 		}
 
 		const UEnum* ModeEnum = StaticEnum<EScriptExecutionMode>();
-		const int64 ModeValue = ModeEnum != nullptr ? ModeEnum->GetValueByNameString(ExecutionModeName) : INDEX_NONE;
+		const int64 ModeValue = Spec.Mode.IsEmpty()
+			? static_cast<int64>(EScriptExecutionMode::EveryParticle)
+			: (ModeEnum != nullptr ? ModeEnum->GetValueByNameString(Spec.Mode) : INDEX_NONE);
 		if (ModeValue == INDEX_NONE)
 		{
 			OutErrors.Add(FString::Printf(TEXT("'%s' is not an event execution mode. Valid: EveryParticle, SpawnedParticles."),
-				*ExecutionModeName));
+				*Spec.Mode));
 			return false;
 		}
 
@@ -3306,9 +3346,25 @@ namespace UE::DreamFX::Editor
 
 		FNiagaraEventScriptProperties Properties;
 		Properties.ExecutionMode = static_cast<EScriptExecutionMode>(ModeValue);
-		Properties.SpawnNumber = static_cast<uint32>(FMath::Max(0, SpawnNumber));
+		Properties.SpawnNumber = static_cast<uint32>(FMath::Max(0, Spec.SpawnNumber));
 		Properties.SourceEmitterID = Source->GetId();
-		Properties.SourceEventName = SourceEventName;
+		Properties.SourceEventName = FName(*Spec.Event);
+		if (Spec.MaxEventsPerFrame.IsSet())
+		{
+			Properties.MaxEventsPerFrame = static_cast<uint32>(FMath::Max(0, Spec.MaxEventsPerFrame.GetValue()));
+		}
+		if (Spec.UpdateAttributeInitialValues.IsSet())
+		{
+			Properties.UpdateAttributeInitialValues = Spec.UpdateAttributeInitialValues.GetValue();
+		}
+		if (Spec.RandomSpawnNumber.IsSet())
+		{
+			Properties.bRandomSpawnNumber = Spec.RandomSpawnNumber.GetValue();
+		}
+		if (Spec.MinSpawnNumber.IsSet())
+		{
+			Properties.MinSpawnNumber = static_cast<uint32>(FMath::Max(0, Spec.MinSpawnNumber.GetValue()));
+		}
 
 		// The view model's one-call path exists but hard-codes FGuid::NewGuid() for the usage id,
 		// which is the one thing this cannot accept -- the zero id IS the addressability. Same
@@ -3327,38 +3383,7 @@ namespace UE::DreamFX::Editor
 		// is reused when a previous build made one; the engine's version recreates the input node
 		// every call and leaves the old one dangling, so this one reuses a still-wired input too.
 		Graph->Modify();
-		UNiagaraNode* OutputNode = nullptr;
-		for (UEdGraphNode* GraphNode : Graph->Nodes)
-		{
-			if (GraphNode == nullptr || GraphNode->GetClass()->GetName() != TEXT("NiagaraNodeOutput"))
-			{
-				continue;
-			}
-			const FProperty* TypeProperty = GraphNode->GetClass()->FindPropertyByName(TEXT("ScriptType"));
-			const FStructProperty* IdProperty = CastField<FStructProperty>(
-				GraphNode->GetClass()->FindPropertyByName(TEXT("ScriptTypeId")));
-			if (TypeProperty == nullptr || IdProperty == nullptr)
-			{
-				continue;
-			}
-			int64 UsageValue = 0;
-			if (const FEnumProperty* AsEnum = CastField<FEnumProperty>(TypeProperty))
-			{
-				UsageValue = AsEnum->GetUnderlyingProperty()->GetSignedIntPropertyValue(
-					AsEnum->ContainerPtrToValuePtr<void>(GraphNode));
-			}
-			else if (const FByteProperty* AsByte = CastField<FByteProperty>(TypeProperty))
-			{
-				UsageValue = AsByte->GetPropertyValue_InContainer(GraphNode);
-			}
-			const FGuid NodeUsageId = *IdProperty->ContainerPtrToValuePtr<FGuid>(GraphNode);
-			if (UsageValue == static_cast<int64>(ENiagaraScriptUsage::ParticleEventScript)
-				&& NodeUsageId == FGuid())
-			{
-				OutputNode = Cast<UNiagaraNode>(GraphNode);
-				break;
-			}
-		}
+		UNiagaraNode* OutputNode = FindEventOutputNode(*Graph, FGuid());
 
 		if (OutputNode == nullptr)
 		{
@@ -3433,6 +3458,110 @@ namespace UE::DreamFX::Editor
 		OutputNode->MarkNodeRequiresSynchronization(TEXT("DreamFX event handler"),
 			/*bRaiseGraphNeedsRecompile=*/true);
 		return true;
+	}
+
+	bool FNiagaraAdapter::RemoveZeroIdEventHandler(const FStackAddress& EmitterAddress, bool& bOutRemoved,
+		TArray<FString>& OutErrors)
+	{
+		bOutRemoved = false;
+		UNiagaraSystem* System = EmitterAddress.System;
+		const FNiagaraEmitterHandle* Handle = System != nullptr
+			? HandleForName(System, EmitterAddress.EmitterName.ToString()) : nullptr;
+		if (Handle == nullptr || Handle->GetInstance().Emitter == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot remove an event handler from an unresolvable emitter."));
+			return false;
+		}
+
+		const FVersionedNiagaraEmitter Instance = Handle->GetInstance();
+		FVersionedNiagaraEmitterData* Data = Instance.Emitter->GetEmitterData(Instance.Version);
+		const bool bHasZeroId = Data != nullptr && Data->EventHandlerScriptProps.ContainsByPredicate(
+			[](const FNiagaraEventScriptProperties& Event)
+			{
+				return Event.Script != nullptr && Event.Script->GetUsageId() == FGuid();
+			});
+		if (!bHasZeroId)
+		{
+			return true;
+		}
+
+		FEpochGuard Epoch(System);
+		System->Modify();
+		Instance.Emitter->Modify();
+
+		// The stack first, while the handler still makes it addressable: the module nodes hang off
+		// the output node and would otherwise stay behind as orphans.
+		TArray<FString> ClearErrors;
+		ClearScriptStack(EmitterAddress.WithScript(TEXT("ParticleEventScript")), ClearErrors);
+
+		Instance.Emitter->RemoveEventHandlerByUsageId(FGuid(), Instance.Version);
+
+		if (UNiagaraGraph* Graph = GraphForAddress(EmitterAddress))
+		{
+			if (UNiagaraNode* OutputNode = FindEventOutputNode(*Graph, FGuid()))
+			{
+				Graph->Modify();
+				Graph->RemoveNode(OutputNode);
+			}
+		}
+
+		bOutRemoved = true;
+		return true;
+	}
+
+	bool FNiagaraAdapter::ZeroEventHandlerUsageIds(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors)
+	{
+		UNiagaraSystem* System = EmitterAddress.System;
+		const FNiagaraEmitterHandle* Handle = System != nullptr
+			? HandleForName(System, EmitterAddress.EmitterName.ToString()) : nullptr;
+		if (Handle == nullptr || Handle->GetInstance().Emitter == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot rewrite event usage ids on an unresolvable emitter."));
+			return false;
+		}
+
+		const FVersionedNiagaraEmitter Instance = Handle->GetInstance();
+		FVersionedNiagaraEmitterData* Data = Instance.Emitter->GetEmitterData(Instance.Version);
+		UNiagaraGraph* Graph = GraphForAddress(EmitterAddress);
+		if (Data == nullptr || Graph == nullptr)
+		{
+			OutErrors.Add(TEXT("The emitter has no reachable data or graph."));
+			return false;
+		}
+
+		FEpochGuard Epoch(System);
+		for (FNiagaraEventScriptProperties& Event : Data->EventHandlerScriptProps)
+		{
+			if (Event.Script == nullptr)
+			{
+				continue;
+			}
+			const FGuid OldId = Event.Script->GetUsageId();
+			if (OldId == FGuid())
+			{
+				continue;
+			}
+			Event.Script->SetUsageId(FGuid());
+
+			if (UNiagaraNode* OutputNode = FindEventOutputNode(*Graph, OldId))
+			{
+				FStructProperty* IdProperty = CastField<FStructProperty>(
+					OutputNode->GetClass()->FindPropertyByName(TEXT("ScriptTypeId")));
+				if (IdProperty != nullptr)
+				{
+					OutputNode->Modify();
+					*IdProperty->ContainerPtrToValuePtr<FGuid>(OutputNode) = FGuid();
+				}
+			}
+		}
+		return true;
+	}
+
+	UNiagaraEmitter* FNiagaraAdapter::GetEmitterInstance(const FStackAddress& EmitterAddress)
+	{
+		const FNiagaraEmitterHandle* Handle = EmitterAddress.System != nullptr
+			? HandleForName(EmitterAddress.System, EmitterAddress.EmitterName.ToString()) : nullptr;
+		return Handle != nullptr ? Handle->GetInstance().Emitter : nullptr;
 	}
 
 	bool FNiagaraAdapter::WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,
@@ -3566,6 +3695,9 @@ namespace UE::DreamFX::Editor
 			case EStackKind::EmitterUpdate:  OutUsage = ENiagaraScriptUsage::EmitterUpdateScript;  return true;
 			case EStackKind::ParticleSpawn:  OutUsage = ENiagaraScriptUsage::ParticleSpawnScript;  return true;
 			case EStackKind::ParticleUpdate: OutUsage = ENiagaraScriptUsage::ParticleUpdateScript; return true;
+			// The zero-usage-id event stack: addressable through the same reference machinery as the
+			// six main stacks, because its usage id is the one the references hard-code.
+			case EStackKind::EventHandler:   OutUsage = ENiagaraScriptUsage::ParticleEventScript;  return true;
 			default: return false;
 			}
 		}
@@ -4156,6 +4288,7 @@ namespace UE::DreamFX::Editor
 			EStackKind::SystemSpawn, EStackKind::SystemUpdate,
 			EStackKind::EmitterSpawn, EStackKind::EmitterUpdate,
 			EStackKind::ParticleSpawn, EStackKind::ParticleUpdate,
+			EStackKind::EventHandler,
 		};
 
 		// The API is not consistent about which spelling it uses: writes take the qualified name

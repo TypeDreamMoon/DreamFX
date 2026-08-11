@@ -870,6 +870,10 @@ namespace UE::DreamFX::Editor
 			FName SourceEventName;
 			FString ExecutionMode;
 			int32 SpawnNumber = 0;
+			int32 MaxEventsPerFrame = 0;
+			bool bUpdateAttributeInitialValues = true;
+			bool bRandomSpawnNumber = false;
+			int32 MinSpawnNumber = 0;
 		};
 
 		/**
@@ -896,10 +900,35 @@ namespace UE::DreamFX::Editor
 		 *
 		 * Calling it again replaces the existing zero-id handler (engine RemoveEventHandlerByUsageId
 		 * plus reuse of the graph output node), which is what a rebuild-in-place wants.
+		 *
+		 * Takes the language-level spec: an unset optional keeps the engine default, an empty Mode
+		 * means EveryParticle (the engine's own default).
 		 */
-		static bool AddEventHandler(const FStackAddress& EmitterAddress, const FString& SourceEmitterName,
-			FName SourceEventName, const FString& ExecutionModeName, int32 SpawnNumber,
+		static bool AddEventHandler(const FStackAddress& EmitterAddress,
+			const UE::DreamFX::FEventHandlerSpec& Spec, TArray<FString>& OutErrors);
+
+		/**
+		 * Removes the zero-id handler when the source no longer declares one, so a rebuild does not
+		 * carry a handler forward forever. Clears its stack first (the module nodes hang off the
+		 * reused output node and would otherwise survive as orphans), then removes the handler and
+		 * its output node. bOutRemoved distinguishes "removed" from "there was nothing to remove".
+		 */
+		static bool RemoveZeroIdEventHandler(const FStackAddress& EmitterAddress, bool& bOutRemoved,
 			TArray<FString>& OutErrors);
+
+		/**
+		 * Rewrites every event handler's usage id to zero, graph output nodes included -- on a COPY.
+		 *
+		 * The read side's half of the zero-id trick: an original's event scripts carry random usage
+		 * ids, which the external API's references can never resolve. The decompiler copies the
+		 * emitter into a /Temp host, zeroes the copy's ids with this, and then every existing stack
+		 * read rail works on the copy. Never call it on an asset anyone keeps: the id rewrite is
+		 * exactly the kind of mutation the export promises not to make.
+		 */
+		static bool ZeroEventHandlerUsageIds(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors);
+
+		/** The live emitter instance behind a handle name, for callers that must copy it somewhere. */
+		static UNiagaraEmitter* GetEmitterInstance(const FStackAddress& EmitterAddress);
 
 		/**
 		 * Closes every compile launch site on the system for the scope's lifetime.

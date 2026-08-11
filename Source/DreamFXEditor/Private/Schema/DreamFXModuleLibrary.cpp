@@ -464,6 +464,25 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
+		// A zero-id event handler, so a module can be probed "as it appears in OnEvent" through the
+		// same stack address every other kind uses. The source is the probe emitter itself -- the
+		// engine documents an all-zero source id as "this emitter", and nothing about a schema probe
+		// cares where events would come from. Failure is deliberately non-fatal: it would only take
+		// event-stack probing down, and the six main stacks owe it nothing.
+		{
+			UE::DreamFX::FEventHandlerSpec ProbeHandler;
+			ProbeHandler.Source = TEXT("Probe");
+			ProbeHandler.Event = TEXT("LocationEvent");
+			TArray<FString> HandlerErrors;
+			if (!FNiagaraAdapter::AddEventHandler(
+				FStackAddress(ProbeSystem).WithEmitter(TEXT("Probe")), ProbeHandler, HandlerErrors))
+			{
+				UE_LOG(LogDreamFX, Warning,
+					TEXT("The schema probe system has no event stack (%s); modules cannot be probed as they appear in OnEvent."),
+					*FString::Join(HandlerErrors, TEXT(" | ")));
+			}
+		}
+
 		return true;
 	}
 

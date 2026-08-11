@@ -60,7 +60,8 @@ configuring a curve data interface — see [values.md](values.md).
 
 ## Stacks
 
-Six stacks, two at system scope and four per emitter (L1):
+Six stacks, two at system scope and four per emitter (L1), plus a per-emitter event stack declared
+with `OnEvent` (below):
 
 ```
 SystemSpawn      SystemUpdate           <- top level of the .dfs
@@ -149,12 +150,40 @@ Emitter.MyCounter          = 0;
 The target is namespace-qualified (DFX4025). The type comes from the value; an `hlsl` block, a dynamic
 input and an inline expression all have none, so those need the annotation (DFX4022).
 
+### `OnEvent` — reacting to another emitter's events
+
+```cpp
+Emitter Receiver
+{
+    ParticleSpawn = { … }
+
+    OnEvent(Source = Sparks, Event = "LocationEvent", Mode = SpawnedParticles, SpawnNumber = 2) = {
+        ReceiveLocationEvent();        // ordinary stack statements; runs per received event
+    }
+}
+```
+
+The header configures the handler, the block is a stack like any other. `Source` names an emitter in
+this system, `Event` the event it generates (a `GenerateLocationEvent()` module sends
+`"LocationEvent"`), and the rest are the handler's spend controls, written only when they differ from
+the defaults: `Mode` (`SpawnedParticles` spawns `SpawnNumber` new particles per event and runs the
+block on them; `EveryParticle` runs it on the existing ones), `MaxEventsPerFrame`,
+`UpdateAttributeInitialValues`, `RandomSpawnNumber` with `MinSpawnNumber`. `Source` and `Event` are
+required (DFX2025).
+
+One `OnEvent` block per emitter (DFX5031): DreamFX addresses the event stack through the same rails as
+the other four, and those can reach exactly one handler. An emitter that should react to two event
+streams becomes two emitters.
+
+An event *generator* usually needs `RequiresPersistentIDs = true` in the source emitter's `Settings`,
+because it reads `Particles.ID`; without it the build reports the engine's own stack issue (DFX6003).
+
 ## `Defaults` — what a read produces when nothing wrote
 
-> **Not working yet.** The syntax parses and the generator applies it, and the engine half it depends
-> on does not reach whatever holds these parameters. Written down because the block is in the
-> grammar; see [roundtrip-2026-08-08-3.md](../roundtrip-2026-08-08-3.md) for the four measured dead
-> ends. Nothing exports one today.
+> Working since 2026-08-09: the ordering fix (defaults applied after the stacks, with an implied
+> Value pass) closed what [roundtrip-2026-08-08-3.md](../roundtrip-2026-08-08-3.md) measured as dead
+> ends — the writes were creating the entry they then refused to fill. The decompiler exports a
+> `Defaults` block when an emitter graph carries one that differs from what a fresh build produces.
 
 ```cpp
 Emitter Sparks

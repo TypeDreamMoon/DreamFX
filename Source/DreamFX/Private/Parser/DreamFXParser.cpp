@@ -44,6 +44,7 @@ namespace UE::DreamFX
 			bool ParseSettingsBlock(TArray<FPropertyEntry>& OutProperties);
 			bool ParseParameterBlock(TArray<FParameterDecl>& OutParameters);
 			bool ParseStackBlock(FStack& OutStack);
+			bool ParseEventHandlerArguments(FEventHandlerSpec& OutSpec);
 			bool ParseEmitterDeclaration(FEmitter& OutEmitter);
 			bool ParseRendererDeclaration(FRenderer& OutRenderer);
 
@@ -1085,14 +1086,14 @@ namespace UE::DreamFX
 						}
 					}
 				}
-				else if (Keyword == TEXT("Stage") || Keyword == TEXT("OnEvent"))
+				else if (Keyword == TEXT("Stage"))
 				{
 					// Reserved by L1 / section 7. Parsed so the syntax stays stable, then rejected --
 					// silently dropping a whole stack would be far worse than a clear "not yet".
 					const FSourceLocation Location = Token.Location;
 					Lexer.Next();
 					FStack Stack;
-					Stack.Kind = Keyword == TEXT("Stage") ? EStackKind::SimulationStage : EStackKind::EventHandler;
+					Stack.Kind = EStackKind::SimulationStage;
 					Stack.Location = Location;
 					ExpectIdentifier(Stack.Name);
 					if (ParseStackBlock(Stack))
@@ -1100,7 +1101,23 @@ namespace UE::DreamFX
 						OutEmitter.Stacks.Add(MoveTemp(Stack));
 					}
 					Diagnostics.Error(TEXT("DFX2012"), Location,
-						FString::Printf(TEXT("'%s' blocks are reserved syntax and are not supported in v1."), *Keyword));
+						TEXT("'Stage' blocks are reserved syntax and are not supported in v1."));
+				}
+				else if (Keyword == TEXT("OnEvent"))
+				{
+					// The reserved spelling, grown up: the bare `OnEvent name = {}` form never carried
+					// the properties an event handler is made of (which emitter's events, which event,
+					// how to run), so the arguments moved into the same parenthesised attribute form
+					// the document headers already use.
+					const FSourceLocation Location = Token.Location;
+					Lexer.Next();
+					FStack Stack;
+					Stack.Kind = EStackKind::EventHandler;
+					Stack.Location = Location;
+					if (ParseEventHandlerArguments(Stack.Handler) && ParseStackBlock(Stack))
+					{
+						OutEmitter.Stacks.Add(MoveTemp(Stack));
+					}
 				}
 				else
 				{
@@ -1164,6 +1181,137 @@ namespace UE::DreamFX
 			}
 
 			return Expect(TEXT("}"));
+		}
+
+		/**
+		 * The parenthesised arguments of an `OnEvent(...)` block, in the header-attribute style.
+		 *
+		 * Source and Mode are identifiers (an emitter name; an EScriptExecutionMode entry), Event is
+		 * a string or an identifier, the numbers are integers and the flags are true/false. Source
+		 * and Event are required -- a handler that does not say whose events it wants is not a
+		 * handler -- and validation of Source against the declared emitters happens at build time,
+		 * where the final emitter list exists.
+		 */
+		bool FParserImpl::ParseEventHandlerArguments(FEventHandlerSpec& OutSpec)
+		{
+			if (!Expect(TEXT("(")))
+			{
+				return false;
+			}
+
+			do
+			{
+				FString Key;
+				const FSourceLocation KeyLocation = Lexer.Peek().Location;
+				if (!ExpectIdentifier(Key) || !Expect(TEXT("=")))
+				{
+					return false;
+				}
+
+				const FToken& ValueToken = Lexer.Peek();
+
+				auto ReadIdentifier = [this](FString& Out)
+				{
+					return ExpectIdentifier(Out);
+				};
+				auto ReadInteger = [this, &ValueToken](int32& Out)
+				{
+					if (ValueToken.Kind != ETokenKind::Number)
+					{
+						return false;
+					}
+					Out = static_cast<int32>(Lexer.Next().Number);
+					return true;
+				};
+				auto ReadBool = [this, &ValueToken](bool& Out)
+				{
+					if (ValueToken.Kind == ETokenKind::Identifier
+						&& (ValueToken.Text == TEXT("true") || ValueToken.Text == TEXT("false")))
+					{
+						Out = Lexer.Next().Text == TEXT("true");
+						return true;
+					}
+					return false;
+				};
+
+				bool bOk = true;
+				if (Key == TEXT("Source"))
+				{
+					bOk = ReadIdentifier(OutSpec.Source);
+				}
+				else if (Key == TEXT("Event"))
+				{
+					if (ValueToken.Kind == ETokenKind::String || ValueToken.Kind == ETokenKind::Identifier)
+					{
+						OutSpec.Event = Lexer.Next().Text;
+					}
+					else
+					{
+						bOk = false;
+					}
+				}
+				else if (Key == TEXT("Mode"))
+				{
+					bOk = ReadIdentifier(OutSpec.Mode);
+				}
+				else if (Key == TEXT("SpawnNumber"))
+				{
+					bOk = ReadInteger(OutSpec.SpawnNumber);
+				}
+				else if (Key == TEXT("MaxEventsPerFrame"))
+				{
+					int32 Value = 0;
+					bOk = ReadInteger(Value);
+					OutSpec.MaxEventsPerFrame = Value;
+				}
+				else if (Key == TEXT("MinSpawnNumber"))
+				{
+					int32 Value = 0;
+					bOk = ReadInteger(Value);
+					OutSpec.MinSpawnNumber = Value;
+				}
+				else if (Key == TEXT("UpdateAttributeInitialValues"))
+				{
+					bool Value = true;
+					bOk = ReadBool(Value);
+					OutSpec.UpdateAttributeInitialValues = Value;
+				}
+				else if (Key == TEXT("RandomSpawnNumber"))
+				{
+					bool Value = false;
+					bOk = ReadBool(Value);
+					OutSpec.RandomSpawnNumber = Value;
+				}
+				else
+				{
+					Diagnostics.Error(TEXT("DFX2025"), KeyLocation,
+						FString::Printf(TEXT("Unknown OnEvent argument '%s'. Expected Source, Event, Mode, SpawnNumber, MaxEventsPerFrame, UpdateAttributeInitialValues, RandomSpawnNumber or MinSpawnNumber."),
+							*Key));
+					return false;
+				}
+
+				if (!bOk)
+				{
+					Diagnostics.Error(TEXT("DFX2025"), ValueToken.Location,
+						FString::Printf(TEXT("OnEvent argument '%s' has the wrong shape: Source and Mode are identifiers, Event is a name or string, the numbers are integers and the flags are true/false."),
+							*Key));
+					return false;
+				}
+			}
+			while (Lexer.TryConsumeSymbol(TEXT(",")));
+
+			if (!Expect(TEXT(")")))
+			{
+				return false;
+			}
+
+			if (OutSpec.Source.IsEmpty() || OutSpec.Event.IsEmpty())
+			{
+				Diagnostics.Error(TEXT("DFX2025"), Lexer.Peek().Location,
+					TEXT("OnEvent needs at least Source (the emitter whose events to receive) and Event (the event's name)."));
+				return false;
+			}
+			return true;
 		}
 
 		bool FParserImpl::ParseEmitterDeclaration(FEmitter& OutEmitter)

@@ -1328,13 +1328,19 @@ namespace UE::DreamFX::Editor
 		 * being unreproducible) and tracked in the plan; until it lands, this line is the difference
 		 * between a named gap and a mystery.
 		 */
+		/**
+		 * @param bSingleIsRepresented  true on the system path, where one handler round-trips as an
+		 *                              `OnEvent(...)` block since plan-events V2. A standalone .dfe
+		 *                              has no sibling emitter for `Source` to name, so the emitter
+		 *                              path keeps the full gap.
+		 */
 		void NoteEventHandlers(const FStackAddress& EmitterAddress, FName EmitterName,
-			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics, bool bSingleIsRepresented)
 		{
 			TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
 			TArray<FString> Errors;
 			if (!FNiagaraAdapter::GetEmitterEventHandlers(EmitterAddress, Handlers, Errors)
-				|| Handlers.Num() == 0)
+				|| Handlers.Num() == 0 || (bSingleIsRepresented && Handlers.Num() == 1))
 			{
 				return;
 			}
@@ -1343,14 +1349,20 @@ namespace UE::DreamFX::Editor
 			{
 				Result.UnsupportedFeatures.AddUnique(FString::Printf(
 					TEXT("emitter '%s' has an event handler (event '%s' from emitter '%s', %s x%d) -- ")
-					TEXT("event handlers are not represented, so the rebuilt emitter receives nothing"),
+					TEXT("%s, so the rebuilt emitter receives nothing"),
 					*EmitterName.ToString(), *Handler.SourceEventName.ToString(),
-					*Handler.SourceEmitterName, *Handler.ExecutionMode, Handler.SpawnNumber));
+					*Handler.SourceEmitterName, *Handler.ExecutionMode, Handler.SpawnNumber,
+					bSingleIsRepresented
+						? TEXT("only one handler per emitter is representable and this emitter has several")
+						: TEXT("a standalone emitter document has no sibling emitter for its Source to name")));
 			}
 
 			Diagnostics.Warning(TEXT("DFX8015"), FSourceLocation(),
-				FString::Printf(TEXT("Emitter '%s' carries %d event handler(s), which this export cannot represent. The rebuilt emitter will receive no events -- an event-spawned emitter comes back permanently empty. The gap header names each handler's source emitter and event."),
-					*EmitterName.ToString(), Handlers.Num()));
+				FString::Printf(TEXT("Emitter '%s' carries %d event handler(s) this export cannot represent%s. The rebuilt emitter will receive no events -- an event-spawned emitter comes back permanently empty. The gap header names each handler's source emitter and event."),
+					*EmitterName.ToString(), Handlers.Num(),
+					bSingleIsRepresented
+						? TEXT(" (one OnEvent block per emitter is supported; this emitter has several)")
+						: TEXT(" (a standalone .dfe cannot name a sibling source emitter)")));
 		}
 
 		/**
@@ -1437,7 +1449,8 @@ namespace UE::DreamFX::Editor
 		 */
 		void WriteEmitterBlock(FWriter& Writer, const FString& HeaderLine, const FContext& Context,
 			FModuleLibrary& Modules, const FStackAddress& EmitterAddress, const FEmitterInfo& Info,
-			FDecompileResult& Result, FDiagnosticSink& Diagnostics, bool bSystemScope = false)
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics, bool bSystemScope = false,
+			const TMap<FName, FStackAddress>* StackAddressOverrides = nullptr)
 		{
 			TArray<FString> Errors;
 
@@ -1546,7 +1559,56 @@ namespace UE::DreamFX::Editor
 				continue;
 			}
 
-			Writer.Line(FString::Printf(TEXT("%s = {"), LexStackKind(StackKind)));
+			// The event stack is read off a /Temp copy whose usage ids were zeroed -- the original's
+			// random ids are unresolvable through the stack references -- so its module reads need
+			// the copy's address while everything else keeps the original's.
+			const FStackAddress StackOwner =
+				(StackAddressOverrides != nullptr && StackAddressOverrides->Contains(Stack.ScriptName))
+					? (*StackAddressOverrides)[Stack.ScriptName]
+					: EmitterAddress;
+
+			if (StackKind == EStackKind::EventHandler)
+			{
+				// The header speaks the handler's spec. Read from the ORIGINAL emitter -- the copy's
+				// host has no source emitter to resolve the name against.
+				TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
+				TArray<FString> HandlerErrors;
+				FNiagaraAdapter::GetEmitterEventHandlers(EmitterAddress, Handlers, HandlerErrors);
+				if (Handlers.Num() != 1)
+				{
+					// Whatever put this stack here should have guaranteed exactly one; refusing to
+					// invent a header is better than writing one that rebuilds differently.
+					Result.UnsupportedFeatures.AddUnique(
+						TEXT("event stack whose handler count changed while it was being read"));
+					continue;
+				}
+				const FNiagaraAdapter::FEventHandlerSummary& Handler = Handlers[0];
+
+				FString Header = FString::Printf(TEXT("OnEvent(Source = %s, Event = \"%s\", Mode = %s, SpawnNumber = %d"),
+					*ToNameToken(Handler.SourceEmitterName), *Handler.SourceEventName.ToString(),
+					*Handler.ExecutionMode, Handler.SpawnNumber);
+				if (Handler.MaxEventsPerFrame != 0)
+				{
+					Header += FString::Printf(TEXT(", MaxEventsPerFrame = %d"), Handler.MaxEventsPerFrame);
+				}
+				if (!Handler.bUpdateAttributeInitialValues)
+				{
+					Header += TEXT(", UpdateAttributeInitialValues = false");
+				}
+				if (Handler.bRandomSpawnNumber)
+				{
+					Header += TEXT(", RandomSpawnNumber = true");
+				}
+				if (Handler.MinSpawnNumber != 0)
+				{
+					Header += FString::Printf(TEXT(", MinSpawnNumber = %d"), Handler.MinSpawnNumber);
+				}
+				Writer.Line(Header + TEXT(") = {"));
+			}
+			else
+			{
+				Writer.Line(FString::Printf(TEXT("%s = {"), LexStackKind(StackKind)));
+			}
 			Writer.Push();
 
 			for (const FModuleInfo& Module : Stack.Modules)
@@ -1562,7 +1624,7 @@ namespace UE::DreamFX::Editor
 				// holding adapter results, and one module is a small enough step to keep the ceiling.
 				FNiagaraAdapter::CollectIfHeavy();
 
-				const FStackAddress ModuleAddress = EmitterAddress
+				const FStackAddress ModuleAddress = StackOwner
 					.WithScript(Stack.ScriptName).WithModule(Module.ModuleName);
 
 				TArray<TTuple<FName, FInputValue>> Values;
@@ -2202,10 +2264,84 @@ namespace UE::DreamFX::Editor
 			}
 
 			NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
-			NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics);
+			NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics, /*bSingleIsRepresented=*/true);
+
+			// One event handler reads through a /Temp copy whose usage ids are zeroed: the original's
+			// event script carries a random usage id, and the stack references can only resolve the
+			// zero one (the same fact the write side builds on). The copy is mutated so the original
+			// never is, and only its event stack is read -- everything else stays on the original.
+			TMap<FName, FStackAddress> StackOverrides;
+			TOptional<FGCObjectScopeGuard> EventHostGuard;
+			TOptional<FNiagaraAdapter::FReadScope> EventReadScope;
+			{
+				TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
+				TArray<FString> HandlerErrors;
+				FNiagaraAdapter::GetEmitterEventHandlers(EmitterAddress, Handlers, HandlerErrors);
+				if (Handlers.Num() == 1)
+				{
+					const FName EventScriptName = FNiagaraAdapter::ScriptNameForStack(EStackKind::EventHandler);
+					bool bEventStackReady = false;
+
+					TArray<FString> HostErrors;
+					bool bHostCreated = false;
+					UNiagaraSystem* EventHost = FNiagaraAdapter::AcquireSystem(
+						TEXT("/Temp/DreamFX"), TEXT("DreamFXEventReadHost"), bHostCreated, HostErrors);
+					UNiagaraEmitter* Instance = FNiagaraAdapter::GetEmitterInstance(EmitterAddress);
+					if (EventHost != nullptr && Instance != nullptr)
+					{
+						EventHostGuard.Emplace(EventHost);
+
+						// A previous emitter's copy may still be in the host; start clean.
+						TArray<FName> Existing;
+						TArray<FString> ScratchErrors;
+						if (FNiagaraAdapter::GetEmitterNames(EventHost, Existing, ScratchErrors))
+						{
+							for (FName Name : Existing)
+							{
+								ScratchErrors.Reset();
+								FNiagaraAdapter::RemoveEmitter(
+									FStackAddress(EventHost).WithEmitter(Name), ScratchErrors);
+							}
+						}
+
+						const FStackAddress HostEmitter = FStackAddress(EventHost).WithEmitter(EmitterName);
+						ScratchErrors.Reset();
+						if (FNiagaraAdapter::AddEmitterFromTemplate(EventHost, Instance, EmitterName, ScratchErrors)
+							&& FNiagaraAdapter::ZeroEventHandlerUsageIds(HostEmitter, ScratchErrors))
+						{
+							EventReadScope.Emplace(EventHost);
+
+							FScriptStackInfo EventStack;
+							ScratchErrors.Reset();
+							if (FNiagaraAdapter::GetScriptStackInfo(
+								HostEmitter.WithScript(EventScriptName), EventStack, ScratchErrors))
+							{
+								Info.Stacks.Add(MoveTemp(EventStack));
+								StackOverrides.Add(EventScriptName, HostEmitter);
+								bEventStackReady = true;
+							}
+						}
+						if (!bEventStackReady)
+						{
+							UE_LOG(LogDreamFX, Warning,
+								TEXT("Could not read emitter '%s''s event stack through a host copy: %s"),
+								*EmitterName.ToString(), *FString::Join(ScratchErrors, TEXT(" | ")));
+						}
+					}
+
+					if (!bEventStackReady)
+					{
+						// The header would otherwise claim a handler the body does not carry.
+						Result.UnsupportedFeatures.AddUnique(FString::Printf(
+							TEXT("emitter '%s' has an event handler whose stack could not be read -- the rebuilt emitter receives nothing"),
+							*EmitterName.ToString()));
+					}
+				}
+			}
 
 			WriteEmitterBlock(Writer, FString::Printf(TEXT("Emitter %s"), *ToNameToken(EmitterName.ToString())),
-				Context, Modules, EmitterAddress, Info, Result, Diagnostics);
+				Context, Modules, EmitterAddress, Info, Result, Diagnostics, /*bSystemScope=*/false,
+				StackOverrides.Num() > 0 ? &StackOverrides : nullptr);
 			Writer.Blank();
 		}
 
@@ -2289,9 +2425,10 @@ namespace UE::DreamFX::Editor
 		}
 
 		// The host copy keeps the original's parent link and event handlers, so the same checks the
-		// system walk makes work here unchanged.
+		// system walk makes work here unchanged. Events stay a gap on this path: a standalone .dfe
+		// has no sibling emitter for an OnEvent Source to name.
 		NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
-		NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics);
+		NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics, /*bSingleIsRepresented=*/false);
 
 		FModuleLibrary Modules;
 
