@@ -1374,6 +1374,57 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
+		 * Records an emitter's simulation stages as gaps. The same family as the event handlers
+		 * above, and the same blindness with a bigger blast radius: stages live in
+		 * FVersionedNiagaraEmitterData::SimulationStages, not in the six regular stacks, so no stack
+		 * walk sees them -- the export carries no trace, the rebuilt emitter runs no stages, and a
+		 * Grid3D fluid comes back as nothing at all.
+		 *
+		 * The old "simulation stages had zero corpus hits" datum was measured through this very
+		 * blindness -- the event handlers scored zero on the same report while the packs were full of
+		 * them. A blind reader's zero justifies nothing; this note reads the serialized array
+		 * directly, which is also what makes it the census instrument. Representation is planned
+		 * (plan-stages); until it lands, this is the difference between a named gap and a mystery.
+		 */
+		void NoteSimulationStages(const FStackAddress& EmitterAddress, FName EmitterName,
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
+		{
+			TArray<FNiagaraAdapter::FSimulationStageSummary> Stages;
+			TArray<FString> Errors;
+			if (!FNiagaraAdapter::GetEmitterSimulationStages(EmitterAddress, Stages, Errors)
+				|| Stages.Num() == 0)
+			{
+				return;
+			}
+
+			for (const FNiagaraAdapter::FSimulationStageSummary& Stage : Stages)
+			{
+				FString Detail;
+				if (Stage.bIsGeneric)
+				{
+					Detail = Stage.DataInterfaceBindingName.IsEmpty()
+							|| Stage.DataInterfaceBindingName == TEXT("None")
+						? FString::Printf(TEXT("%s, %s iteration(s)"),
+							*Stage.IterationSourceName, *Stage.NumIterationsText)
+						: FString::Printf(TEXT("over DI '%s', %s iteration(s)"),
+							*Stage.DataInterfaceBindingName, *Stage.NumIterationsText);
+				}
+				else
+				{
+					Detail = FString::Printf(TEXT("custom stage class %s"), *Stage.StageClassName);
+				}
+				Result.UnsupportedFeatures.AddUnique(FString::Printf(
+					TEXT("emitter '%s' has a simulation stage ('%s', %s%s) -- stages are not represented, so the rebuilt emitter runs none of them"),
+					*EmitterName.ToString(), *Stage.StageName.ToString(), *Detail,
+					Stage.bEnabled ? TEXT("") : TEXT(", disabled")));
+			}
+
+			Diagnostics.Warning(TEXT("DFX8016"), FSourceLocation(),
+				FString::Printf(TEXT("Emitter '%s' carries %d simulation stage(s) this export cannot represent. The rebuilt emitter will run none of them -- a stage-driven simulation (Grid3D fluid and its kind) comes back as nothing. The gap header names each stage."),
+					*EmitterName.ToString(), Stages.Num()));
+		}
+
+		/**
 		 * The comment block every export opens with, including what the export could not carry.
 		 *
 		 * plan-v3 E4-0. Until now an unrepresentable feature was a warning in a commandlet log, which
@@ -2283,6 +2334,7 @@ namespace UE::DreamFX::Editor
 
 			NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
 			NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics, /*bSingleIsRepresented=*/true);
+			NoteSimulationStages(EmitterAddress, EmitterName, Result, Diagnostics);
 
 			// One event handler reads through a /Temp copy whose usage ids are zeroed: the original's
 			// event script carries a random usage id, and the stack references can only resolve the
@@ -2447,6 +2499,7 @@ namespace UE::DreamFX::Editor
 		// has no sibling emitter for an OnEvent Source to name.
 		NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
 		NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics, /*bSingleIsRepresented=*/false);
+		NoteSimulationStages(EmitterAddress, EmitterName, Result, Diagnostics);
 
 		FModuleLibrary Modules;
 

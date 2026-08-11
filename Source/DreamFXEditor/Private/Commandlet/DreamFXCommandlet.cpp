@@ -22,6 +22,7 @@
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
+#include "NiagaraSimulationStageBase.h"
 #include "NiagaraSystem.h"
 #include "Schema/DreamFXModuleLibrary.h"
 #include "UObject/UObjectHash.h"
@@ -935,6 +936,30 @@ namespace
 					OutFacts.Add(FString::Printf(TEXT("emitter %s event handler: '%s' from '%s' (%s x%d)"),
 						*EmitterName, *Handler.SourceEventName.ToString(), *Handler.SourceEmitterName,
 						*Handler.ExecutionMode, Handler.SpawnNumber));
+				}
+			}
+
+			// Simulation stages as dedicated facts, for the same reason as the event handlers above:
+			// the raw property walk skips SimulationStages because the array itself is subobject
+			// identity, which is exactly how a mirror with no stages at all would sail through this
+			// tool while a Grid3D fluid renders nothing. One fact per stage -- class plus full
+			// property text, the shape the data interfaces use below. The script object is identity
+			// (its content arrives through the export and the simulation), the outer version guid too.
+			{
+				static const TSet<FName> StageSkip = { TEXT("Script"), TEXT("OuterEmitterVersion") };
+				int32 StageIndex = 0;
+				for (const UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
+				{
+					if (Stage != nullptr)
+					{
+						TArray<FString> StageFacts;
+						AppendPropertyFacts(TEXT(""), Stage, Stage->GetClass(), StageSkip, SelfPackage, StageFacts);
+						StageFacts.Sort();
+						OutFacts.Add(FString::Printf(TEXT("emitter %s simulation stage %d:%s { %s }"),
+							*EmitterName, StageIndex, *Stage->GetClass()->GetName(),
+							*FString::Join(StageFacts, TEXT("; "))));
+					}
+					++StageIndex;
 				}
 			}
 

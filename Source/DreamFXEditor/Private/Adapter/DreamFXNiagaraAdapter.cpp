@@ -18,6 +18,7 @@
 #include "NiagaraScript.h"
 #include "NiagaraScriptSource.h"
 #include "NiagaraScriptVariable.h"
+#include "NiagaraSimulationStageBase.h"
 #include "NiagaraSystem.h"
 #include "NiagaraTypes.h"
 #include "NiagaraVariant.h"
@@ -3158,6 +3159,78 @@ namespace UE::DreamFX::Editor
 					Summary.SourceEmitterName = Event.SourceEmitterID.IsValid()
 						? FString::Printf(TEXT("<unresolved %s>"), *Event.SourceEmitterID.ToString())
 						: TEXT("<none>");
+				}
+			}
+			return true;
+		}
+
+		OutErrors.Add(FString::Printf(TEXT("'%s' has no emitter named '%s'."),
+			*EmitterAddress.System->GetName(), *EmitterAddress.EmitterName.ToString()));
+		return false;
+	}
+
+	bool FNiagaraAdapter::GetEmitterSimulationStages(const FStackAddress& EmitterAddress,
+		TArray<FSimulationStageSummary>& OutStages, TArray<FString>& OutErrors)
+	{
+		OutStages.Reset();
+		if (EmitterAddress.System == nullptr || EmitterAddress.EmitterName.IsNone())
+		{
+			OutErrors.Add(TEXT("Cannot read simulation stages of an unaddressed emitter."));
+			return false;
+		}
+
+		for (const FNiagaraEmitterHandle& Handle : EmitterAddress.System->GetEmitterHandles())
+		{
+			if (Handle.GetName() != EmitterAddress.EmitterName)
+			{
+				continue;
+			}
+			const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+			if (Data == nullptr)
+			{
+				return true;
+			}
+			for (const UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
+			{
+				if (Stage == nullptr)
+				{
+					continue;
+				}
+				FSimulationStageSummary& Summary = OutStages.AddDefaulted_GetRef();
+				Summary.StageName = Stage->SimulationStageName;
+				Summary.StageClassName = Stage->GetClass()->GetName();
+				Summary.bEnabled = Stage->bEnabled != 0;
+				Summary.bScriptMissing = Stage->Script == nullptr;
+				Summary.ScriptUsageId = Stage->Script != nullptr ? Stage->Script->GetUsageId() : FGuid();
+
+				const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
+				if (Generic == nullptr)
+				{
+					continue;
+				}
+				Summary.bIsGeneric = true;
+				// StaticEnum<ENiagaraIterationSource> has no exported specialization; the enum object
+				// itself is reachable by path, which is all a name lookup needs. It is declared in
+				// NiagaraCore (NiagaraCore.h), not the Niagara module its consumers live in.
+				if (const UEnum* SourceEnum = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraCore.ENiagaraIterationSource")))
+				{
+					Summary.IterationSourceName = SourceEnum->GetNameStringByValue(
+						static_cast<int64>(Generic->IterationSource));
+				}
+				Summary.DataInterfaceBindingName = Generic->DataInterface.BoundVariable.GetName().ToString();
+
+				// The count is a binding-with-value: a plain number in every corpus asset, but a
+				// parameter can drive it, in which case the number here would be a lie.
+				const TConstArrayView<uint8> IterationBytes = Generic->NumIterations.GetDefaultValueEditorOnly();
+				if (IterationBytes.Num() == sizeof(int32))
+				{
+					int32 Iterations = 0;
+					FMemory::Memcpy(&Iterations, IterationBytes.GetData(), sizeof(int32));
+					Summary.NumIterationsText = LexToString(Iterations);
+				}
+				else
+				{
+					Summary.NumIterationsText = TEXT("<bound>");
 				}
 			}
 			return true;

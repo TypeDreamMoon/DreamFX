@@ -927,6 +927,41 @@ namespace UE::DreamFX::Editor
 		 */
 		static bool ZeroEventHandlerUsageIds(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors);
 
+		/**
+		 * One simulation stage on an emitter, in the fields that mean something across a rebuild.
+		 * The same family as the event handlers above: stages live in
+		 * FVersionedNiagaraEmitterData::SimulationStages, not in the six regular stacks, so no stack
+		 * walk ever sees them -- this summary is read straight off the emitter data.
+		 */
+		struct FSimulationStageSummary
+		{
+			FName StageName;
+			/** "NiagaraSimulationStageGeneric" for every stage the engine's own UI creates. */
+			FString StageClassName;
+			bool bEnabled = true;
+			/** False for a custom stage subclass, whose configuration this summary cannot project. */
+			bool bIsGeneric = false;
+			/** ENiagaraIterationSource entry name; empty when not generic. */
+			FString IterationSourceName;
+			/** The bound data interface variable, when iterating over one. */
+			FString DataInterfaceBindingName;
+			/** The iteration count's default as text, or "<bound>" when driven by a parameter. */
+			FString NumIterationsText;
+			/** The stage script's usage id -- per stage, random on authored content (never zero). */
+			FGuid ScriptUsageId;
+			bool bScriptMissing = false;
+		};
+
+		/**
+		 * The simulation stages an emitter carries, read at the ASSET level (the serialized
+		 * SimulationStages array), never through a stack walk. That distinction is the whole point:
+		 * the old "simulation stages had zero corpus hits" datum came from a stack-shaped read that
+		 * was structurally blind to them -- the event handlers scored zero on the same report while
+		 * the packs were full of them.
+		 */
+		static bool GetEmitterSimulationStages(const FStackAddress& EmitterAddress,
+			TArray<FSimulationStageSummary>& OutStages, TArray<FString>& OutErrors);
+
 		/** The live emitter instance behind a handle name, for callers that must copy it somewhere. */
 		static UNiagaraEmitter* GetEmitterInstance(const FStackAddress& EmitterAddress);
 
