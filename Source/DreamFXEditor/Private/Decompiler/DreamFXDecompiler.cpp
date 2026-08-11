@@ -1616,6 +1616,7 @@ namespace UE::DreamFX::Editor
 					: nullptr;
 
 				TArray<TPair<FName, FInputValue>> SwitchValues;
+				TSet<FName> ProbedBools;
 				if (bWantDefaults)
 				{
 					for (const TTuple<FName, FInputValue>& Entry : Values)
@@ -1624,6 +1625,30 @@ namespace UE::DreamFX::Editor
 						if (Info != nullptr && Info->bStaticSwitch && Entry.Get<1>().IsSet())
 						{
 							SwitchValues.Emplace(Entry.Get<0>(), Entry.Get<1>());
+						}
+					}
+
+					// Set bools ride into the probe after the switches, because a bool can be an edit
+					// condition, and turning one on makes the engine initialise the inputs it reveals
+					// -- as SET values, at their defaults. Writing AgeCollidingParticles=true anywhere
+					// (rebuild and probe alike) plants AdvancedAgingRate=1.0; the original asset,
+					// authored before that machinery, has the toggle on with no such value. Feeding
+					// the toggle to the probe grows the same invented values in the baseline, so a
+					// mirror's copy of them suppresses as "the rebuild produces this anyway" -- which
+					// is literally true; the rebuild just did.
+					//
+					// Minimal repro that pinned the writer, 2026-08-11: a fresh one-module system,
+					// Collision(AgeCollidingParticles=true) -> re-export shows AdvancedAgingRate=1.0;
+					// drop the toggle and it vanishes. Version selection (the prior suspect) was
+					// eliminated the same way -- the invention survives with @1.0 removed.
+					for (const TTuple<FName, FInputValue>& Entry : Values)
+					{
+						const FInputInfo* Info = Module.FindInput(Entry.Get<0>());
+						if (Info != nullptr && !Info->bStaticSwitch && Entry.Get<1>().IsSet()
+							&& Info->Type == FNiagaraTypeDefinition::GetBoolDef())
+						{
+							SwitchValues.Emplace(Entry.Get<0>(), Entry.Get<1>());
+							ProbedBools.Add(Entry.Get<0>());
 						}
 					}
 				}
@@ -1700,7 +1725,14 @@ namespace UE::DreamFX::Editor
 					//
 					// Cost is ~290 lines per system in the worst case measured, against 508 non-switch
 					// drops that stay dropped.
-					if (const TMap<FName, FInputValue>* Defaults = bIsSwitchInput ? nullptr : SwitchedDefaults)
+					//
+					// A bool that was fed to the probe gets the same exemption, for the same shape of
+					// reason: its probe baseline is trivially its own value, so judging it there would
+					// suppress every one of them -- the 3921-dropped-lines failure of the switch-aware
+					// baseline, replayed on bools. The inputs a set bool *reveals* stay judged, which
+					// is the point: their invented defaults are in the baseline now.
+					if (const TMap<FName, FInputValue>* Defaults =
+						(bIsSwitchInput || ProbedBools.Contains(Entry.Get<0>())) ? nullptr : SwitchedDefaults)
 					{
 						if (const FInputValue* Default = Defaults->Find(Entry.Get<0>()))
 						{
