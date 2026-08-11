@@ -68,6 +68,24 @@ namespace UE::DreamFX::Editor
 			FString Label = EnumLabelOf(DisplayName);
 			Label.ReplaceInline(TEXT(" "), TEXT(""), ESearchCase::CaseSensitive);
 			Label.ReplaceInline(TEXT("-"), TEXT(""), ESearchCase::CaseSensitive);
+
+			// A slash survives on purpose -- "RandomHue/Saturation/Value", "Ring/Disc" and 190-odd
+			// others are written that way in every export and read back fine, because the lexer takes
+			// a slash as an interior character. Interior is the whole rule: once the space around it
+			// is gone, a label like "Unset / " ends in one and the token stops with nothing after it.
+			// That exports as `MassMode = Unset/,` and the next parse dies on DFX2004 at that comma.
+			//
+			// Only reachable today through -NoDefaults, because the affected entries happen to be
+			// defaults and get suppressed -- which is exactly why it is worth fixing rather than
+			// noting: the suppression that hides it is itself under repair.
+			//
+			// Trimming is enough, and it is safe: the caller only accepts a candidate that resolves
+			// back to this same entry, so a trim that changes which entry it names is discarded there
+			// and the internal name is written instead.
+			while (Label.EndsWith(TEXT("/"), ESearchCase::CaseSensitive))
+			{
+				Label.LeftChopInline(1, EAllowShrinking::No);
+			}
 			return Label;
 		}
 
