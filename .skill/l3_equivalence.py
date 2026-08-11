@@ -50,7 +50,10 @@ Writes a markdown table to Saved/DreamFX/l3-report.md.
 import os
 import unreal
 
-FRAMES = 24
+# 45, not 24: an emitter behind a LoopDelay of 1.0s first spawns at frame 30, and Teleport's
+# NE_C -- the round's motivating case -- is exactly that. A window the effect never starts in
+# judges every channel equal on both sides.
+FRAMES = 45
 DELTA = 1.0 / 30.0
 
 # A mirror is <Mount>/Decompiled/<the original's own path below its mount point>, so the pair is
@@ -206,8 +209,14 @@ def _first_active(counts):
     return None
 
 
-def _channel_mismatch(name, left_entry, right_entry, shift_left, shift_right):
-    """The first channel-level disagreement between two emitters' series, or None."""
+def _channel_mismatch(name, left_entry, right_entry, shift_left, shift_right, values=True):
+    """The first channel-level disagreement between two emitters' series, or None.
+
+    values=False compares only ABSENCE -- particles present while the attribute reads empty.
+    Absence is structural (the compiled scripts either produce the attribute or they do not), so
+    it is judgeable even on a system whose values do not replay: NE_C's fossil mirror is exactly
+    an absence, and it must not hide behind the system's own randomness.
+    """
     for channel, _ in CHANNELS:
         a = left_entry.get(channel, [])[shift_left:]
         b = right_entry.get(channel, [])[shift_right:]
@@ -216,8 +225,30 @@ def _channel_mismatch(name, left_entry, right_entry, shift_left, shift_right):
             if (a[frame] == "absent") != (b[frame] == "absent"):
                 side = "mirror" if a[frame] != "absent" else "original"
                 return f"'{name}' {channel} is absent on the {side} side"
-            if a[frame] != b[frame]:
+            if values and a[frame] != b[frame]:
                 return f"'{name}' {channel} differs (frame {frame} after alignment)"
+    return None
+
+
+def _absence_mismatch(left, right):
+    """Absence-only comparison across all emitters, for pairs whose values are undecidable.
+
+    An emitter empty on one side counts as absence too: the count is read through Position, so a
+    compiled-out Position makes the whole emitter read as zero particles -- which is exactly how
+    NE_C's fossil mirror presents, and it is structural, not random.
+    """
+    if left is None or right is None or set(left) != set(right):
+        return None
+    for name in left:
+        start_a = _first_active(left[name]["n"])
+        start_b = _first_active(right[name]["n"])
+        if (start_a is None) != (start_b is None):
+            side = "mirror" if start_a is not None else "original"
+            return f"'{name}' is empty on the {side} side"
+        mismatch = _channel_mismatch(name, left[name], right[name],
+                                     start_a or 0, start_b or 0, values=False)
+        if mismatch is not None:
+            return mismatch
     return None
 
 
@@ -324,7 +355,11 @@ def l3_side_c(index):
     control = _compare(captured.get("a1"), _counts_per_frame(original))
 
     if control != "exact":
-        verdict = "nondeterministic (the original differs from itself)"
+        # Values are undecidable, but an attribute being absent is structural and survives
+        # randomness -- so it is still judged, and only then does the pair become undecidable.
+        absence = _absence_mismatch(captured.get("a1"), captured.get("b"))
+        verdict = absence if absence is not None \
+            else "nondeterministic (the original differs from itself)"
     else:
         verdict = _compare(captured.get("a1"), captured.get("b"))
 
