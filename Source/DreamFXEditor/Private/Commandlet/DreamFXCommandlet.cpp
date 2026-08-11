@@ -609,29 +609,89 @@ namespace
 			{
 				++Failed;
 
+				// Everything at once, as sets, not the first mismatched line. Reporting only the
+				// first difference cost three fix-and-rerun rounds on one asset, and positional
+				// comparison misattributes: one inserted line makes every later line "differ", which
+				// is how a mirror that *gained* AdvancedAgingRate was read as the original having
+				// lost AnalyticalCollisionPlaneSpace. Count both sides first, then say who has what.
 				TArray<FString> LeftLines;
 				TArray<FString> RightLines;
 				LeftText.ParseIntoArrayLines(LeftLines, /*InCullEmpty=*/false);
 				RightText.ParseIntoArrayLines(RightLines, /*InCullEmpty=*/false);
 
-				const int32 Count = FMath::Max(LeftLines.Num(), RightLines.Num());
-				int32 FirstDifference = Count;
-				for (int32 Index = 0; Index < Count; ++Index)
+				int32 Prefix = 0;
+				while (Prefix < LeftLines.Num() && Prefix < RightLines.Num()
+					&& LeftLines[Prefix] == RightLines[Prefix])
 				{
-					const FString LeftLine = LeftLines.IsValidIndex(Index) ? LeftLines[Index] : TEXT("<end of file>");
-					const FString RightLine = RightLines.IsValidIndex(Index) ? RightLines[Index] : TEXT("<end of file>");
-					if (LeftLine != RightLine)
+					++Prefix;
+				}
+				int32 Suffix = 0;
+				while (Suffix < LeftLines.Num() - Prefix && Suffix < RightLines.Num() - Prefix
+					&& LeftLines[LeftLines.Num() - 1 - Suffix] == RightLines[RightLines.Num() - 1 - Suffix])
+				{
+					++Suffix;
+				}
+
+				UE_LOG(LogDreamFX, Error,
+					TEXT("  L1 FAIL     %s: original %d line(s), mirror %d line(s); first difference at line %d, %d differing line(s) in the middle"),
+					*PackagePath, LeftLines.Num(), RightLines.Num(), Prefix + 1,
+					FMath::Max(LeftLines.Num(), RightLines.Num()) - Prefix - Suffix);
+
+				// The multiset difference of the disagreeing middle: a line both sides carry the same
+				// number of times is agreement however the lines are ordered, so what remains is
+				// exactly "who has what the other does not".
+				TMap<FString, int32> MiddleCounts;
+				for (int32 Index = Prefix; Index < LeftLines.Num() - Suffix; ++Index)
+				{
+					MiddleCounts.FindOrAdd(LeftLines[Index])++;
+				}
+				for (int32 Index = Prefix; Index < RightLines.Num() - Suffix; ++Index)
+				{
+					MiddleCounts.FindOrAdd(RightLines[Index])--;
+				}
+
+				TArray<FString> OnlyOriginal;
+				TArray<FString> OnlyMirror;
+				for (const TPair<FString, int32>& Entry : MiddleCounts)
+				{
+					for (int32 Copy = 0; Copy < FMath::Abs(Entry.Value); ++Copy)
 					{
-						FirstDifference = Index;
-						UE_LOG(LogDreamFX, Error, TEXT("  L1 FAIL     %s at line %d"), *PackagePath, Index + 1);
-						UE_LOG(LogDreamFX, Error, TEXT("                original : %s"), *LeftLine);
-						UE_LOG(LogDreamFX, Error, TEXT("                mirror   : %s"), *RightLine);
-						break;
+						(Entry.Value > 0 ? OnlyOriginal : OnlyMirror).Add(Entry.Key.TrimStart());
 					}
 				}
-				if (FirstDifference == Count)
+				OnlyOriginal.Sort();
+				OnlyMirror.Sort();
+
+				// Capped, and the cap says so -- a silent cap reads as "that was everything".
+				constexpr int32 MaxReported = 40;
+				auto ReportSide = [&](const TCHAR* Side, const TArray<FString>& Lines)
 				{
-					UE_LOG(LogDreamFX, Error, TEXT("  L1 FAIL     %s (differs only in line endings)"), *PackagePath);
+					UE_LOG(LogDreamFX, Error, TEXT("                %s has %d line(s) the other side does not:"),
+						Side, Lines.Num());
+					for (int32 Index = 0; Index < FMath::Min(Lines.Num(), MaxReported); ++Index)
+					{
+						UE_LOG(LogDreamFX, Error, TEXT("                  %s | %s"), Side, *Lines[Index]);
+					}
+					if (Lines.Num() > MaxReported)
+					{
+						UE_LOG(LogDreamFX, Error, TEXT("                  %s | ... and %d more"),
+							Side, Lines.Num() - MaxReported);
+					}
+				};
+				if (OnlyOriginal.Num() > 0)
+				{
+					ReportSide(TEXT("original"), OnlyOriginal);
+				}
+				if (OnlyMirror.Num() > 0)
+				{
+					ReportSide(TEXT("mirror"), OnlyMirror);
+				}
+				if (OnlyOriginal.Num() == 0 && OnlyMirror.Num() == 0)
+				{
+					// Same lines, different order (or only line endings): still a text difference,
+					// and naming the shape stops it being chased as a content loss.
+					UE_LOG(LogDreamFX, Error,
+						TEXT("                both sides carry the same lines; they differ only in order or line endings"));
 				}
 			}
 
