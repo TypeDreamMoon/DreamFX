@@ -122,7 +122,7 @@ SavePackage failed for '%s'.
 Only System documents can be generated right now; this file declares a %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3077`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3093`
 <!-- generated:end DFX5097 -->
 
 **Cause.** Only `.dfs` and `.dfm` produce assets. A `.dfe` is merged into its host by copy (R3) and has nothing of its own to generate.

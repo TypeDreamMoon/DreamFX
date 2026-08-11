@@ -14,7 +14,7 @@
 Cannot decompile a null system.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1843`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1903`
 <!-- generated:end DFX8000 -->
 
 **Cause.** The asset path resolved to nothing, or to something that is not a Niagara System.
@@ -32,7 +32,7 @@ Cannot decompile a null system.
 Could not read emitters: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2026`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2086`
 <!-- generated:end DFX8001 -->
 
 **Cause.** The system's emitters could not be read.
@@ -50,7 +50,7 @@ Could not read emitters: %s
 Skipping emitter '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2043`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2103`
 <!-- generated:end DFX8002 -->
 
 **Cause.** One emitter could not be exported; the rest of the system still was.
@@ -68,7 +68,7 @@ Skipping emitter '%s': %s
 Cannot decompile a null emitter.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2072`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2134`
 <!-- generated:end DFX8003 -->
 
 **Cause.** The Export .dfe entry point was reached with nothing selected, or the selected asset failed to load.
@@ -86,7 +86,7 @@ Cannot decompile a null emitter.
 Could not create a host system to read the emitter through: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2084`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2146`
 <!-- generated:end DFX8004 -->
 
 **Cause.** Reading an emitter needs an owning system: every reader in the Niagara external edit API addresses through one. The throwaway host under `/Temp/DreamFX` could not be created.
@@ -104,7 +104,7 @@ Could not create a host system to read the emitter through: %s
 Could not copy emitter '%s' into a host system: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2108`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2170`
 <!-- generated:end DFX8005 -->
 
 **Cause.** The emitter could not be copied into the host system. Niagara's `AddEmitter` rejected it as a template.
@@ -122,7 +122,7 @@ Could not copy emitter '%s' into a host system: %s
 Could not read emitter '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2127`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2189`
 <!-- generated:end DFX8006 -->
 
 **Cause.** The emitter was copied into the host, but its topology could not be read back.
@@ -200,7 +200,7 @@ Because DFX8010 already ruled out every *known* gap, a mismatch here is a real d
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2948`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2949`
 <!-- generated:end DFX8013 -->
 
 **Cause.** The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its
@@ -219,4 +219,22 @@ If the intent really is to make this text the asset's source of truth, that is *
 move the file out of the decompiled tree into a `DFX/` directory and keep the name it has. Adopt writes
 exactly that arrangement, and refuses when the export would lose something the language cannot express
 yet (DFX8010).
+
+## DFX8014
+
+<!-- generated:begin DFX8014 -->
+**Severity** warning
+
+**Message**
+
+```
+Emitter '%s' inherits from '%s'. The export flattens the inheritance: the merged stack is carried in full, but the rebuilt emitter no longer follows the parent, so later parent edits will change the original and not the mirror.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1299`
+<!-- generated:end DFX8014 -->
+
+**Cause.** The emitter inherits from a parent emitter asset (`VersionedParent` on the asset). The export flattens that inheritance --- and what that does and does not lose was measured before this warning was worded (2026-08-11, `NE_C`/`NE_C002` of `NS_Spawn_Teleport_Root`): an inheriting emitter's own graph *is* the full merged copy, so the export carries the complete effective stack and the rebuilt emitter behaves like the original. What the flattening loses is the **link**. The mirror is an independent emitter; an edit to the parent asset propagates into the original through Niagara's merge machinery and silently never reaches the mirror.
+
+**Fix.** Nothing, if the mirror is a migration snapshot --- the divergence only begins when someone edits the parent. If the parent is still being maintained, either re-export after parent edits (the merged stack picks them up), or keep authoring the original in the editor. A future `from "<parent asset>" inherit` form that rebuilds the link is designed but not committed; this warning is the record of what it would buy.
 
