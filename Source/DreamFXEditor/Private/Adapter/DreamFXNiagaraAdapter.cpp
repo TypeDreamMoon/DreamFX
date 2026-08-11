@@ -3299,8 +3299,8 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
-		/** The graph's event output node with the given usage id, found by reflection. */
-		UNiagaraNode* FindEventOutputNode(UNiagaraGraph& Graph, const FGuid& UsageId)
+		/** The graph's output node with the given usage and usage id, found by reflection. */
+		UNiagaraNode* FindUsageOutputNode(UNiagaraGraph& Graph, ENiagaraScriptUsage Usage, const FGuid& UsageId)
 		{
 			for (UEdGraphNode* GraphNode : Graph.Nodes)
 			{
@@ -3325,13 +3325,33 @@ namespace UE::DreamFX::Editor
 				{
 					UsageValue = AsByte->GetPropertyValue_InContainer(GraphNode);
 				}
-				if (UsageValue == static_cast<int64>(ENiagaraScriptUsage::ParticleEventScript)
+				if (UsageValue == static_cast<int64>(Usage)
 					&& *IdProperty->ContainerPtrToValuePtr<FGuid>(GraphNode) == UsageId)
 				{
 					return Cast<UNiagaraNode>(GraphNode);
 				}
 			}
 			return nullptr;
+		}
+
+		/** The graph's event output node with the given usage id, found by reflection. */
+		UNiagaraNode* FindEventOutputNode(UNiagaraGraph& Graph, const FGuid& UsageId)
+		{
+			return FindUsageOutputNode(Graph, ENiagaraScriptUsage::ParticleEventScript, UsageId);
+		}
+
+		/** Rewrites an output node's usage id in place; the node class is unexported, so reflection. */
+		bool SetOutputNodeUsageId(UNiagaraNode& OutputNode, const FGuid& NewId)
+		{
+			FStructProperty* IdProperty = CastField<FStructProperty>(
+				OutputNode.GetClass()->FindPropertyByName(TEXT("ScriptTypeId")));
+			if (IdProperty == nullptr)
+			{
+				return false;
+			}
+			OutputNode.Modify();
+			*IdProperty->ContainerPtrToValuePtr<FGuid>(&OutputNode) = NewId;
+			return true;
 		}
 
 		/** The node's first pin of the given direction whose type is a parameter map. */
@@ -3347,6 +3367,97 @@ namespace UE::DreamFX::Editor
 				}
 			}
 			return nullptr;
+		}
+
+		/**
+		 * Finds -- or builds -- the graph output node for (Usage, UsageId), fed a parameter map by
+		 * an input node. The graph half of FNiagaraStackGraphUtilities::ResetGraphForOutput
+		 * (unexported), shared by the event and simulation stage stacks: the output node is reused
+		 * when a previous build made one; the engine's version recreates the input node every call
+		 * and leaves the old one dangling, so this one reuses a still-wired input too.
+		 */
+		UNiagaraNode* EnsureUsageOutputNode(UNiagaraGraph& Graph, ENiagaraScriptUsage Usage,
+			const FGuid& UsageId, TArray<FString>& OutErrors)
+		{
+			Graph.Modify();
+			UNiagaraNode* OutputNode = FindUsageOutputNode(Graph, Usage, UsageId);
+
+			if (OutputNode == nullptr)
+			{
+				// The spelling comes from the same enum table the API's own ScriptName resolution
+				// uses, so an upstream rename cannot desynchronise the two.
+				const UEnum* UsageEnum = StaticEnum<ENiagaraScriptUsage>();
+				const FString UsageName = UsageEnum != nullptr
+					? UsageEnum->GetNameStringByValue(static_cast<int64>(Usage)) : FString();
+				UClass* OutputClass = FindObject<UClass>(nullptr, TEXT("/Script/NiagaraEditor.NiagaraNodeOutput"));
+				OutputNode = CreateGraphNodeWithProperties(Graph, OutputClass,
+					[&UsageName, &UsageId](UNiagaraNode& Node)
+				{
+					FProperty* TypeProperty = Node.GetClass()->FindPropertyByName(TEXT("ScriptType"));
+					FStructProperty* IdProperty = CastField<FStructProperty>(
+						Node.GetClass()->FindPropertyByName(TEXT("ScriptTypeId")));
+					FArrayProperty* OutputsProperty = CastField<FArrayProperty>(
+						Node.GetClass()->FindPropertyByName(TEXT("Outputs")));
+					if (TypeProperty == nullptr || IdProperty == nullptr || OutputsProperty == nullptr
+						|| UsageName.IsEmpty())
+					{
+						return false;
+					}
+
+					TypeProperty->ImportText_Direct(*UsageName,
+						TypeProperty->ContainerPtrToValuePtr<void>(&Node), &Node, PPF_None);
+					*IdProperty->ContainerPtrToValuePtr<FGuid>(&Node) = UsageId;
+
+					FScriptArrayHelper Outputs(OutputsProperty,
+						OutputsProperty->ContainerPtrToValuePtr<void>(&Node));
+					const int32 Index = Outputs.AddValue();
+					const FNiagaraVariable OutVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("Out"));
+					OutputsProperty->Inner->CopyCompleteValue(Outputs.GetRawPtr(Index), &OutVariable);
+					return true;
+				});
+				if (OutputNode == nullptr)
+				{
+					OutErrors.Add(TEXT("Could not build the stack's output node (NiagaraNodeOutput unreachable or its shape changed)."));
+					return nullptr;
+				}
+			}
+
+			UEdGraphPin* OutputInPin = FindParameterMapPin(*OutputNode, EGPD_Input);
+			if (OutputInPin == nullptr)
+			{
+				OutErrors.Add(TEXT("The stack's output node has no parameter map input pin."));
+				return nullptr;
+			}
+
+			if (OutputInPin->LinkedTo.Num() == 0)
+			{
+				UClass* InputClass = FindObject<UClass>(nullptr, TEXT("/Script/NiagaraEditor.NiagaraNodeInput"));
+				UNiagaraNode* InputNode = CreateGraphNodeWithProperties(Graph, InputClass, [](UNiagaraNode& Node)
+				{
+					if (!SetVariableProperty(Node, TEXT("Input"),
+						FNiagaraVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("InputMap"))))
+					{
+						return false;
+					}
+					FProperty* UsageProperty = Node.GetClass()->FindPropertyByName(TEXT("Usage"));
+					if (UsageProperty == nullptr)
+					{
+						return false;
+					}
+					UsageProperty->ImportText_Direct(TEXT("Parameter"),
+						UsageProperty->ContainerPtrToValuePtr<void>(&Node), &Node, PPF_None);
+					return true;
+				});
+				UEdGraphPin* InputOutPin = InputNode != nullptr
+					? FindParameterMapPin(*InputNode, EGPD_Output) : nullptr;
+				if (InputOutPin == nullptr)
+				{
+					OutErrors.Add(TEXT("Could not build the stack's input node."));
+					return nullptr;
+				}
+				OutputInPin->MakeLinkTo(InputOutPin);
+			}
+			return OutputNode;
 		}
 	}
 
@@ -3451,81 +3562,13 @@ namespace UE::DreamFX::Editor
 
 		Emitter->AddEventHandler(Properties, Instance.Version);
 
-		// The graph half of FNiagaraStackGraphUtilities::ResetGraphForOutput (unexported), for the
-		// zero-id event usage: an output node fed a parameter map by an input node. The output node
-		// is reused when a previous build made one; the engine's version recreates the input node
-		// every call and leaves the old one dangling, so this one reuses a still-wired input too.
-		Graph->Modify();
-		UNiagaraNode* OutputNode = FindEventOutputNode(*Graph, FGuid());
-
+		// The graph half of the recipe, shared with the simulation stages (EnsureUsageOutputNode):
+		// an output node for the zero-id event usage, fed a parameter map by an input node.
+		UNiagaraNode* OutputNode = EnsureUsageOutputNode(*Graph,
+			ENiagaraScriptUsage::ParticleEventScript, FGuid(), OutErrors);
 		if (OutputNode == nullptr)
 		{
-			UClass* OutputClass = FindObject<UClass>(nullptr, TEXT("/Script/NiagaraEditor.NiagaraNodeOutput"));
-			OutputNode = CreateGraphNodeWithProperties(*Graph, OutputClass, [](UNiagaraNode& Node)
-			{
-				FProperty* TypeProperty = Node.GetClass()->FindPropertyByName(TEXT("ScriptType"));
-				FStructProperty* IdProperty = CastField<FStructProperty>(
-					Node.GetClass()->FindPropertyByName(TEXT("ScriptTypeId")));
-				FArrayProperty* OutputsProperty = CastField<FArrayProperty>(
-					Node.GetClass()->FindPropertyByName(TEXT("Outputs")));
-				if (TypeProperty == nullptr || IdProperty == nullptr || OutputsProperty == nullptr)
-				{
-					return false;
-				}
-
-				const TCHAR* UsageName = TEXT("ParticleEventScript");
-				TypeProperty->ImportText_Direct(UsageName,
-					TypeProperty->ContainerPtrToValuePtr<void>(&Node), &Node, PPF_None);
-				*IdProperty->ContainerPtrToValuePtr<FGuid>(&Node) = FGuid();
-
-				FScriptArrayHelper Outputs(OutputsProperty,
-					OutputsProperty->ContainerPtrToValuePtr<void>(&Node));
-				const int32 Index = Outputs.AddValue();
-				const FNiagaraVariable OutVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("Out"));
-				OutputsProperty->Inner->CopyCompleteValue(Outputs.GetRawPtr(Index), &OutVariable);
-				return true;
-			});
-			if (OutputNode == nullptr)
-			{
-				OutErrors.Add(TEXT("Could not build the event stack's output node (NiagaraNodeOutput unreachable or its shape changed)."));
-				return false;
-			}
-		}
-
-		UEdGraphPin* OutputInPin = FindParameterMapPin(*OutputNode, EGPD_Input);
-		if (OutputInPin == nullptr)
-		{
-			OutErrors.Add(TEXT("The event output node has no parameter map input pin."));
 			return false;
-		}
-
-		if (OutputInPin->LinkedTo.Num() == 0)
-		{
-			UClass* InputClass = FindObject<UClass>(nullptr, TEXT("/Script/NiagaraEditor.NiagaraNodeInput"));
-			UNiagaraNode* InputNode = CreateGraphNodeWithProperties(*Graph, InputClass, [](UNiagaraNode& Node)
-			{
-				if (!SetVariableProperty(Node, TEXT("Input"),
-					FNiagaraVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("InputMap"))))
-				{
-					return false;
-				}
-				FProperty* UsageProperty = Node.GetClass()->FindPropertyByName(TEXT("Usage"));
-				if (UsageProperty == nullptr)
-				{
-					return false;
-				}
-				UsageProperty->ImportText_Direct(TEXT("Parameter"),
-					UsageProperty->ContainerPtrToValuePtr<void>(&Node), &Node, PPF_None);
-				return true;
-			});
-			UEdGraphPin* InputOutPin = InputNode != nullptr
-				? FindParameterMapPin(*InputNode, EGPD_Output) : nullptr;
-			if (InputOutPin == nullptr)
-			{
-				OutErrors.Add(TEXT("Could not build the event stack's input node."));
-				return false;
-			}
-			OutputInPin->MakeLinkTo(InputOutPin);
 		}
 
 		OutputNode->MarkNodeRequiresSynchronization(TEXT("DreamFX event handler"),
@@ -3626,6 +3669,404 @@ namespace UE::DreamFX::Editor
 					*IdProperty->ContainerPtrToValuePtr<FGuid>(OutputNode) = FGuid();
 				}
 			}
+		}
+		return true;
+	}
+
+	namespace
+	{
+		/**
+		 * The declared type of a graph parameter, by name, off the graph's variable map. The map is
+		 * a private UPROPERTY (VariableToScriptVariable), which reflection reads fine -- the same
+		 * route FGraphSurgeon takes for it on the `.dfm` side.
+		 */
+		bool FindGraphVariableTypeByName(UNiagaraGraph& Graph, FName VariableName,
+			FNiagaraTypeDefinition& OutType)
+		{
+			FMapProperty* MapProperty = CastField<FMapProperty>(
+				Graph.GetClass()->FindPropertyByName(TEXT("VariableToScriptVariable")));
+			if (MapProperty == nullptr
+				|| CastField<FStructProperty>(MapProperty->KeyProp) == nullptr
+				|| CastField<FStructProperty>(MapProperty->KeyProp)->Struct != FNiagaraVariable::StaticStruct())
+			{
+				return false;
+			}
+			FScriptMapHelper Map(MapProperty, MapProperty->ContainerPtrToValuePtr<void>(&Graph));
+			for (FScriptMapHelper::FIterator It(Map); It; ++It)
+			{
+				const FNiagaraVariable* Key = reinterpret_cast<const FNiagaraVariable*>(
+					Map.GetKeyPtr(It.GetInternalIndex()));
+				if (Key != nullptr && Key->GetName() == VariableName)
+				{
+					OutType = Key->GetType();
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/** The engine's usage-id convention for a stage: the merge id the stage was born with. */
+		FGuid DurableStageId(const UNiagaraSimulationStageBase& Stage)
+		{
+			return Stage.GetMergeId();
+		}
+	}
+
+	bool FNiagaraAdapter::BeginSimulationStageEdit(const FStackAddress& EmitterAddress,
+		const UE::DreamFX::FSimulationStageSpec& Spec, int32 DeclarationIndex, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("BeginSimulationStageEdit"));
+		UNiagaraSystem* System = EmitterAddress.System;
+		if (System == nullptr || EmitterAddress.EmitterName.IsNone() || Spec.Name.IsEmpty())
+		{
+			OutErrors.Add(TEXT("Cannot edit a simulation stage without a system, an emitter and a stage name."));
+			return false;
+		}
+
+		const FNiagaraEmitterHandle* Handle = HandleForName(System, EmitterAddress.EmitterName.ToString());
+		if (Handle == nullptr || Handle->GetInstance().Emitter == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("'%s' has no emitter named '%s' to host a simulation stage."),
+				*System->GetName(), *EmitterAddress.EmitterName.ToString()));
+			return false;
+		}
+
+		const FVersionedNiagaraEmitter Instance = Handle->GetInstance();
+		UNiagaraEmitter* Emitter = Instance.Emitter;
+		FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Instance.Version);
+		UNiagaraGraph* Graph = GraphForAddress(EmitterAddress);
+		if (Data == nullptr || Graph == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Emitter '%s' has no reachable graph to host a stage stack."),
+				*EmitterAddress.EmitterName.ToString()));
+			return false;
+		}
+
+		FEpochGuard Epoch(System);
+		System->Modify();
+		Emitter->Modify();
+
+		// The time slice: exactly one stage may sit on the zero usage id, and only between this
+		// call and EndSimulationStageEdit. A leftover zero id from another stage is a broken slice,
+		// not a state to silently adopt.
+		const FName StageName(*Spec.Name);
+		UNiagaraSimulationStageGeneric* Stage = nullptr;
+		for (UNiagaraSimulationStageBase* Existing : Data->GetSimulationStages())
+		{
+			if (Existing == nullptr)
+			{
+				continue;
+			}
+			if (Existing->Script != nullptr && Existing->Script->GetUsageId() == FGuid()
+				&& Existing->SimulationStageName != StageName)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("Stage '%s' still holds the zero usage id while '%s' asks for it -- a previous stage edit was not ended."),
+					*Existing->SimulationStageName.ToString(), *Spec.Name));
+				return false;
+			}
+			if (Existing->SimulationStageName == StageName && Stage == nullptr)
+			{
+				UNiagaraSimulationStageGeneric* AsGeneric = Cast<UNiagaraSimulationStageGeneric>(Existing);
+				if (AsGeneric == nullptr)
+				{
+					OutErrors.Add(FString::Printf(
+						TEXT("Stage '%s' is a %s, which this writer cannot configure."),
+						*Spec.Name, *Existing->GetClass()->GetName()));
+					return false;
+				}
+				if (AsGeneric->Script == nullptr)
+				{
+					OutErrors.Add(FString::Printf(TEXT("Stage '%s' has no script object to edit."), *Spec.Name));
+					return false;
+				}
+				Stage = AsGeneric;
+			}
+		}
+
+		FGuid PreviousId;
+		if (Stage == nullptr)
+		{
+			// The engine UI's own recipe (NiagaraStackEmitterPropertiesGroup.cpp, AddSimulationStage):
+			// stage object on the emitter, script owned BY the stage, source shared with the emitter.
+			// The one deliberate difference: the script parks on the ZERO usage id first, so the
+			// existing rails (AddModule / SetInput / stack reads) can address the stage's stack as
+			// `ScriptName = "ParticleSimulationStageScript"`; EndSimulationStageEdit moves it to the
+			// engine's own convention (the merge id) once the stack is written.
+			Stage = NewObject<UNiagaraSimulationStageGeneric>(Emitter, NAME_None, RF_Transactional);
+			Stage->Script = NewObject<UNiagaraScript>(Stage,
+				MakeUniqueObjectName(Stage, UNiagaraScript::StaticClass(), TEXT("SimulationStage")),
+				RF_Transactional);
+			Stage->Script->SetUsage(ENiagaraScriptUsage::ParticleSimulationStageScript);
+			Stage->Script->SetLatestSource(Data->GraphSource);
+			Stage->SimulationStageName = StageName;
+			Emitter->AddSimulationStage(Stage, Instance.Version);
+		}
+		else
+		{
+			PreviousId = Stage->Script->GetUsageId();
+		}
+
+		// Park on zero: script first, then the output node that carried the previous id (a fresh
+		// stage has neither yet -- EnsureUsageOutputNode builds it below).
+		Stage->Script->SetUsageId(FGuid());
+		if (PreviousId != FGuid())
+		{
+			if (UNiagaraNode* OldNode = FindUsageOutputNode(*Graph,
+				ENiagaraScriptUsage::ParticleSimulationStageScript, PreviousId))
+			{
+				SetOutputNodeUsageId(*OldNode, FGuid());
+			}
+		}
+
+		UNiagaraNode* OutputNode = EnsureUsageOutputNode(*Graph,
+			ENiagaraScriptUsage::ParticleSimulationStageScript, FGuid(), OutErrors);
+		if (OutputNode == nullptr)
+		{
+			return false;
+		}
+
+		// Declaration order is stage order; the engine exports the move.
+		const int32 StageCount = Data->GetSimulationStages().Num();
+		const int32 TargetIndex = FMath::Clamp(DeclarationIndex, 0, FMath::Max(0, StageCount - 1));
+		Emitter->MoveSimulationStageToIndex(Stage, TargetIndex, Instance.Version);
+
+		OutputNode->MarkNodeRequiresSynchronization(TEXT("DreamFX simulation stage"),
+			/*bRaiseGraphNeedsRecompile=*/true);
+		return true;
+	}
+
+	bool FNiagaraAdapter::EndSimulationStageEdit(const FStackAddress& EmitterAddress,
+		const UE::DreamFX::FSimulationStageSpec& Spec, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("EndSimulationStageEdit"));
+		UNiagaraSystem* System = EmitterAddress.System;
+		const FNiagaraEmitterHandle* Handle = System != nullptr
+			? HandleForName(System, EmitterAddress.EmitterName.ToString()) : nullptr;
+		if (Handle == nullptr || Handle->GetInstance().Emitter == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot end a stage edit on an unresolvable emitter."));
+			return false;
+		}
+
+		const FVersionedNiagaraEmitter Instance = Handle->GetInstance();
+		FVersionedNiagaraEmitterData* Data = Instance.Emitter->GetEmitterData(Instance.Version);
+		UNiagaraGraph* Graph = GraphForAddress(EmitterAddress);
+		if (Data == nullptr || Graph == nullptr)
+		{
+			OutErrors.Add(TEXT("The emitter has no reachable data or graph."));
+			return false;
+		}
+
+		UNiagaraSimulationStageGeneric* Stage = nullptr;
+		for (UNiagaraSimulationStageBase* Existing : Data->GetSimulationStages())
+		{
+			if (Existing != nullptr && Existing->Script != nullptr
+				&& Existing->Script->GetUsageId() == FGuid())
+			{
+				Stage = Cast<UNiagaraSimulationStageGeneric>(Existing);
+				break;
+			}
+		}
+		if (Stage == nullptr || Stage->SimulationStageName != FName(*Spec.Name))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("No stage named '%s' is parked on the zero usage id -- Begin/End are out of step."),
+				*Spec.Name));
+			return false;
+		}
+
+		FEpochGuard Epoch(System);
+		System->Modify();
+		Instance.Emitter->Modify();
+
+		// The configuration lands here, after the stack: the data interface binding names a graph
+		// parameter the stack writes are what create, so resolving its type any earlier reads a
+		// graph that does not hold it yet.
+		if (Spec.Enabled.IsSet())
+		{
+			Stage->bEnabled = Spec.Enabled.GetValue() ? 1 : 0;
+		}
+		{
+			const UEnum* SourceEnum = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraCore.ENiagaraIterationSource"));
+			FString IterationName = Spec.Iteration;
+			if (IterationName.IsEmpty())
+			{
+				IterationName = Spec.DataInterface.IsEmpty() ? TEXT("Particles") : TEXT("DataInterface");
+			}
+			const int64 IterationValue = SourceEnum != nullptr
+				? SourceEnum->GetValueByNameString(IterationName) : static_cast<int64>(INDEX_NONE);
+			if (IterationValue == INDEX_NONE)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("'%s' is not an iteration source. Valid: Particles, DataInterface, DirectSet."),
+					*IterationName));
+				return false;
+			}
+			Stage->IterationSource = static_cast<ENiagaraIterationSource>(IterationValue);
+		}
+		if (!Spec.DataInterface.IsEmpty())
+		{
+			const FName BindingName(*Spec.DataInterface);
+			FNiagaraTypeDefinition BindingType;
+			if (!FindGraphVariableTypeByName(*Graph, BindingName, BindingType)
+				|| !BindingType.IsDataInterface())
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("Stage '%s' binds data interface '%s', but the emitter graph declares no data interface parameter of that name. Declare it (a module input or a Defaults entry) before the Stage block names it."),
+					*Spec.Name, *Spec.DataInterface));
+				return false;
+			}
+			Stage->DataInterface.BoundVariable = FNiagaraVariable(BindingType, BindingName);
+		}
+		if (Spec.NumIterations.IsSet())
+		{
+			// The count is a binding-with-value; only the default half is written, and only when
+			// the underlying parameter is the int32 the engine constructs it as.
+			if (Stage->NumIterations.GetDefaultValueEditorOnly().Num() != sizeof(int32))
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("Stage '%s': NumIterations is no longer an int32 underneath -- the engine's stage shape changed."),
+					*Spec.Name));
+				return false;
+			}
+			const int32 Iterations = FMath::Max(1, Spec.NumIterations.GetValue());
+			Stage->NumIterations.SetDefaultValueEditorOnly(
+				MakeArrayView(reinterpret_cast<const uint8*>(&Iterations), sizeof(int32)));
+		}
+
+		// The end of the time slice: the stage moves to the engine's own id convention (its merge
+		// id -- the same id the stack UI assigns at creation), script and output node in lockstep.
+		const FGuid Durable = DurableStageId(*Stage);
+		UNiagaraNode* OutputNode = FindUsageOutputNode(*Graph,
+			ENiagaraScriptUsage::ParticleSimulationStageScript, FGuid());
+		if (OutputNode == nullptr || !SetOutputNodeUsageId(*OutputNode, Durable))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Stage '%s' has no zero-id output node to move to its durable id."), *Spec.Name));
+			return false;
+		}
+		Stage->Script->SetUsageId(Durable);
+
+		OutputNode->MarkNodeRequiresSynchronization(TEXT("DreamFX simulation stage id"),
+			/*bRaiseGraphNeedsRecompile=*/true);
+		return true;
+	}
+
+	bool FNiagaraAdapter::RemoveUndeclaredSimulationStages(const FStackAddress& EmitterAddress,
+		const TArray<FName>& DeclaredNames, int32& OutRemoved, TArray<FString>& OutErrors)
+	{
+		OutRemoved = 0;
+		UNiagaraSystem* System = EmitterAddress.System;
+		const FNiagaraEmitterHandle* Handle = System != nullptr
+			? HandleForName(System, EmitterAddress.EmitterName.ToString()) : nullptr;
+		if (Handle == nullptr || Handle->GetInstance().Emitter == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot remove stages from an unresolvable emitter."));
+			return false;
+		}
+
+		const FVersionedNiagaraEmitter Instance = Handle->GetInstance();
+		FVersionedNiagaraEmitterData* Data = Instance.Emitter->GetEmitterData(Instance.Version);
+		UNiagaraGraph* Graph = GraphForAddress(EmitterAddress);
+		if (Data == nullptr || Graph == nullptr)
+		{
+			return true;
+		}
+
+		// Copy first: the removal below edits the array being walked.
+		TArray<UNiagaraSimulationStageBase*> Undeclared;
+		for (UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
+		{
+			if (Stage != nullptr && !DeclaredNames.Contains(Stage->SimulationStageName))
+			{
+				Undeclared.Add(Stage);
+			}
+		}
+
+		for (UNiagaraSimulationStageBase* Stage : Undeclared)
+		{
+			FEpochGuard Epoch(System);
+			System->Modify();
+			Instance.Emitter->Modify();
+
+			// Park on zero to make the stack addressable, clear it (the module nodes hang off the
+			// output node and would otherwise stay behind as orphans), then take the stage, its
+			// output node and the parked id out together.
+			const FGuid OldId = Stage->Script != nullptr ? Stage->Script->GetUsageId() : FGuid();
+			if (Stage->Script != nullptr && OldId != FGuid())
+			{
+				Stage->Script->SetUsageId(FGuid());
+				if (UNiagaraNode* OldNode = FindUsageOutputNode(*Graph,
+					ENiagaraScriptUsage::ParticleSimulationStageScript, OldId))
+				{
+					SetOutputNodeUsageId(*OldNode, FGuid());
+				}
+			}
+
+			TArray<FString> ClearErrors;
+			ClearScriptStack(EmitterAddress.WithScript(TEXT("ParticleSimulationStageScript")), ClearErrors);
+
+			Instance.Emitter->RemoveSimulationStage(Stage, Instance.Version);
+			if (UNiagaraNode* OutputNode = FindUsageOutputNode(*Graph,
+				ENiagaraScriptUsage::ParticleSimulationStageScript, FGuid()))
+			{
+				Graph->Modify();
+				Graph->RemoveNode(OutputNode);
+			}
+			++OutRemoved;
+		}
+		return true;
+	}
+
+	bool FNiagaraAdapter::FocusSimulationStageForRead(const FStackAddress& EmitterAddress,
+		int32 StageIndex, TArray<FString>& OutErrors)
+	{
+		UNiagaraSystem* System = EmitterAddress.System;
+		const FNiagaraEmitterHandle* Handle = System != nullptr
+			? HandleForName(System, EmitterAddress.EmitterName.ToString()) : nullptr;
+		if (Handle == nullptr || Handle->GetInstance().Emitter == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot focus a stage on an unresolvable emitter."));
+			return false;
+		}
+
+		const FVersionedNiagaraEmitter Instance = Handle->GetInstance();
+		FVersionedNiagaraEmitterData* Data = Instance.Emitter->GetEmitterData(Instance.Version);
+		UNiagaraGraph* Graph = GraphForAddress(EmitterAddress);
+		if (Data == nullptr || Graph == nullptr)
+		{
+			OutErrors.Add(TEXT("The emitter has no reachable data or graph."));
+			return false;
+		}
+		if (!Data->GetSimulationStages().IsValidIndex(StageIndex))
+		{
+			OutErrors.Add(FString::Printf(TEXT("The emitter has no simulation stage at index %d."), StageIndex));
+			return false;
+		}
+
+		FEpochGuard Epoch(System);
+		const TArray<UNiagaraSimulationStageBase*>& Stages = Data->GetSimulationStages();
+		for (int32 Index = 0; Index < Stages.Num(); ++Index)
+		{
+			UNiagaraSimulationStageBase* Stage = Stages[Index];
+			if (Stage == nullptr || Stage->Script == nullptr)
+			{
+				continue;
+			}
+			const FGuid CurrentId = Stage->Script->GetUsageId();
+			const FGuid WantedId = Index == StageIndex ? FGuid() : DurableStageId(*Stage);
+			if (CurrentId == WantedId)
+			{
+				continue;
+			}
+			// Node first, while the current id still finds it; then the script, both in lockstep.
+			if (UNiagaraNode* OutputNode = FindUsageOutputNode(*Graph,
+				ENiagaraScriptUsage::ParticleSimulationStageScript, CurrentId))
+			{
+				SetOutputNodeUsageId(*OutputNode, WantedId);
+			}
+			Stage->Script->SetUsageId(WantedId);
 		}
 		return true;
 	}
@@ -3771,6 +4212,9 @@ namespace UE::DreamFX::Editor
 			// The zero-usage-id event stack: addressable through the same reference machinery as the
 			// six main stacks, because its usage id is the one the references hard-code.
 			case EStackKind::EventHandler:   OutUsage = ENiagaraScriptUsage::ParticleEventScript;  return true;
+			// The stage stack borrows the same zero id as a TIME SLICE (one stage at a time,
+			// Begin/EndSimulationStageEdit) rather than an identity.
+			case EStackKind::SimulationStage: OutUsage = ENiagaraScriptUsage::ParticleSimulationStageScript; return true;
 			default: return false;
 			}
 		}
@@ -4361,7 +4805,7 @@ namespace UE::DreamFX::Editor
 			EStackKind::SystemSpawn, EStackKind::SystemUpdate,
 			EStackKind::EmitterSpawn, EStackKind::EmitterUpdate,
 			EStackKind::ParticleSpawn, EStackKind::ParticleUpdate,
-			EStackKind::EventHandler,
+			EStackKind::EventHandler, EStackKind::SimulationStage,
 		};
 
 		// The API is not consistent about which spelling it uses: writes take the qualified name

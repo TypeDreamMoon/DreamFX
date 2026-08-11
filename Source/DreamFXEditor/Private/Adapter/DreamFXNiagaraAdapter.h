@@ -962,6 +962,47 @@ namespace UE::DreamFX::Editor
 		static bool GetEmitterSimulationStages(const FStackAddress& EmitterAddress,
 			TArray<FSimulationStageSummary>& OutStages, TArray<FString>& OutErrors);
 
+		/**
+		 * The write half of the stage machinery: create -- or reuse, by name -- THE named stage on
+		 * an emitter and park its script on the ZERO usage id, so the existing rails can address its
+		 * stack as `ScriptName = "ParticleSimulationStageScript"`. The event handler's trick, with
+		 * one difference that changes everything: stages are many per emitter, so the zero id is a
+		 * TIME SLICE, not an identity. Begin parks one stage on it, the caller writes the stack
+		 * through the ordinary rails, EndSimulationStageEdit moves the stage to its durable id (the
+		 * stage's merge id -- the engine's own convention at creation). Only one stage may hold the
+		 * slice at a time; Begin refuses a second.
+		 *
+		 * DeclarationIndex is the stage's position in source order, applied through the engine's
+		 * exported MoveSimulationStageToIndex.
+		 */
+		static bool BeginSimulationStageEdit(const FStackAddress& EmitterAddress,
+			const UE::DreamFX::FSimulationStageSpec& Spec, int32 DeclarationIndex,
+			TArray<FString>& OutErrors);
+
+		/**
+		 * Applies the spec's configuration and ends the time slice: script and output node move to
+		 * the durable id in lockstep. Configuration lands HERE, after the stack, because the data
+		 * interface binding names a graph parameter that only exists once the stack wrote it.
+		 */
+		static bool EndSimulationStageEdit(const FStackAddress& EmitterAddress,
+			const UE::DreamFX::FSimulationStageSpec& Spec, TArray<FString>& OutErrors);
+
+		/**
+		 * Removes stages the source no longer declares, so a deleted Stage block actually deletes.
+		 * Each removal parks the stage on the zero id first, clears its stack (the module nodes hang
+		 * off the output node and would otherwise survive as orphans), then removes stage and node.
+		 */
+		static bool RemoveUndeclaredSimulationStages(const FStackAddress& EmitterAddress,
+			const TArray<FName>& DeclaredNames, int32& OutRemoved, TArray<FString>& OutErrors);
+
+		/**
+		 * The read half of the time slice, on a COPY: parks stage [StageIndex] on the zero id and
+		 * every other stage on its durable id, output nodes in lockstep, after which the existing
+		 * stack read rails see exactly that one stage. Never call it on an asset anyone keeps.
+		 */
+		static bool FocusSimulationStageForRead(const FStackAddress& EmitterAddress, int32 StageIndex,
+			TArray<FString>& OutErrors);
+
 		/** The live emitter instance behind a handle name, for callers that must copy it somewhere. */
 		static UNiagaraEmitter* GetEmitterInstance(const FStackAddress& EmitterAddress);
 

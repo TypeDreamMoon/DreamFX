@@ -133,6 +133,8 @@ public class DreamFXEditor : ModuleRules
 				"Json",
 				"JsonUtilities",
 				"Niagara",
+				// GetMergeId (the durable stage usage id) is NIAGARACORE_API, not NIAGARA_API.
+				"NiagaraCore",
 				"NiagaraEditor",
 				"Projects",
 				"Slate",

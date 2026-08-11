@@ -275,6 +275,28 @@ namespace UE::DreamFX
 		TOptional<int32> MinSpawnNumber;
 	};
 
+	/**
+	 * The arguments of a `Stage(...)` block. Only meaningful on a stack whose Kind is
+	 * SimulationStage.
+	 *
+	 * Name is the stage's display name and its rebuild identity (usage ids are guids no rebuild can
+	 * reproduce; the name is the spelling that survives the original/mirror boundary). Everything
+	 * else defaults to the engine's own defaults on the generic stage class, and an unset optional
+	 * keeps them -- the census (stages-census-2026-08-12) is what decided which knobs earn a
+	 * spelling: iteration source, the bound data interface, the iteration count and the enabled
+	 * flag are all in real content; the rest arrives when an asset-level diff shows a non-default.
+	 */
+	struct FSimulationStageSpec
+	{
+		FString Name;
+		/** ENiagaraIterationSource entry (Particles / DataInterface / DirectSet). Empty = Particles. */
+		FString Iteration;
+		/** The bound data interface variable ("Emitter.PressureGrid"); implies DataInterface iteration. */
+		FString DataInterface;
+		TOptional<int32> NumIterations;
+		TOptional<bool> Enabled;
+	};
+
 	struct FStack
 	{
 		EStackKind Kind = EStackKind::ParticleUpdate;
@@ -282,6 +304,8 @@ namespace UE::DreamFX
 		FString Name;
 		/** `OnEvent(...)` arguments; default-constructed on every other stack kind. */
 		FEventHandlerSpec Handler;
+		/** `Stage(...)` arguments; default-constructed on every other stack kind. */
+		FSimulationStageSpec Stage;
 		TArray<FStatement> Statements;
 		FSourceLocation Location;
 
