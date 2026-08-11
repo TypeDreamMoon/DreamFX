@@ -2829,20 +2829,21 @@ namespace UE::DreamFX::Editor
 #if !DREAMFX_HAS_NIAGARA_FAST_EDIT
 					// This used to say the stock API had no way to write a default mode. It has: the
 					// graph's script variable is reachable and its DefaultMode is public, so defaults
-					// now land on this engine too. What is left is narrower and worth naming exactly --
-					// a parameter that *no link write ever created*, because nothing in the system
-					// writes it. There is no graph parameter to give a default to.
+					// land on this engine too. What is left is a parameter that no link write ever
+					// created, because nothing in the source writes it.
 					//
-					// Which makes it an asset-level defect, not an engine gap, and the two engines
-					// disagree only about whether you are told: MoonEngine's defaults call creates the
-					// parameter and hands back the type's zero, so the build passes and the defect is
-					// invisible. NS_Spawn_Ground_Root is the worked example -- nothing writes
-					// Particles.MySize, so `MeshUniformScale = 1.0 * Particles.MySize` is a decal
-					// scaled to zero, and it has been drawing nothing on both engines all along.
+					// It then said that meant the *asset* did not write it either, and named
+					// NS_Spawn_Ground_Root as an effect with a scale of zero drawing nothing. That was
+					// wrong twice over, and worth spelling out because the shape recurs: the source is
+					// this exporter's output, so reading "the text has no writer" as "the asset has no
+					// writer" uses the lossy step as evidence about what went into it. The asset did
+					// write it. The export had dropped a static switch several stacks away, and the
+					// name in the error had nothing to do with the name of what was lost.
 					//
-					// DreamFX deliberately does not create the parameter to make this pass; see the
-					// decision record in Plan/open-problems-fixes.md (2026-08-10). The pipeline's job
-					// is to keep the defect visible, not to supply a value the source never asked for.
+					// Fixed at the source of the loss -- see the note on switches in
+					// DreamFXDecompiler.cpp -- so an export produced by this build should not reach
+					// here for that reason. If it still does, read the message literally: some read
+					// really does precede every write, and the fix is in the source's ordering.
 					//
 					// Matched on the message text, which is localised -- hence both spellings. Missing
 					// the match costs an explanation, never a diagnosis, so a loose match is the right
@@ -2851,7 +2852,7 @@ namespace UE::DreamFX::Editor
 						|| Event.Message.Contains(TEXT("在设置之前被读取")))
 					{
 						Diagnostics.Info(TEXT("DFX6007"), Location,
-							TEXT("Nothing in this system writes that parameter, so there is no graph parameter for a default to sit on and Niagara refuses the read. This is a defect in the effect rather than a limit of this engine -- an engine carrying the MoonEngine Niagara additions creates the parameter and quietly hands back the type's zero, so the same source builds there and the effect silently does nothing (a scale that reads an unwritten value draws nothing either way). Fix it at the source: write the parameter before whatever reads it -- for an 'Emitter.<Module>.<Output>' name, move the module that produces it ahead of its readers -- or drop the read. DreamFX will not invent the parameter to make the build pass; that would hide the defect on every engine instead of one."));
+							TEXT("Nothing in this source writes that parameter, so there is no graph parameter for a default to sit on and Niagara refuses the read. Check the asset before the effect: the decompiler drops any module input whose value matches a freshly probed module, and a value the author set that happens to equal the default is dropped with them -- NS_Spawn_Ground_Root reads Particles.MySize and builds clean once the suppressed writes are exported, so its text was missing a write its asset had. If the source really is the whole story, write the parameter before whatever reads it -- for an 'Emitter.<Module>.<Output>' name, move the module that produces it ahead of its readers -- or drop the read. Building on an engine with the MoonEngine additions makes the message go away by supplying the type's zero, which is not the same as making the effect work."));
 					}
 #endif
 				}
