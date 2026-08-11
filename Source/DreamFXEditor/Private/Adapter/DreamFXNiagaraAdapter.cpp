@@ -2706,6 +2706,36 @@ namespace UE::DreamFX::Editor
 		return !System->HasActiveCompilations() && !System->NeedsRequestCompile();
 	}
 
+	/**
+	 * Re-resolves every renderer's attribute bindings against the emitter that now has attributes.
+	 *
+	 * A binding carries a derived flag, bBindingExistsOnSource, which is what the renderer consults
+	 * before it will read the attribute at all -- CacheValues sets it from CanObtainParticleAttribute,
+	 * and it starts false. The engine's own editor gets it for free because every property edit ends
+	 * in UpdateSourceModeDerivates; a built asset never edits a property, so its bindings stay false
+	 * and the renderer silently falls back to defaults. Particles.Color unread is a white particle,
+	 * which is how NS_Spawn_Teleport_Root's runes came back white with an export that round-trips
+	 * byte for byte -- the flag is derived state, so it is in no export and no L1/L2/L3 check sees it.
+	 *
+	 * It has to run after compilation: CanObtainParticleAttribute answers from the compiled
+	 * attribute set, so the same call before WaitForCompilationComplete would set every flag false.
+	 *
+	 * The system-level entry is the one to call, not the per-renderer UpdateSourceModeDerivates that
+	 * does the work: that one is protected, and this one is what the engine itself calls after a
+	 * compile (NiagaraSystem.cpp, post-compile) -- it walks the emitters and hands each renderer the
+	 * data set it should resolve against, which is more than the loop here would have done.
+	 */
+	void FNiagaraAdapter::RefreshRendererBindings(UNiagaraSystem* System)
+	{
+		if (System == nullptr)
+		{
+			return;
+		}
+
+		System->CacheFromCompiledData();
+		UE_LOG(LogDreamFX, Verbose, TEXT("Re-resolved renderer bindings on '%s'"), *System->GetName());
+	}
+
 	bool FNiagaraAdapter::WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,
 		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
 	{
@@ -2719,6 +2749,8 @@ namespace UE::DreamFX::Editor
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete begin '%s'"), *System->GetName());
 		System->WaitForCompilationComplete(bIncludingGpuShaders, /*bShowProgress=*/false);
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete end '%s'"), *System->GetName());
+
+		RefreshRendererBindings(System);
 
 		FNiagaraExternalEditContext Context(System);
 		FNiagaraExt_SystemCompileState State;

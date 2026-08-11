@@ -776,6 +776,13 @@ namespace UE::DreamFX::Editor
 			FCompileStateInfo& OutState, TArray<FString>& OutErrors);
 
 		/**
+		 * Re-resolves renderer attribute bindings against the compiled emitter. Called by the two
+		 * compile waits; public because a caller that compiles by some other route still needs it.
+		 * Runs only after compilation -- see the definition for why earlier is worse than not at all.
+		 */
+		static void RefreshRendererBindings(UNiagaraSystem* System);
+
+		/**
 		 * Closes every compile launch site on the system for the scope's lifetime.
 		 *
 		 * A generation window performs hundreds of structural edits, and several engine paths compile
