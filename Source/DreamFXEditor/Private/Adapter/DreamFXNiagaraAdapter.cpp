@@ -1768,7 +1768,27 @@ namespace UE::DreamFX::Editor
 				TEXT("DreamFXTemplateEmitter")), RF_Transactional);
 		UNiagaraEmitterFactoryNew::InitializeEmitter(Template, /*bAddDefaultModulesAndRenderers=*/false);
 
-		return AddEmitterFromTemplate(System, Template, EmitterName, OutErrors);
+		if (!AddEmitterFromTemplate(System, Template, EmitterName, OutErrors))
+		{
+			return false;
+		}
+
+		// The factory's versioning bookkeeping leaves VersionedParent carrying a version guid with no
+		// parent emitter -- state that reads as "inherits from something unnameable". A from-scratch
+		// emitter inherits from nothing, and saying so exactly is what lets an asset-level comparison
+		// treat parentage as data instead of as noise to normalise away.
+		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+		{
+			if (Handle.GetName() == EmitterName)
+			{
+				if (FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData())
+				{
+					Data->RemoveParent();
+				}
+				break;
+			}
+		}
+		return true;
 	}
 
 	bool FNiagaraAdapter::AddEmitterFromTemplate(UNiagaraSystem* System, UNiagaraEmitter* Template,
@@ -2683,14 +2703,14 @@ namespace UE::DreamFX::Editor
 #endif
 	}
 
-	void FNiagaraAdapter::RequestCompileAsync(UNiagaraSystem* System)
+	void FNiagaraAdapter::RequestCompileAsync(UNiagaraSystem* System, bool bForce)
 	{
 		if (System == nullptr)
 		{
 			return;
 		}
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RequestCompile begin '%s'"), *System->GetName());
-		System->RequestCompile(/*bForce=*/false);
+		System->RequestCompile(bForce);
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE RequestCompile issued '%s'"), *System->GetName());
 	}
 
@@ -2734,6 +2754,135 @@ namespace UE::DreamFX::Editor
 
 		System->CacheFromCompiledData();
 		UE_LOG(LogDreamFX, Verbose, TEXT("Re-resolved renderer bindings on '%s'"), *System->GetName());
+	}
+
+	void FNiagaraAdapter::InvalidateCachedCompileIds(UNiagaraSystem* System)
+	{
+		if (System == nullptr)
+		{
+			return;
+		}
+
+		// One system-scope graph (both system stacks share it) plus one graph per emitter. The graph
+		// entries themselves are unexported, so the invalidation goes through any node on the graph:
+		// MarkNodeRequiresSynchronization with bRaiseGraphNeedsRecompile raises the graph's change id,
+		// which is exactly the bit the cached-compile-id fast path keys on.
+		TArray<UNiagaraGraph*> Graphs;
+		if (UNiagaraScript* SystemScript = System->GetSystemSpawnScript())
+		{
+			if (UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(SystemScript->GetLatestSource()))
+			{
+				Graphs.AddUnique(Source->NodeGraph);
+			}
+		}
+		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+		{
+			const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+			if (Data == nullptr)
+			{
+				continue;
+			}
+			if (UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(Data->GraphSource))
+			{
+				Graphs.AddUnique(Source->NodeGraph);
+			}
+		}
+
+		for (UNiagaraGraph* Graph : Graphs)
+		{
+			if (Graph == nullptr)
+			{
+				continue;
+			}
+			for (UEdGraphNode* GraphNode : Graph->Nodes)
+			{
+				if (UNiagaraNode* Node = Cast<UNiagaraNode>(GraphNode))
+				{
+					Node->MarkNodeRequiresSynchronization(TEXT("DreamFX build: re-derive compile id from live graph"),
+						/*bRaiseGraphNeedsRecompile=*/true);
+					break; // one node dirties the whole graph; the rest add nothing
+				}
+			}
+		}
+	}
+
+	bool FNiagaraAdapter::VerifyCompiledStateCurrent(UNiagaraSystem* System, TArray<FString>& OutStaleScripts)
+	{
+		if (System == nullptr)
+		{
+			return true;
+		}
+
+		TArray<TTuple<FString, UNiagaraScript*>> Scripts;
+		Scripts.Emplace(TEXT("SystemSpawn"), System->GetSystemSpawnScript());
+		Scripts.Emplace(TEXT("SystemUpdate"), System->GetSystemUpdateScript());
+		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+		{
+			// A disabled emitter's scripts are legitimately left however they were.
+			if (!Handle.GetIsEnabled())
+			{
+				continue;
+			}
+			const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+			if (Data == nullptr)
+			{
+				continue;
+			}
+			TArray<UNiagaraScript*> EmitterScripts;
+			Data->GetScripts(EmitterScripts, /*bCompilableOnly=*/true);
+			for (UNiagaraScript* Script : EmitterScripts)
+			{
+				Scripts.Emplace(Handle.GetName().ToString(), Script);
+			}
+		}
+
+		for (const TTuple<FString, UNiagaraScript*>& Entry : Scripts)
+		{
+			UNiagaraScript* Script = Entry.Get<1>();
+			// AreScriptAndSourceSynchronized recomputes the compile id from the live graphs and
+			// compares it to the id the stored VM was compiled under -- the same judgement a compile
+			// request makes, asked after the fact.
+			if (Script != nullptr && !Script->AreScriptAndSourceSynchronized())
+			{
+				OutStaleScripts.Add(FString::Printf(TEXT("%s/%s"), *Entry.Get<0>(), *Script->GetName()));
+			}
+		}
+		return OutStaleScripts.Num() == 0;
+	}
+
+	bool FNiagaraAdapter::GetEmitterParent(const FStackAddress& EmitterAddress, FString& OutParentPath,
+		FGuid& OutParentVersion, TArray<FString>& OutErrors)
+	{
+		OutParentPath.Reset();
+		OutParentVersion.Invalidate();
+
+		if (EmitterAddress.System == nullptr || EmitterAddress.EmitterName.IsNone())
+		{
+			OutErrors.Add(TEXT("Cannot read the parent of an unaddressed emitter."));
+			return false;
+		}
+
+		for (const FNiagaraEmitterHandle& Handle : EmitterAddress.System->GetEmitterHandles())
+		{
+			if (Handle.GetName() != EmitterAddress.EmitterName)
+			{
+				continue;
+			}
+			if (const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData())
+			{
+				const FVersionedNiagaraEmitter Parent = Data->GetParent();
+				if (Parent.Emitter != nullptr)
+				{
+					OutParentPath = Parent.Emitter->GetPathName();
+					OutParentVersion = Parent.Version;
+				}
+			}
+			return true;
+		}
+
+		OutErrors.Add(FString::Printf(TEXT("'%s' has no emitter named '%s'."),
+			*EmitterAddress.System->GetName(), *EmitterAddress.EmitterName.ToString()));
+		return false;
 	}
 
 	bool FNiagaraAdapter::WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,

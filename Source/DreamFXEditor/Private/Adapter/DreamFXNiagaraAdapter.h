@@ -769,8 +769,15 @@ namespace UE::DreamFX::Editor
 		 * WaitAndCollect is CompileAndWait minus the request, safe on a system whose compile is
 		 * already in flight, where a second RequestCompile would stack a duplicate compilation next
 		 * to the running one.
+		 *
+		 * bForce recompiles every script whether or not its stored id claims currency. The build
+		 * passes true, because a stored id can lie: NE_C's asset carried the correct graph's id over
+		 * bytecode compiled from a different graph, and every id-level check blessed the pair. The
+		 * price was measured before it was paid -- ~0.85 s forced against ~0.89 s judged-current on
+		 * the same system, because the translation dominates either way on a system this size and
+		 * the DDC serves the artifacts.
 		 */
-		static void RequestCompileAsync(UNiagaraSystem* System);
+		static void RequestCompileAsync(UNiagaraSystem* System, bool bForce = false);
 		static bool PumpCompile(UNiagaraSystem* System);
 		static bool WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,
 			FCompileStateInfo& OutState, TArray<FString>& OutErrors);
@@ -781,6 +788,52 @@ namespace UE::DreamFX::Editor
 		 * Runs only after compilation -- see the definition for why earlier is worse than not at all.
 		 */
 		static void RefreshRendererBindings(UNiagaraSystem* System);
+
+		/**
+		 * Invalidates every graph's cached compile id so the next compile request re-derives it from
+		 * what the graphs actually contain, instead of trusting whatever incremental dirt the writes
+		 * left behind. Call it once per built system, before the final compile request.
+		 *
+		 * Exists because "built" and "recompiled" are different claims. A rebuild whose writes all
+		 * land on values the asset already holds raises no change id, the compile request then judges
+		 * the cached VM current, and whatever that VM says -- however old, however wrong -- ships as
+		 * this build's output.
+		 *
+		 * This does not force a recompile. It forces the *comparison*: the id is recomputed from the
+		 * live graphs (a hash walk, milliseconds), and only a script whose stored VM genuinely
+		 * mismatches gets compiled. A healthy same-source rebuild stays as cheap as before.
+		 *
+		 * It is NOT sufficient on its own, which was measured, not feared: NS_Spawn_Teleport_Root's
+		 * NE_C carried a stored VM compiled from the all-Unset switch branches under the compile id
+		 * of the correct graph -- the id/VM pair itself was desynchronized on the asset, so every
+		 * id-level comparison, this one included, judged it current. That is why the build's final
+		 * request also forces (see RequestCompileAsync's caller); this call remains as the cheap
+		 * guarantee for any path that cannot afford the force.
+		 */
+		static void InvalidateCachedCompileIds(UNiagaraSystem* System);
+
+		/**
+		 * Asks every compilable script whether its stored VM was compiled from the graphs as they
+		 * stand now, using the engine's own synchronization test. Returns false and names the stale
+		 * scripts when any is out of date.
+		 *
+		 * The belt to InvalidateCachedCompileIds' braces: that call makes the final compile see the
+		 * truth, this one proves the truth was seen. It exists so the next idempotence hole in some
+		 * write path -- the class of bug, not the one instance -- fails a build loudly instead of
+		 * shipping a stale simulation that only a human eye would catch.
+		 */
+		static bool VerifyCompiledStateCurrent(UNiagaraSystem* System, TArray<FString>& OutStaleScripts);
+
+		/**
+		 * The parent asset an emitter inherits from, when it inherits at all.
+		 *
+		 * Returns true with an empty OutParentPath for the ordinary, parentless emitter; false only
+		 * when the emitter could not be resolved. The parent's version guid rides along because a
+		 * versioned parent pins the child to one of its versions, and any future consumer of this
+		 * (a true-inheritance rebuild) needs the pair, not the path alone.
+		 */
+		static bool GetEmitterParent(const FStackAddress& EmitterAddress, FString& OutParentPath,
+			FGuid& OutParentVersion, TArray<FString>& OutErrors);
 
 		/**
 		 * Closes every compile launch site on the system for the scope's lifetime.

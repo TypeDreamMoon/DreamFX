@@ -2994,6 +2994,21 @@ namespace UE::DreamFX::Editor
 				return false;
 			}
 
+			// The compile finishing is not the same claim as the compile having seen this build's
+			// writes. This asks the engine's own synchronization test, per script, after the fact --
+			// so the next write path that fails to dirty what it wrote fails here, loudly, instead of
+			// shipping an asset whose pins say one thing and whose simulation runs another. That
+			// asset existed: NE_C ran all-Unset switch branches for days under pins every check
+			// agreed with.
+			TArray<FString> StaleScripts;
+			if (!FNiagaraAdapter::VerifyCompiledStateCurrent(System, StaleScripts))
+			{
+				Diagnostics.Error(TEXT("DFX6008"), Pending.HeaderLocation,
+					FString::Printf(TEXT("'%s' finished its compile with stale scripts: %s. The compiled VM was not rebuilt from the graphs this build wrote, so the asset would simulate something other than what the source says. This is a DreamFX pipeline defect -- report it with this source file."),
+						*Pending.Plan.FullAssetPath, *FString::Join(StaleScripts, TEXT(", "))));
+				return false;
+			}
+
 			FProvenanceStamp Stamp;
 			Stamp.SourceFullPath = Pending.SourceFilePath;
 			Stamp.SourceHash = Pending.SourceHash;
@@ -3257,9 +3272,21 @@ namespace UE::DreamFX::Editor
 		Pending.bHasGpuEmitter = bHasGpuEmitter;
 		Pending.bSave = Options.bSave;
 
+		// A rebuild whose writes all landed on values the asset already held raises no change id, and
+		// the compile request would then bless whatever VM the asset came in with -- including one
+		// compiled before some write path existed. Re-deriving the compile ids from the live graphs
+		// costs a hash walk and turns "no write changed anything" from an assumption into a check.
+		FNiagaraAdapter::InvalidateCachedCompileIds(System);
+
 		// Issued here for both paths: a pipelined caller overlaps the wait with its next source's
 		// generation; the synchronous path pays it in FinalizeBuild immediately below.
-		FNiagaraAdapter::RequestCompileAsync(System);
+		//
+		// Forced, because the invalidation above is necessary but not sufficient: a stored id/VM
+		// pair can itself be desynchronized -- NE_C's asset carried the correct graph's id over
+		// bytecode compiled from the all-Unset switch branches, and no id-level comparison can see
+		// that. Forcing re-derives the bytecode too, which overwrites such a pair instead of
+		// trusting it. Measured on the system that had it: ~0.85 s forced vs ~0.89 s judged-current.
+		FNiagaraAdapter::RequestCompileAsync(System, /*bForce=*/true);
 
 		if (Options.bDeferCompile)
 		{
