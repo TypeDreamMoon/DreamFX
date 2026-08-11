@@ -410,6 +410,131 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
+		// Defined further down, next to the other graph lookups; declared here because the pin-default
+		// repair below runs before them in the file and there is no reason to reorder either.
+		UNiagaraNodeFunctionCall* FindModuleNode(const FStackAddress& ModuleAddress);
+
+		/**
+		 * How many floats a type is, for the types that are nothing but floats.
+		 *
+		 * The list is explicit rather than derived from the size because a same-sized type that is
+		 * not floats -- SpawnInfo is two ints -- would be respelled into nonsense by the caller.
+		 *
+		 * Named for the pin defaults rather than the types because the lowering layer has its own
+		 * near-identical FloatComponentCount with a different contract (vector family only, no
+		 * scalar float). Two anonymous-namespace functions of one name land in the same unity blob
+		 * and stop the build -- on one project and not the other, since the blobs are packed per
+		 * project. Merging them would be worse: a caller of either would silently get the other's
+		 * answer for a plain float.
+		 */
+		int32 PinDefaultFloatCount(const FNiagaraTypeDefinition& Type)
+		{
+			if (Type == FNiagaraTypeDefinition::GetFloatDef())    { return 1; }
+			if (Type == FNiagaraTypeDefinition::GetVec2Def())     { return 2; }
+			if (Type == FNiagaraTypeDefinition::GetVec3Def())     { return 3; }
+			if (Type == FNiagaraTypeDefinition::GetPositionDef()) { return 3; }
+			if (Type == FNiagaraTypeDefinition::GetVec4Def())     { return 4; }
+			if (Type == FNiagaraTypeDefinition::GetColorDef())    { return 4; }
+			if (Type == FNiagaraTypeDefinition::GetQuatDef())     { return 4; }
+			return 0;
+		}
+
+		/**
+		 * The engine's own pin-default string with every number in it respelled losslessly.
+		 *
+		 * Every engine encoder for a float-bearing type rounds: colour is FLinearColor::ToString(),
+		 * which is "%f"; the vector and quaternion encoders are "%3.3f", so a position of 1234.5678
+		 * is stored as 1234.568. That is a silent edit to authored data, and it is what made
+		 * Emitter.MyColor3 come back as 0.01 from an asset holding 0.01000011.
+		 *
+		 * Rather than restate each encoder's format here -- five formats that would then have to be
+		 * kept in step with the engine's, including the "(X=%3.3f, Y=%3.3f)" that is deliberately not
+		 * ToString() -- this takes the engine's answer and substitutes the numbers inside it. The
+		 * format, separators and spacing stay whatever the engine says they are, so a type this code
+		 * has never heard of is still handled, and the count check means a format that does not look
+		 * the way we assume is declined rather than mangled.
+		 *
+		 * Returns false when nothing needs changing, so the caller can skip touching the graph.
+		 */
+		bool RespellPinDefaultLossless(const FNiagaraTypeDefinition& Type, const FInputValue& Value,
+			const FString& EngineDefault, FString& OutRespelled)
+		{
+			const int32 Components = PinDefaultFloatCount(Type);
+			if (Components == 0 || Value.Mode != EInputValueMode::Literal
+				|| Value.LiteralBytes.Num() != Components * static_cast<int32>(sizeof(float)))
+			{
+				return false;
+			}
+
+			const float* Floats = reinterpret_cast<const float*>(Value.LiteralBytes.GetData());
+
+			// Every maximal run of number characters, in order. A run may carry a sign or an exponent;
+			// both stay inside the run so that the replacement lands on the whole number.
+			TArray<TPair<int32, int32>> Spans;
+			for (int32 Index = 0; Index < EngineDefault.Len(); )
+			{
+				const TCHAR Character = EngineDefault[Index];
+				const bool bStartsNumber = FChar::IsDigit(Character)
+					|| ((Character == TEXT('-') || Character == TEXT('+') || Character == TEXT('.'))
+						&& Index + 1 < EngineDefault.Len() && FChar::IsDigit(EngineDefault[Index + 1]));
+				if (!bStartsNumber)
+				{
+					++Index;
+					continue;
+				}
+
+				const int32 Start = Index++;
+				while (Index < EngineDefault.Len()
+					&& (FChar::IsDigit(EngineDefault[Index]) || EngineDefault[Index] == TEXT('.')))
+				{
+					++Index;
+				}
+				if (Index < EngineDefault.Len()
+					&& (EngineDefault[Index] == TEXT('e') || EngineDefault[Index] == TEXT('E')))
+				{
+					const int32 ExponentStart = Index++;
+					if (Index < EngineDefault.Len()
+						&& (EngineDefault[Index] == TEXT('-') || EngineDefault[Index] == TEXT('+')))
+					{
+						++Index;
+					}
+					if (Index < EngineDefault.Len() && FChar::IsDigit(EngineDefault[Index]))
+					{
+						while (Index < EngineDefault.Len() && FChar::IsDigit(EngineDefault[Index]))
+						{
+							++Index;
+						}
+					}
+					else
+					{
+						Index = ExponentStart; // a trailing 'e' that was not an exponent after all
+					}
+				}
+				Spans.Emplace(Start, Index - Start);
+			}
+
+			if (Spans.Num() != Components)
+			{
+				return false;
+			}
+
+			// Back to front, so an earlier span's offsets survive a later one's replacement.
+			FString Result = EngineDefault;
+			for (int32 Component = Components - 1; Component >= 0; --Component)
+			{
+				Result = Result.Left(Spans[Component].Key)
+					+ FormatFloatLossless(Floats[Component])
+					+ Result.RightChop(Spans[Component].Key + Spans[Component].Value);
+			}
+
+			if (Result == EngineDefault)
+			{
+				return false;
+			}
+			OutRespelled = MoveTemp(Result);
+			return true;
+		}
+
 		FNiagaraExt_StackItemReference ToReference(const FStackAddress& Address)
 		{
 			FNiagaraExt_StackItemReference Reference(Address.System, Address.EmitterName, Address.ScriptName, Address.ModuleName);
@@ -813,6 +938,40 @@ namespace UE::DreamFX::Editor
 		// escape. Nothing in Niagara produces one, and inventing a rule for it now would be a rule
 		// nobody could check.
 		return FString::Printf(TEXT("`%s`"), *Name);
+	}
+
+	FString FormatFloatLossless(float Value)
+	{
+		// Keep the short form whenever it survives the trip and widen only for the values that need
+		// it, so the overwhelming majority of values are spelled the way everything else spells them.
+		//
+		// The widening is not cosmetic. 11/15 stores as 0.73333335 and SanitizeFloat returns
+		// 0.733333, which is *below* the value it came from; Niagara resolves WarmupTime with
+		// FloorToInt(WarmupTime / WarmupTickDelta), so a value landing a hair low costs a whole tick
+		// and 0.733333 rebuilds as 0.666667.
+		FString Text = FString::SanitizeFloat(Value);
+		if (FCString::Atof(*Text) == Value)
+		{
+			return Text;
+		}
+
+		for (int32 Digits = 7; Digits <= 9; ++Digits)
+		{
+			FString Candidate = FString::Printf(TEXT("%.*g"), Digits, Value);
+			if (FCString::Atof(*Candidate) == Value)
+			{
+				// %g drops the decimal point once the value is integral, and a bare 1 reads as an int
+				// rather than a float, so put it back.
+				if (!Candidate.Contains(TEXT(".")) && !Candidate.Contains(TEXT("e")))
+				{
+					Candidate += TEXT(".0");
+				}
+				return Candidate;
+			}
+		}
+
+		// Not a finite number: SanitizeFloat already returned it verbatim.
+		return Text;
 	}
 
 	const FInputSchema* FModuleSchema::FindInput(FName Name) const
@@ -1847,7 +2006,81 @@ namespace UE::DreamFX::Editor
 			OutErrors.Add(TEXT("AddSetParametersModule returned no module name."));
 			return false;
 		}
+
+		// The value went in as bytes, but the engine stores it as a pin default *string*, and every
+		// encoder it has for a float-bearing type rounds. Put the precision back, on the pins where
+		// it was actually lost -- most values spell the same either way, and those never reach the
+		// graph at all.
+		RepairSetParameterPrecision(StackAddress.WithModule(OutModuleName), Entries);
 		return true;
+	}
+
+	/**
+	 * Rewrites the pin defaults AddSetParametersModule just wrote, for the entries whose value does
+	 * not survive the engine's spelling of it. Best effort by design: a value that cannot be located
+	 * keeps the engine's own string, which is what would have been there anyway, so there is nothing
+	 * to fail and nothing to report.
+	 */
+	void FNiagaraAdapter::RepairSetParameterPrecision(const FStackAddress& ModuleAddress,
+		const TArray<TTuple<FName, FNiagaraTypeDefinition, FInputValue>>& Entries)
+	{
+		const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
+		if (Schema == nullptr)
+		{
+			return;
+		}
+
+		UNiagaraNodeFunctionCall* Node = nullptr; // resolved on the first entry that needs it
+		for (const TTuple<FName, FNiagaraTypeDefinition, FInputValue>& Entry : Entries)
+		{
+			const FNiagaraTypeDefinition& Type = Entry.Get<1>();
+			const FInputValue& Value = Entry.Get<2>();
+			if (PinDefaultFloatCount(Type) == 0 || Value.Mode != EInputValueMode::Literal)
+			{
+				continue;
+			}
+
+			// What the engine wrote, reproduced rather than read back: the pin lookup is the expensive
+			// half, and this tells us whether it is needed at all.
+			FNiagaraVariable LocalValue(Type, NAME_None);
+			LocalValue.AllocateData();
+			if (Value.LiteralBytes.Num() != LocalValue.GetSizeInBytes())
+			{
+				continue;
+			}
+			LocalValue.SetData(Value.LiteralBytes.GetData());
+
+			FString EngineDefault;
+			FString Respelled;
+			if (!Schema->TryGetPinDefaultValueFromNiagaraVariable(LocalValue, EngineDefault)
+				|| !RespellPinDefaultLossless(Type, Value, EngineDefault, Respelled))
+			{
+				continue;
+			}
+
+			if (Node == nullptr)
+			{
+				Node = FindModuleNode(ModuleAddress);
+				if (Node == nullptr)
+				{
+					return;
+				}
+			}
+
+			// Same two homes as a static input write: the entry is an input on the assignment node,
+			// and an assignment node is a function call node, so the same one call finds or builds it.
+			const FNiagaraParameterHandle AliasedHandle(FName(*Node->GetFunctionName()), Entry.Get<0>());
+			UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+				*Node, AliasedHandle, Type, FGuid(), FGuid());
+
+			OverridePin.Modify();
+			OverridePin.DefaultValue = Respelled;
+			if (UNiagaraNode* OwningNode = Cast<UNiagaraNode>(OverridePin.GetOwningNode()))
+			{
+				OwningNode->MarkNodeRequiresSynchronization(TEXT("DreamFX pin default precision"),
+					/*bRaiseGraphNeedsRecompile=*/true);
+			}
+		}
 	}
 
 	bool FNiagaraAdapter::AddRenderer(const FStackAddress& EmitterAddress, UClass* RendererClass,

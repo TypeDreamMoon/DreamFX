@@ -156,6 +156,19 @@ namespace UE::DreamFX::Editor
 	 */
 	FString ToNameToken(const FString& Name);
 
+	/**
+	 * A float as the shortest decimal that reads back as the same float.
+	 *
+	 * Every engine-side spelling of a float is lossy, and by different amounts: `SanitizeFloat` (and
+	 * so `LexToString`) is Printf("%f") with the trailing zeros trimmed, six decimals; the vector pin
+	 * encoders are "%3.3f", three. So a value written through either comes back changed, which is why
+	 * both the export and the pin defaults use this instead.
+	 *
+	 * Lives beside ToNameToken for the same reason it does: the reader and the writer have to agree
+	 * exactly, and the reader cannot include the generation layer without a cycle.
+	 */
+	FString FormatFloatLossless(float Value);
+
 	struct FModuleSchema
 	{
 		TArray<FInputSchema> Inputs;
@@ -634,6 +647,13 @@ namespace UE::DreamFX::Editor
 		static bool AddSetParametersModule(const FStackAddress& StackAddress,
 			const TArray<TTuple<FName, FNiagaraTypeDefinition, FInputValue>>& Entries,
 			FName& OutModuleName, TArray<FString>& OutErrors, bool bDeferStackRefresh = false);
+
+	private:
+		/** Undoes the rounding the engine applies when it spells a float-bearing value onto a pin. */
+		static void RepairSetParameterPrecision(const FStackAddress& ModuleAddress,
+			const TArray<TTuple<FName, FNiagaraTypeDefinition, FInputValue>>& Entries);
+
+	public:
 
 		/** The one stack refresh a deferred batch of adds pays. See AddModule's bDeferStackRefresh. */
 		static bool RefreshScriptStack(const FStackAddress& StackAddress, TArray<FString>& OutErrors);
