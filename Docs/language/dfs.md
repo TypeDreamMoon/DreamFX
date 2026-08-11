@@ -26,6 +26,8 @@ Settings = {
     EffectType  = "/Niagara/Default/FX_Default.FX_Default";
     WarmupTime  = 0.0;
     FixedBounds = box(-200, -200, -50, 200, 200, 300);
+    FixedTickDelta     = true;      // substep at a fixed rate instead of once per frame
+    FixedTickDeltaTime = 0.01667;   // ... of 60Hz. Changes simulation, not just smoothness
     ModulePaths = ["/Niagara/Modules", "/Game/FX/Modules"];
 }
 ```

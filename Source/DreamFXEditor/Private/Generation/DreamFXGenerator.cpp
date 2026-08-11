@@ -381,6 +381,11 @@ namespace UE::DreamFX::Editor
 			{ TEXT("EffectType"),  TEXT("EffectType"),  nullptr },
 			{ TEXT("WarmupTime"),  TEXT("WarmupTime"),  nullptr },
 			{ TEXT("FixedBounds"), TEXT("FixedBounds"), nullptr },
+			// Substepping. The decompiler's SystemSettingFields carries the same pair; a system that
+			// ticks at a fixed 1/60 simulates visibly differently from one stepped per-frame, and
+			// nothing below the system properties records that fact.
+			{ TEXT("FixedTickDelta"),     TEXT("bFixedTickDelta"),     nullptr },
+			{ TEXT("FixedTickDeltaTime"), TEXT("FixedTickDeltaTime"),  nullptr },
 		};
 
 		const FSettingMapping EmitterSettings[] =

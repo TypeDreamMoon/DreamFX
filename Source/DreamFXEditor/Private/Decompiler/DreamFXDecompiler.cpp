@@ -1180,6 +1180,14 @@ namespace UE::DreamFX::Editor
 		const TPair<const TCHAR*, const TCHAR*> SystemSettingFields[] =
 		{
 			{ TEXT("WarmupTime"), TEXT("WarmupTime") },
+			// A system on a fixed tick substeps: at 1/60 against a 30Hz frame every emitter runs its
+			// update twice per frame with half the dt. Losing the flag does not break a single build
+			// and no text-level check can see it -- what it does is double every per-tick velocity
+			// contribution and halve how often drag compounds, which on NS_Spawn_Up_Root's NE_Rotate
+			// widened the whole spiral 3x and dragged the event-spawned ribbons with it. Measured:
+			// birth velocity 2273 (=136500 * 1/60) original vs 4529 (=136500 * 1/30) mirror.
+			{ TEXT("FixedTickDelta"),     TEXT("bFixedTickDelta") },
+			{ TEXT("FixedTickDeltaTime"), TEXT("FixedTickDeltaTime") },
 		};
 
 		/**
