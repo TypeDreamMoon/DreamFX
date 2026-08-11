@@ -1,0 +1,55 @@
+// plan-events V3: the OTHER execution mode. The receiver owns its particles and the
+// handler runs the block on every one of them per received event -- no event-driven
+// spawning at all. Pins that Mode and an absent SpawnNumber survive the round trip.
+System(Name="Corpus/NS_EventHandlerEveryParticle", Root="Plugin.DreamFX")
+{
+    Emitter Source
+    {
+        Settings = {
+            RequiresPersistentIDs = true;
+            Determinism = true;
+            RandomSeed = 7;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.5);
+            SpawnBurst_Instantaneous(SpawnCount = 4);
+        }
+
+        ParticleSpawn = {
+            V2/InitializeParticle(LifetimeMode = DirectSet, Lifetime = 0.4);
+        }
+
+        ParticleUpdate = {
+            // GenerateLocationEvent declares SolveForcesAndVelocity as a required
+            // predecessor; without it the stack carries an error-severity issue.
+            SolveForcesAndVelocity();
+            GenerateLocationEvent();
+        }
+    }
+
+    Emitter Receiver
+    {
+        Settings = {
+            Determinism = true;
+            RandomSeed = 11;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.5);
+            SpawnBurst_Instantaneous(SpawnCount = 3);
+        }
+
+        ParticleSpawn = {
+            V2/InitializeParticle(LifetimeMode = DirectSet, Lifetime = 0.5);
+        }
+
+        OnEvent(Source = Source, Event = "LocationEvent", Mode = EveryParticle) = {
+            ReceiveLocationEvent();
+        }
+
+        SpriteRenderer
+        {
+        }
+    }
+}
