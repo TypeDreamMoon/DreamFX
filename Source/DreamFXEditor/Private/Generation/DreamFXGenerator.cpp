@@ -3048,13 +3048,33 @@ namespace UE::DreamFX::Editor
 			// shipping an asset whose pins say one thing and whose simulation runs another. That
 			// asset existed: NE_C ran all-Unset switch branches for days under pins every check
 			// agreed with.
+			//
+			// One legitimate way to be stale after a forced compile: the renderer-binding refresh
+			// that must run AFTER compilation (it reads the compiled attribute set) can change which
+			// attributes a renderer reports as bound, and the system scripts hash exactly that. So a
+			// first stale verdict buys one more round -- compile against the resolved bindings,
+			// refresh again (a no-op now), re-judge. A system still stale after converging is the
+			// real defect this check exists for.
 			TArray<FString> StaleScripts;
 			if (!FNiagaraAdapter::VerifyCompiledStateCurrent(System, StaleScripts))
 			{
-				Diagnostics.Error(TEXT("DFX6008"), Pending.HeaderLocation,
-					FString::Printf(TEXT("'%s' finished its compile with stale scripts: %s. The compiled VM was not rebuilt from the graphs this build wrote, so the asset would simulate something other than what the source says. This is a DreamFX pipeline defect -- report it with this source file."),
-						*Pending.Plan.FullAssetPath, *FString::Join(StaleScripts, TEXT(", "))));
-				return false;
+				UE_LOG(LogDreamFX, Verbose,
+					TEXT("'%s': %s stale after the first compile (renderer bindings moved the id); compiling once more."),
+					*Pending.Plan.FullAssetPath, *FString::Join(StaleScripts, TEXT(", ")));
+
+				FNiagaraAdapter::RequestCompileAsync(System, /*bForce=*/true);
+				FCompileStateInfo SecondState;
+				Errors.Reset();
+				FNiagaraAdapter::WaitAndCollect(System, Pending.bHasGpuEmitter, SecondState, Errors);
+
+				StaleScripts.Reset();
+				if (!FNiagaraAdapter::VerifyCompiledStateCurrent(System, StaleScripts))
+				{
+					Diagnostics.Error(TEXT("DFX6008"), Pending.HeaderLocation,
+						FString::Printf(TEXT("'%s' finished its compile with stale scripts: %s. The compiled VM was not rebuilt from the graphs this build wrote, so the asset would simulate something other than what the source says. This is a DreamFX pipeline defect -- report it with this source file."),
+							*Pending.Plan.FullAssetPath, *FString::Join(StaleScripts, TEXT(", "))));
+					return false;
+				}
 			}
 
 			FProvenanceStamp Stamp;
