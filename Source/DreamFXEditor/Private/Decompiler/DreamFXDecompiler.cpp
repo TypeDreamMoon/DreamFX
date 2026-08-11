@@ -1602,6 +1602,20 @@ namespace UE::DreamFX::Editor
 					{
 						SwitchedDefaults = Probed;
 					}
+					else
+					{
+						// Falling back to the pristine baseline is the wrong answer, not a lesser one:
+						// the note above says exactly what it costs -- an authored value that matches
+						// the pristine default gets dropped, and the rebuild produces the switched one
+						// instead. Silent until now. Measured at zero on the content packs, so this
+						// says "not the cause of the current losses" rather than "cannot happen".
+						UE_LOG(LogDreamFX, Warning,
+							TEXT("Could not probe %s / %s with its %d switch(es) applied, so its inputs "
+							     "are judged against the pristine defaults and any that match will be "
+							     "dropped from the export: %s"),
+							*Stack.ScriptName.ToString(), *Module.ModuleName.ToString(),
+							SwitchValues.Num(), *SwitchedError);
+					}
 				}
 
 				// Switches first; see the same split in DynamicInputToSource.
@@ -1627,12 +1641,51 @@ namespace UE::DreamFX::Editor
 					// See the two-baseline note above: switches against pristine, everything else
 					// against a module carrying this module's switches.
 					const bool bIsSwitchInput = InputInfo != nullptr && InputInfo->bStaticSwitch;
-					if (const TMap<FName, FInputValue>* Defaults = bIsSwitchInput ? PristineDefaults : SwitchedDefaults)
+
+					// A static switch is always written, whatever it is worth.
+					//
+					// The rule everywhere else is "equal to the default, so the rebuild will produce it
+					// anyway". For a switch that inference does not hold, because the two defaults are
+					// not the same object: the one compared against here comes from probing a module,
+					// and the one the rebuild lands on is whatever AddModule leaves on the node's pin.
+					// They disagree, and nothing in the export says so.
+					//
+					// NS_Spawn_Ground_Root is the case that showed it. Its ParticleUpdate carries
+					// SolveForcesAndVelocity(ManuallyEnableRotationalSolver = false), which matched the
+					// probed default and was dropped; the rebuild then compiled the other branch, and
+					// the interpolated spawn script failed with "Particles.MySize was read before being
+					// set" -- a name that appears nowhere near this switch. Removing any one of the
+					// four other inputs that export drops changes nothing; removing this one alone
+					// reproduces the failure exactly.
+					//
+					// This does not need to know whether an author touched the value, which is what the
+					// three earlier attempts tried to reconstruct and could not: a rebuilt asset keeps
+					// no record of authorship. Presence is decided by what the input *is*, so the
+					// mirror re-exports the same line and the round trip stays symmetric.
+					//
+					// Cost is ~290 lines per system in the worst case measured, against 508 non-switch
+					// drops that stay dropped.
+					if (const TMap<FName, FInputValue>* Defaults = bIsSwitchInput ? nullptr : SwitchedDefaults)
 					{
 						if (const FInputValue* Default = Defaults->Find(Entry.Get<0>()))
 						{
 							if (Default->Equals(Entry.Get<1>()))
 							{
+								// -DreamFXTraceSuppressed names every input this drops. The count is
+								// not the interesting part -- most of these are genuinely untouched
+								// inputs -- so it prints which baseline decided it, which is what
+								// separates a correct drop from one judged against the wrong module.
+								// "pristine-fallback" means no switch value was collected, so the
+								// switched probe never ran; that is the case worth looking at first.
+								if (FParse::Param(FCommandLine::Get(), TEXT("DreamFXTraceSuppressed")))
+								{
+									UE_LOG(LogDreamFX, Warning,
+										TEXT("DFXTRACE-DROP %s / %s / %s (%s baseline)"),
+										*Stack.ScriptName.ToString(), *Module.ModuleName.ToString(),
+										*Entry.Get<0>().ToString(),
+										SwitchedDefaults == PristineDefaults ? TEXT("pristine-fallback")
+											: TEXT("switched"));
+								}
 								continue;
 							}
 						}
