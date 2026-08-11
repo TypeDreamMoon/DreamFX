@@ -881,6 +881,27 @@ namespace UE::DreamFX::Editor
 			TArray<FEventHandlerSummary>& OutHandlers, TArray<FString>& OutErrors);
 
 		/**
+		 * Adds -- or regenerates -- THE event handler on an emitter. Singular by design: the event
+		 * script's usage id is set to the ZERO guid, because the external edit API's stack references
+		 * hard-code exactly that id, so a zero-id event stack is addressable as
+		 * `ScriptName = "ParticleEventScript"` through every existing rail (AddModule, SetInput,
+		 * GetScriptStackInfo) with no engine change at all. The price is one addressable event stack
+		 * per emitter, which covers every handler in this project's corpus; a second one is a
+		 * declared gap until the reference struct grows a usage id.
+		 *
+		 * The source emitter is named, not identified: the stored SourceEmitterID is the source's
+		 * HANDLE guid, which a rebuild cannot reproduce, so the caller speaks the one name that
+		 * survives the original/mirror boundary and this resolves it against the live system. The
+		 * source must therefore already exist -- callers add handlers after every AddEmitter.
+		 *
+		 * Calling it again replaces the existing zero-id handler (engine RemoveEventHandlerByUsageId
+		 * plus reuse of the graph output node), which is what a rebuild-in-place wants.
+		 */
+		static bool AddEventHandler(const FStackAddress& EmitterAddress, const FString& SourceEmitterName,
+			FName SourceEventName, const FString& ExecutionModeName, int32 SpawnNumber,
+			TArray<FString>& OutErrors);
+
+		/**
 		 * Closes every compile launch site on the system for the scope's lifetime.
 		 *
 		 * A generation window performs hundreds of structural edits, and several engine paths compile

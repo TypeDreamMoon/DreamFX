@@ -33,6 +33,7 @@
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectIterator.h"
+#include "UObject/UnrealType.h"
 
 namespace UE::DreamFX::Editor
 {
@@ -3161,6 +3162,277 @@ namespace UE::DreamFX::Editor
 		OutErrors.Add(FString::Printf(TEXT("'%s' has no emitter named '%s'."),
 			*EmitterAddress.System->GetName(), *EmitterAddress.EmitterName.ToString()));
 		return false;
+	}
+
+	namespace
+	{
+		// Defined further down with the other graph lookups; the event machinery below runs first in
+		// the file for the same reason the pin-default repair did.
+		UNiagaraGraph* GraphForAddress(const FStackAddress& Address);
+
+		/**
+		 * FGraphSurgeon's CreateAndFinalizeNode, with one addition it cannot have: a property step
+		 * between creation and pin allocation. UNiagaraNodeOutput derives its pins from `Outputs`, so
+		 * a node whose properties are set after AllocateDefaultPins allocates the wrong pins. Local
+		 * rather than shared because the surgeon is the `.dfm` layer and the adapter must not depend
+		 * upward on it -- the recipe is four public calls, and the note in the surgeon says where
+		 * each came from.
+		 */
+		UNiagaraNode* CreateGraphNodeWithProperties(UNiagaraGraph& Graph, UClass* NodeClass,
+			TFunctionRef<bool(UNiagaraNode&)> InitializeProperties)
+		{
+			if (NodeClass == nullptr || !NodeClass->IsChildOf(UNiagaraNode::StaticClass()))
+			{
+				return nullptr;
+			}
+			UNiagaraNode* Node = NewObject<UNiagaraNode>(&Graph, NodeClass, NAME_None, RF_Transactional);
+			if (Node == nullptr)
+			{
+				return nullptr;
+			}
+			if (Graph.HasAnyFlags(RF_Transient))
+			{
+				Node->SetFlags(RF_Transient);
+			}
+			Graph.AddNode(Node, /*bFromUI=*/false, /*bSelectNewNode=*/false);
+			Node->CreateNewGuid();
+			if (!InitializeProperties(*Node))
+			{
+				Graph.RemoveNode(Node);
+				return nullptr;
+			}
+			Node->PostPlacedNewNode();
+			if (Node->Pins.Num() == 0)
+			{
+				Node->AllocateDefaultPins();
+			}
+			return Node;
+		}
+
+		/** Writes one FNiagaraVariable-typed UPROPERTY by reflection. */
+		bool SetVariableProperty(UNiagaraNode& Node, const TCHAR* PropertyName, const FNiagaraVariable& Value)
+		{
+			FStructProperty* Property = CastField<FStructProperty>(
+				Node.GetClass()->FindPropertyByName(PropertyName));
+			if (Property == nullptr || Property->Struct != FNiagaraVariable::StaticStruct())
+			{
+				return false;
+			}
+			Property->CopyCompleteValue(Property->ContainerPtrToValuePtr<void>(&Node), &Value);
+			return true;
+		}
+
+		/** The node's first pin of the given direction whose type is a parameter map. */
+		UEdGraphPin* FindParameterMapPin(UNiagaraNode& Node, EEdGraphPinDirection Direction)
+		{
+			const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
+			for (UEdGraphPin* Pin : Node.Pins)
+			{
+				if (Pin != nullptr && Pin->Direction == Direction && Schema != nullptr
+					&& Schema->PinToTypeDefinition(Pin) == FNiagaraTypeDefinition::GetParameterMapDef())
+				{
+					return Pin;
+				}
+			}
+			return nullptr;
+		}
+	}
+
+	bool FNiagaraAdapter::AddEventHandler(const FStackAddress& EmitterAddress,
+		const FString& SourceEmitterName, FName SourceEventName, const FString& ExecutionModeName,
+		int32 SpawnNumber, TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("AddEventHandler"));
+		UNiagaraSystem* System = EmitterAddress.System;
+		if (System == nullptr || EmitterAddress.EmitterName.IsNone())
+		{
+			OutErrors.Add(TEXT("Cannot add an event handler to an unaddressed emitter."));
+			return false;
+		}
+
+		const FNiagaraEmitterHandle* Receiver = HandleForName(System, EmitterAddress.EmitterName.ToString());
+		if (Receiver == nullptr || Receiver->GetInstance().Emitter == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("'%s' has no emitter named '%s' to receive events."),
+				*System->GetName(), *EmitterAddress.EmitterName.ToString()));
+			return false;
+		}
+
+		const FNiagaraEmitterHandle* Source = HandleForName(System, SourceEmitterName);
+		if (Source == nullptr)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Event source emitter '%s' does not exist (yet). Handlers must be added after every emitter."),
+				*SourceEmitterName));
+			return false;
+		}
+
+		const UEnum* ModeEnum = StaticEnum<EScriptExecutionMode>();
+		const int64 ModeValue = ModeEnum != nullptr ? ModeEnum->GetValueByNameString(ExecutionModeName) : INDEX_NONE;
+		if (ModeValue == INDEX_NONE)
+		{
+			OutErrors.Add(FString::Printf(TEXT("'%s' is not an event execution mode. Valid: EveryParticle, SpawnedParticles."),
+				*ExecutionModeName));
+			return false;
+		}
+
+		const FVersionedNiagaraEmitter Instance = Receiver->GetInstance();
+		UNiagaraEmitter* Emitter = Instance.Emitter;
+		FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Instance.Version);
+		UNiagaraGraph* Graph = GraphForAddress(EmitterAddress);
+		if (Data == nullptr || Graph == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Emitter '%s' has no reachable graph to host an event stack."),
+				*EmitterAddress.EmitterName.ToString()));
+			return false;
+		}
+
+		// A new stack group appears (or an old one changes identity), so every cached view is stale.
+		FEpochGuard Epoch(System);
+		System->Modify();
+		Emitter->Modify();
+
+		// Regeneration: one zero-id handler at most, so a rebuild lands on the same identity instead
+		// of accreting one handler per build. The engine's removal derefs Script unchecked, hence the
+		// guard on ours being the one to remove.
+		for (const FNiagaraEventScriptProperties& Existing : Data->EventHandlerScriptProps)
+		{
+			if (Existing.Script != nullptr && Existing.Script->GetUsageId() == FGuid())
+			{
+				Emitter->RemoveEventHandlerByUsageId(FGuid(), Instance.Version);
+				break;
+			}
+		}
+
+		FNiagaraEventScriptProperties Properties;
+		Properties.ExecutionMode = static_cast<EScriptExecutionMode>(ModeValue);
+		Properties.SpawnNumber = static_cast<uint32>(FMath::Max(0, SpawnNumber));
+		Properties.SourceEmitterID = Source->GetId();
+		Properties.SourceEventName = SourceEventName;
+
+		// The view model's one-call path exists but hard-codes FGuid::NewGuid() for the usage id,
+		// which is the one thing this cannot accept -- the zero id IS the addressability. Same
+		// recipe, id under our control (NiagaraEmitterViewModel.cpp, AddEventHandler).
+		Properties.Script = NewObject<UNiagaraScript>(Emitter,
+			MakeUniqueObjectName(Emitter, UNiagaraScript::StaticClass(), TEXT("EventScript")),
+			RF_Transactional);
+		Properties.Script->SetUsage(ENiagaraScriptUsage::ParticleEventScript);
+		Properties.Script->SetUsageId(FGuid());
+		Properties.Script->SetLatestSource(Data->GraphSource);
+
+		Emitter->AddEventHandler(Properties, Instance.Version);
+
+		// The graph half of FNiagaraStackGraphUtilities::ResetGraphForOutput (unexported), for the
+		// zero-id event usage: an output node fed a parameter map by an input node. The output node
+		// is reused when a previous build made one; the engine's version recreates the input node
+		// every call and leaves the old one dangling, so this one reuses a still-wired input too.
+		Graph->Modify();
+		UNiagaraNode* OutputNode = nullptr;
+		for (UEdGraphNode* GraphNode : Graph->Nodes)
+		{
+			if (GraphNode == nullptr || GraphNode->GetClass()->GetName() != TEXT("NiagaraNodeOutput"))
+			{
+				continue;
+			}
+			const FProperty* TypeProperty = GraphNode->GetClass()->FindPropertyByName(TEXT("ScriptType"));
+			const FStructProperty* IdProperty = CastField<FStructProperty>(
+				GraphNode->GetClass()->FindPropertyByName(TEXT("ScriptTypeId")));
+			if (TypeProperty == nullptr || IdProperty == nullptr)
+			{
+				continue;
+			}
+			int64 UsageValue = 0;
+			if (const FEnumProperty* AsEnum = CastField<FEnumProperty>(TypeProperty))
+			{
+				UsageValue = AsEnum->GetUnderlyingProperty()->GetSignedIntPropertyValue(
+					AsEnum->ContainerPtrToValuePtr<void>(GraphNode));
+			}
+			else if (const FByteProperty* AsByte = CastField<FByteProperty>(TypeProperty))
+			{
+				UsageValue = AsByte->GetPropertyValue_InContainer(GraphNode);
+			}
+			const FGuid NodeUsageId = *IdProperty->ContainerPtrToValuePtr<FGuid>(GraphNode);
+			if (UsageValue == static_cast<int64>(ENiagaraScriptUsage::ParticleEventScript)
+				&& NodeUsageId == FGuid())
+			{
+				OutputNode = Cast<UNiagaraNode>(GraphNode);
+				break;
+			}
+		}
+
+		if (OutputNode == nullptr)
+		{
+			UClass* OutputClass = FindObject<UClass>(nullptr, TEXT("/Script/NiagaraEditor.NiagaraNodeOutput"));
+			OutputNode = CreateGraphNodeWithProperties(*Graph, OutputClass, [](UNiagaraNode& Node)
+			{
+				FProperty* TypeProperty = Node.GetClass()->FindPropertyByName(TEXT("ScriptType"));
+				FStructProperty* IdProperty = CastField<FStructProperty>(
+					Node.GetClass()->FindPropertyByName(TEXT("ScriptTypeId")));
+				FArrayProperty* OutputsProperty = CastField<FArrayProperty>(
+					Node.GetClass()->FindPropertyByName(TEXT("Outputs")));
+				if (TypeProperty == nullptr || IdProperty == nullptr || OutputsProperty == nullptr)
+				{
+					return false;
+				}
+
+				const TCHAR* UsageName = TEXT("ParticleEventScript");
+				TypeProperty->ImportText_Direct(UsageName,
+					TypeProperty->ContainerPtrToValuePtr<void>(&Node), &Node, PPF_None);
+				*IdProperty->ContainerPtrToValuePtr<FGuid>(&Node) = FGuid();
+
+				FScriptArrayHelper Outputs(OutputsProperty,
+					OutputsProperty->ContainerPtrToValuePtr<void>(&Node));
+				const int32 Index = Outputs.AddValue();
+				const FNiagaraVariable OutVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("Out"));
+				OutputsProperty->Inner->CopyCompleteValue(Outputs.GetRawPtr(Index), &OutVariable);
+				return true;
+			});
+			if (OutputNode == nullptr)
+			{
+				OutErrors.Add(TEXT("Could not build the event stack's output node (NiagaraNodeOutput unreachable or its shape changed)."));
+				return false;
+			}
+		}
+
+		UEdGraphPin* OutputInPin = FindParameterMapPin(*OutputNode, EGPD_Input);
+		if (OutputInPin == nullptr)
+		{
+			OutErrors.Add(TEXT("The event output node has no parameter map input pin."));
+			return false;
+		}
+
+		if (OutputInPin->LinkedTo.Num() == 0)
+		{
+			UClass* InputClass = FindObject<UClass>(nullptr, TEXT("/Script/NiagaraEditor.NiagaraNodeInput"));
+			UNiagaraNode* InputNode = CreateGraphNodeWithProperties(*Graph, InputClass, [](UNiagaraNode& Node)
+			{
+				if (!SetVariableProperty(Node, TEXT("Input"),
+					FNiagaraVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("InputMap"))))
+				{
+					return false;
+				}
+				FProperty* UsageProperty = Node.GetClass()->FindPropertyByName(TEXT("Usage"));
+				if (UsageProperty == nullptr)
+				{
+					return false;
+				}
+				UsageProperty->ImportText_Direct(TEXT("Parameter"),
+					UsageProperty->ContainerPtrToValuePtr<void>(&Node), &Node, PPF_None);
+				return true;
+			});
+			UEdGraphPin* InputOutPin = InputNode != nullptr
+				? FindParameterMapPin(*InputNode, EGPD_Output) : nullptr;
+			if (InputOutPin == nullptr)
+			{
+				OutErrors.Add(TEXT("Could not build the event stack's input node."));
+				return false;
+			}
+			OutputInPin->MakeLinkTo(InputOutPin);
+		}
+
+		OutputNode->MarkNodeRequiresSynchronization(TEXT("DreamFX event handler"),
+			/*bRaiseGraphNeedsRecompile=*/true);
+		return true;
 	}
 
 	bool FNiagaraAdapter::WaitAndCollect(UNiagaraSystem* System, bool bIncludingGpuShaders,
