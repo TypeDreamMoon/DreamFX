@@ -1,0 +1,50 @@
+// plan-events V2: an event source and a receiver whose OnEvent block must survive
+// build -> decompile -> rebuild -> decompile unchanged. The receiver spawns ONLY from
+// events, which is exactly the shape that used to come back permanently empty.
+System(Name="Corpus/NS_EventHandler", Root="Plugin.DreamFX")
+{
+    Emitter Source
+    {
+        Settings = {
+            RequiresPersistentIDs = true;
+            Determinism = true;
+            RandomSeed = 7;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.5);
+            SpawnBurst_Instantaneous(SpawnCount = 4);
+        }
+
+        ParticleSpawn = {
+            V2/InitializeParticle(LifetimeMode = DirectSet, Lifetime = 0.4);
+        }
+
+        ParticleUpdate = {
+            // GenerateLocationEvent declares SolveForcesAndVelocity as a required
+            // predecessor; without it the stack carries an error-severity issue.
+            SolveForcesAndVelocity();
+            GenerateLocationEvent();
+        }
+    }
+
+    Emitter Receiver
+    {
+        Settings = {
+            Determinism = true;
+            RandomSeed = 11;
+        }
+
+        ParticleSpawn = {
+            V2/InitializeParticle(LifetimeMode = DirectSet, Lifetime = 0.3);
+        }
+
+        OnEvent(Source = Source, Event = "LocationEvent", Mode = SpawnedParticles, SpawnNumber = 2) = {
+            ReceiveLocationEvent();
+        }
+
+        SpriteRenderer
+        {
+        }
+    }
+}

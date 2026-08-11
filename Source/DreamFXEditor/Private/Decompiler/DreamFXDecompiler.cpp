@@ -1755,10 +1755,20 @@ namespace UE::DreamFX::Editor
 					// Collision(AgeCollidingParticles=true) -> re-export shows AdvancedAgingRate=1.0;
 					// drop the toggle and it vanishes. Version selection (the prior suspect) was
 					// eliminated the same way -- the invention survives with @1.0 removed.
+					// Literal bools only. A linked bool cannot be an edit condition's value, and the
+					// engine materialises linked-default overrides on its own at AddModule time --
+					// GenerateLocationEvent's `Boolean to Send as Localspace Flag` arrives SET, linked
+					// to Emitter.LocalSpace, in a system whose source never mentioned it. Riding the
+					// exemption, that link was re-exported, and *rebuilding* the link write is what
+					// plants an `Emitter.LocalSpace = false` parameter default on the emitter graph:
+					// the second decompile then grows a Defaults block the first did not have, which is
+					// the exact non-idempotence the event-handler round trip caught. Judged against the
+					// probe baseline instead, the untouched link suppresses like any other default.
 					for (const TTuple<FName, FInputValue>& Entry : Values)
 					{
 						const FInputInfo* Info = Module.FindInput(Entry.Get<0>());
 						if (Info != nullptr && !Info->bStaticSwitch && Entry.Get<1>().IsSet()
+							&& Entry.Get<1>().Mode == EInputValueMode::Literal
 							&& Info->Type == FNiagaraTypeDefinition::GetBoolDef())
 						{
 							SwitchValues.Emplace(Entry.Get<0>(), Entry.Get<1>());
