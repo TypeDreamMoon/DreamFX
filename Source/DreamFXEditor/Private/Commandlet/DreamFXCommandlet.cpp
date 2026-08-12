@@ -946,27 +946,84 @@ namespace
 			// property text, the shape the data interfaces use below. The script object is identity
 			// (its content arrives through the export and the simulation), the outer version guid too.
 			//
-			// DataInterface is reduced to its bound NAME. The raw struct text prints the binding's
-			// type handle, and that handle is serialization residue: on authored content it resolves
-			// to an unrelated type in any later session (GroomRods' PressureGrid reads as Vector4f)
-			// while the asset simulates fine, because the engine resolves the grid by name at
-			// compile time and never reads the stored type. Comparing the handle would fail every
-			// rebuilt mirror against noise the engine itself ignores.
+			// Every binding-struct field is reduced to its NAMES (plus default bytes where the
+			// binding carries a value). The raw struct text prints registered-type handles, and a
+			// handle is serialization residue: on authored content it resolves to an unrelated type
+			// in any later session (GroomRods' PressureGrid binding reads as Vector4f) while the
+			// asset simulates fine, because the engine resolves every binding by name and never
+			// reads the stored type back. Comparing handles would fail every rebuilt mirror against
+			// noise the engine itself ignores. DataInterface was normalized first; EnabledBinding,
+			// NumIterations and the dispatch element counts are the same family.
 			{
-				static const TSet<FName> StageSkip =
-					{ TEXT("Script"), TEXT("OuterEmitterVersion"), TEXT("DataInterface") };
+				static const TSet<FName> StageSkipBase = { TEXT("Script"), TEXT("OuterEmitterVersion") };
 				int32 StageIndex = 0;
 				for (const UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
 				{
 					if (Stage != nullptr)
 					{
+						TSet<FName> StageSkip = StageSkipBase;
 						TArray<FString> StageFacts;
-						AppendPropertyFacts(TEXT(""), Stage, Stage->GetClass(), StageSkip, SelfPackage, StageFacts);
-						if (const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage))
+
+						for (TFieldIterator<FStructProperty> It(Stage->GetClass()); It; ++It)
 						{
-							StageFacts.Add(FString::Printf(TEXT("DataInterface = %s"),
-								*Generic->DataInterface.BoundVariable.GetName().ToString()));
+							const FString StructName = It->Struct->GetName();
+							const bool bIsBinding =
+								StructName.Contains(TEXT("NiagaraParameterBinding"))
+								|| StructName.Contains(TEXT("NiagaraVariableAttributeBinding"))
+								|| StructName == TEXT("NiagaraVariableDataInterfaceBinding");
+							if (!bIsBinding)
+							{
+								continue;
+							}
+							StageSkip.Add(It->GetFName());
+
+							const void* BindingPtr = It->ContainerPtrToValuePtr<void>(Stage);
+							TArray<FString> Parts;
+							for (TFieldIterator<FProperty> Inner(It->Struct); Inner; ++Inner)
+							{
+								// Derived caches carry no semantics of their own: the resolved
+								// variable, the data set spelling and the exists/cached flags are
+								// all recomputed from the root name -- and bBindingExistsOnSource
+								// is the documented false-diff of the NE_C round.
+								const FString InnerName = Inner->GetName();
+								if (InnerName.StartsWith(TEXT("Cached"))
+									|| InnerName.StartsWith(TEXT("bBindingExists"))
+									|| InnerName.StartsWith(TEXT("bIsCached"))
+									|| InnerName == TEXT("ParamMapVariable")
+									|| InnerName == TEXT("DataSetName")
+									|| InnerName == TEXT("DataSetVariable")
+									// The RootName's variable-shaped twin, recomputed from it.
+									|| InnerName == TEXT("RootVariable"))
+								{
+									continue;
+								}
+
+								if (const FStructProperty* Var = CastField<FStructProperty>(*Inner))
+								{
+									// FNiagaraVariable/-Base sub-fields: the name is the meaning;
+									// the stored type handle is cross-session residue.
+									if (Var->Struct->IsChildOf(FNiagaraVariableBase::StaticStruct()))
+									{
+										const FNiagaraVariableBase* Variable =
+											Var->ContainerPtrToValuePtr<FNiagaraVariableBase>(BindingPtr);
+										Parts.Add(FString::Printf(TEXT("%s=%s"), *Var->GetName(),
+											*Variable->GetName().ToString()));
+										continue;
+									}
+								}
+
+								// Everything else in a binding struct is plain data (a root FName,
+								// a source-mode enum, default-value bytes) and exports safely.
+								FString ValueText;
+								Inner->ExportText_InContainer(0, ValueText, BindingPtr, BindingPtr,
+									nullptr, PPF_None);
+								Parts.Add(FString::Printf(TEXT("%s=%s"), *InnerName, *ValueText));
+							}
+							StageFacts.Add(FString::Printf(TEXT("%s = bind(%s)"),
+								*It->GetName(), *FString::Join(Parts, TEXT(","))));
 						}
+
+						AppendPropertyFacts(TEXT(""), Stage, Stage->GetClass(), StageSkip, SelfPackage, StageFacts);
 						StageFacts.Sort();
 						OutFacts.Add(FString::Printf(TEXT("emitter %s simulation stage %d:%s { %s }"),
 							*EmitterName, StageIndex, *Stage->GetClass()->GetName(),
@@ -1087,6 +1144,17 @@ namespace
 			TArray<FString> RightFacts;
 			DescribeSystem(Original, LeftFacts);
 			DescribeSystem(Mirror, RightFacts);
+
+			// -DreamFXDumpFacts writes both sides' full fact lists to Saved/DreamFX/. The console
+			// report truncates every fact to 400 characters, which is exactly wrong for chasing a
+			// difference that lives past that mark.
+			if (FParse::Param(FCommandLine::Get(), TEXT("DreamFXDumpFacts")))
+			{
+				const FString DumpDir = FPaths::ProjectSavedDir() / TEXT("DreamFX");
+				const FString BaseName = FPackageName::GetShortName(PackagePath);
+				FFileHelper::SaveStringArrayToFile(LeftFacts, *(DumpDir / BaseName + TEXT(".original.facts")));
+				FFileHelper::SaveStringArrayToFile(RightFacts, *(DumpDir / BaseName + TEXT(".mirror.facts")));
+			}
 
 			TMap<FString, int32> Counts;
 			for (const FString& Fact : LeftFacts)

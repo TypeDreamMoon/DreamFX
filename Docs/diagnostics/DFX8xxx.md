@@ -14,7 +14,7 @@
 Cannot decompile a null system.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2235`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2314`
 <!-- generated:end DFX8000 -->
 
 **Cause.** The asset path resolved to nothing, or to something that is not a Niagara System.
@@ -32,7 +32,7 @@ Cannot decompile a null system.
 Could not read emitters: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2418`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2497`
 <!-- generated:end DFX8001 -->
 
 **Cause.** The system's emitters could not be read.
@@ -50,7 +50,7 @@ Could not read emitters: %s
 Skipping emitter '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2435`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2514`
 <!-- generated:end DFX8002 -->
 
 **Cause.** One emitter could not be exported; the rest of the system still was.
@@ -68,7 +68,7 @@ Skipping emitter '%s': %s
 Cannot decompile a null emitter.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2578`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2657`
 <!-- generated:end DFX8003 -->
 
 **Cause.** The Export .dfe entry point was reached with nothing selected, or the selected asset failed to load.
@@ -86,7 +86,7 @@ Cannot decompile a null emitter.
 Could not create a host system to read the emitter through: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2590`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2669`
 <!-- generated:end DFX8004 -->
 
 **Cause.** Reading an emitter needs an owning system: every reader in the Niagara external edit API addresses through one. The throwaway host under `/Temp/DreamFX` could not be created.
@@ -104,7 +104,7 @@ Could not create a host system to read the emitter through: %s
 Could not copy emitter '%s' into a host system: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2614`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2693`
 <!-- generated:end DFX8005 -->
 
 **Cause.** The emitter could not be copied into the host system. Niagara's `AddEmitter` rejected it as a template.
@@ -122,7 +122,7 @@ Could not copy emitter '%s' into a host system: %s
 Could not read emitter '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2635`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2714`
 <!-- generated:end DFX8006 -->
 
 **Cause.** The emitter was copied into the host, but its topology could not be read back.
@@ -200,7 +200,7 @@ Because DFX8010 already ruled out every *known* gap, a mismatch here is a real d
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3213`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3275`
 <!-- generated:end DFX8013 -->
 
 **Cause.** The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its
@@ -231,7 +231,7 @@ yet (DFX8010).
 Emitter '%s' inherits from '%s'. The export flattens the inheritance: the merged stack is carried in full, but the rebuilt emitter no longer follows the parent, so later parent edits will change the original and not the mirror.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1320`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1367`
 <!-- generated:end DFX8014 -->
 
 **Cause.** The emitter inherits from a parent emitter asset (`VersionedParent` on the asset). The export flattens that inheritance --- and what that does and does not lose was measured before this warning was worded (2026-08-11, `NE_C`/`NE_C002` of `NS_Spawn_Teleport_Root`): an inheriting emitter's own graph *is* the full merged copy, so the export carries the complete effective stack and the rebuilt emitter behaves like the original. What the flattening loses is the **link**. The mirror is an independent emitter; an edit to the parent asset propagates into the original through Niagara's merge machinery and silently never reaches the mirror.
@@ -249,7 +249,7 @@ Emitter '%s' inherits from '%s'. The export flattens the inheritance: the merged
 Emitter '%s' carries %d event handler(s) this export cannot represent%s. The rebuilt emitter will receive no events -- an event-spawned emitter comes back permanently empty. The gap header names each handler's source emitter and event.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1368`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1415`
 <!-- generated:end DFX8015 -->
 
 **Cause.** The emitter carries event handlers (`EventHandlerScriptProps`), and DreamFX cannot represent them: the external edit API has no event surface --- its stack references hard-code the invalid usage id that only the four main stacks match --- so neither the handler's properties (source emitter, event name, spawn behaviour) nor the event stack's modules reach the export. The rebuilt emitter has no handlers at all, receives no events, and an event-SPAWNED emitter therefore renders nothing, permanently.
@@ -269,7 +269,7 @@ This was a silent loss until 2026-08-11, when the Descend/Up ribbons and sparks 
 Emitter '%s' carries %d simulation stage(s) this export cannot represent (custom stage class or missing script). The gap header names each one.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1415`
+**Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1462`
 <!-- generated:end DFX8016 -->
 
 **Cause.** The emitter carries a simulation stage the export has no text form for. Since

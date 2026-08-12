@@ -101,7 +101,15 @@ ModuleName(Input = Value, Input = Value);
 Spawn/Initialization/V2/InitializeParticle(...);   // partial path, when the short name is ambiguous
 ModuleName@1.2(...);                               // R7 version pin
 disabled GravityForce(Gravity = (0, 0, -980));     // in the stack, not executed
+Grid3D_ResampleFloat() as Grid3D_ResampleFloat003; // pin the node's name (see below)
 ```
+
+`as <name>` pins the function call **node's** name. It matters the moment anything links
+`Output.<node>.<value>` — those links resolve by the node's display name, the engine numbers fresh
+nodes by add order, and an original whose numbering carries years of editing history (a `003` whose
+siblings are long deleted) would rebuild with different numbers, leaving every output link dangling
+as "read before set". The decompiler emits `as` whenever a node's name is not simply the module
+asset's; hand-written sources rarely need it. Names are unique per emitter (DFX5034).
 
 Arguments are always named (DFX2008). Input names are normalised — Niagara's `Loop Duration` is
 written `LoopDuration`.

@@ -436,6 +436,11 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
+		// The probe handler and probe stage below both land on the zero usage id; their setup
+		// refreshes must enumerate inputs through the id-agnostic legacy path or they materialize
+		// nothing. See FTraversalCacheOffScope.
+		FNiagaraAdapter::FTraversalCacheOffScope TraversalCacheOff;
+
 		TArray<FString> Errors;
 		bool bCreated = false;
 
@@ -575,6 +580,12 @@ namespace UE::DreamFX::Editor
 		{
 			return Cached->Get();
 		}
+
+		// The probe's event and stage stacks live on the zero usage id, which the 5.8 traversal
+		// cache has no entries for -- and a cache miss reads as an EMPTY input list, not a computed
+		// one. See FTraversalCacheOffScope; the probe runs outside any read/write scope, so it
+		// carries its own.
+		FNiagaraAdapter::FTraversalCacheOffScope TraversalCacheOff;
 
 		FString ProbeError;
 		if (!EnsureProbeSystem(ProbeError))
@@ -734,6 +745,10 @@ namespace UE::DreamFX::Editor
 		{
 			return nullptr;
 		}
+
+		// Same reason as the schema probe above: the probe's event and stage stacks live on the
+		// zero usage id, which the traversal cache reads as an empty input list.
+		FNiagaraAdapter::FTraversalCacheOffScope TraversalCacheOff;
 
 		FStackAddress Address(ProbeSystem);
 		if (!IsSystemScopeStack(Stack))

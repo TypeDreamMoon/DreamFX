@@ -221,6 +221,18 @@ namespace UE::DreamFX
 		 */
 		bool bDisabled = false;
 
+		/**
+		 * `Grid3D_ResampleFloat() as Grid3D_ResampleFloat003;` -- the function call NODE's name,
+		 * when it is not simply the module asset's (ModuleCall statements only; empty otherwise).
+		 *
+		 * The node name is load-bearing the moment anything links `Output.<node>.<value>`: those
+		 * links resolve by the node's display name, the engine numbers fresh nodes by add order,
+		 * and an original whose numbering carries the scars of years of editing (a 003 whose
+		 * siblings were deleted) rebuilds with different numbers -- every output link then dangles
+		 * as "read before set". The suffix pins the rebuilt node to the original's name.
+		 */
+		FString InstanceName;
+
 		/** ModuleCall inputs. */
 		TArray<FNamedArgument> Arguments;
 
@@ -291,6 +303,13 @@ namespace UE::DreamFX
 		FString Name;
 		/** ENiagaraIterationSource entry (Particles / DataInterface / DirectSet). Empty = Particles. */
 		FString Iteration;
+		/**
+		 * ENiagaraSimStageExecuteBehavior entry (Always / OnSimulationReset / NotOnSimulationReset).
+		 * Empty = Always. Data-interface iteration stages only, per the engine's own tooltip; the
+		 * census once ruled this "never non-default" through a truncated diff channel, and Ninja's
+		 * Scatter stage runs NotOnSimulationReset.
+		 */
+		FString ExecuteBehavior;
 		/**
 		 * The bound data interface variable ("Emitter.PressureGrid"); implies DataInterface
 		 * iteration. A name with no type, deliberately: the engine resolves the iteration grid by

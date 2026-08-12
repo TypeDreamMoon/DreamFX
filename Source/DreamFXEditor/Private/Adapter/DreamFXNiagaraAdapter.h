@@ -368,6 +368,34 @@ namespace UE::DreamFX::Editor
 		static bool SaveSystem(UNiagaraSystem* System, TArray<FString>& OutErrors);
 
 		/**
+		 * Holds `fx.Niagara.EnableTraversalCache` at 0 for its lifetime, restoring the prior value.
+		 *
+		 * The 5.8 traversal cache keys a script's cached traversal by its usage id, and a cache miss
+		 * returns an EMPTY input list rather than computing one. Every stack DreamFX parks on the
+		 * zero usage id -- the event handler permanently, each simulation stage while the slice or
+		 * the read focus holds it -- has no cache entry under that id. That silent empty is how
+		 * NS_Spawn_Ninja_Root's 16 stages exported every module bare and the rebuilt fluid ran on
+		 * orphan grids: the reader saw no inputs to export, and the writer's refresh saw no inputs
+		 * to materialize. The legacy parameter-map-history path computes the same answer without the
+		 * cache, id-agnostic, so both scopes pin it on. The engine's own traversal-cache audit
+		 * commandlet toggles the very same cvar the same way. The six fixed stacks are unaffected
+		 * either way -- their zero usage id is the engine's own convention and IS in the cache.
+		 */
+		class FTraversalCacheOffScope
+		{
+		public:
+			FTraversalCacheOffScope();
+			~FTraversalCacheOffScope();
+
+			FTraversalCacheOffScope(const FTraversalCacheOffScope&) = delete;
+			FTraversalCacheOffScope& operator=(const FTraversalCacheOffScope&) = delete;
+
+		private:
+			class IConsoleVariable* Variable = nullptr;
+			int32 SavedValue = 0;
+		};
+
+		/**
 		 * Shares one edit context across a burst of reads of the same system.
 		 *
 		 * Every call into the external edit API constructs an `FNiagaraExternalEditContext`, and that
@@ -394,6 +422,9 @@ namespace UE::DreamFX::Editor
 			FReadScope& operator=(const FReadScope&) = delete;
 
 		private:
+			// Declared first so the cache is already off when the shared context builds, and comes
+			// back only after the context is gone.
+			FTraversalCacheOffScope TraversalCacheOff;
 			UNiagaraSystem* System = nullptr;
 			bool bOwns = false;
 		};
@@ -432,6 +463,10 @@ namespace UE::DreamFX::Editor
 			FWriteScope& operator=(const FWriteScope&) = delete;
 
 		private:
+			// Same reason and same ordering as FReadScope's copy: the write path's per-add refresh
+			// is what MATERIALIZES module input defaults, and under the traversal cache that refresh
+			// sees an empty input list for every zero-usage-id stack.
+			FTraversalCacheOffScope TraversalCacheOff;
 			UNiagaraSystem* System = nullptr;
 			bool bOwns = false;
 		};
@@ -560,6 +595,16 @@ namespace UE::DreamFX::Editor
 		 * time rebuilds the group n times to reach the same empty state.
 		 */
 		static bool ClearScriptStack(const FStackAddress& ScriptAddress, TArray<FString>& OutErrors);
+
+		/**
+		 * Renames a freshly added module's function call node -- `Output.<node>.<value>` links
+		 * resolve by this name, so a rebuild must land each referenced node on the name the source
+		 * recorded (`... as <name>`), not on whatever the add counter assigned. Birth renames only:
+		 * call it right after AddModule, inside the deferred-refresh batch, before anything is
+		 * materialized against the engine-assigned name.
+		 */
+		static bool RenameModule(const FStackAddress& ModuleAddress, const FString& NewName,
+			TArray<FString>& OutErrors);
 
 		/** The emitter's graph-level parameter defaults; empty when every parameter uses Fail. */
 		static bool GetParameterDefaults(const FStackAddress& EmitterAddress,
@@ -943,11 +988,17 @@ namespace UE::DreamFX::Editor
 			bool bIsGeneric = false;
 			/** ENiagaraIterationSource entry name; empty when not generic. */
 			FString IterationSourceName;
+			/** ENiagaraSimStageExecuteBehavior entry name; empty when not generic. */
+			FString ExecuteBehaviorName;
 			/** The bound data interface variable, when iterating over one. Name only: the stored
 			 * type is serialization residue the engine never reads (see FSimulationStageSpec). */
 			FString DataInterfaceBindingName;
 			/** The iteration count's default as text, or "<bound>" when driven by a parameter. */
 			FString NumIterationsText;
+			/** True when NumIterations is additionally BOUND to a parameter (default + binding). */
+			bool bNumIterationsBound = false;
+			/** The parameter driving bEnabled, when one is bound; empty otherwise. */
+			FString EnabledBindingName;
 			/** The stage script's usage id -- per stage, random on authored content (never zero). */
 			FGuid ScriptUsageId;
 			bool bScriptMissing = false;

@@ -877,6 +877,19 @@ namespace UE::DreamFX
 					SkipToStatementEnd();
 					return false;
 				}
+
+				// Optional node name: `Grid3D_ResampleFloat() as Grid3D_ResampleFloat003;`. The name
+				// is what `Output.<node>.<value>` links resolve against, so a rebuild has to land
+				// the node on it rather than on whatever the add counter says next.
+				if (Lexer.Peek().IsIdentifier(TEXT("as")))
+				{
+					Lexer.Next();
+					if (!ExpectIdentifier(Statement.InstanceName))
+					{
+						SkipToStatementEnd();
+						return false;
+					}
+				}
 			}
 			else if (Lexer.Peek().IsSymbol(TEXT("=")))
 			{
@@ -1390,6 +1403,10 @@ namespace UE::DreamFX
 				{
 					bOk = ExpectIdentifier(OutSpec.Iteration);
 				}
+				else if (Key == TEXT("ExecuteBehavior"))
+				{
+					bOk = ExpectIdentifier(OutSpec.ExecuteBehavior);
+				}
 				else if (Key == TEXT("DataInterface"))
 				{
 					bOk = ReadDottedName(OutSpec.DataInterface);
@@ -1420,7 +1437,7 @@ namespace UE::DreamFX
 				else
 				{
 					Diagnostics.Error(TEXT("DFX2026"), KeyLocation,
-						FString::Printf(TEXT("Unknown Stage argument '%s'. Expected Iteration, DataInterface, NumIterations or Enabled."),
+						FString::Printf(TEXT("Unknown Stage argument '%s'. Expected Iteration, DataInterface, NumIterations, ExecuteBehavior or Enabled."),
 							*Key));
 					return false;
 				}
@@ -1428,7 +1445,7 @@ namespace UE::DreamFX
 				if (!bOk)
 				{
 					Diagnostics.Error(TEXT("DFX2026"), ValueToken.Location,
-						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: Iteration is an identifier, DataInterface is a dotted parameter name, NumIterations is an integer and Enabled is true/false."),
+						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: Iteration and ExecuteBehavior are identifiers, DataInterface is a dotted parameter name, NumIterations is an integer and Enabled is true/false."),
 							*Key));
 					return false;
 				}

@@ -150,6 +150,9 @@ namespace UE::DreamFX::Editor
 			TArray<FPlannedInput> Inputs;
 			FSourceLocation Location;
 
+			/** `Foo() as Foo003`: the node name the rebuilt module must land on (see FStatement). */
+			FString InstanceName;
+
 			/** `Foo@1.2(...)`: the version the module is rebound to after it is added (R1b). */
 			FGuid VersionGuid;
 
@@ -1375,6 +1378,7 @@ namespace UE::DreamFX::Editor
 				Planned.Asset = ModuleAsset;
 				Planned.Location = Statement.Location;
 				Planned.bDisabled = Statement.bDisabled;
+				Planned.InstanceName = Statement.InstanceName;
 				Planned.VersionGuid = PinnedVersion;
 				OutDependencies.Add(ModuleAsset);
 
@@ -2032,6 +2036,35 @@ namespace UE::DreamFX::Editor
 					Planned.Renderers.Add(MoveTemp(PlannedRenderer));
 				}
 
+				// Node names are unique per emitter graph, and `as` names become node names. Two
+				// statements claiming one name would rename two nodes onto it, and every
+				// Output.<name> link would then resolve to whichever the traversal met first.
+				{
+					TSet<FString> InstanceNames;
+					auto CheckStack = [&](const FPlannedStack& Stack)
+					{
+						for (const FPlannedModule& Module : Stack.Modules)
+						{
+							if (Module.InstanceName.IsEmpty())
+							{
+								continue;
+							}
+							bool bAlready = false;
+							InstanceNames.Add(Module.InstanceName, &bAlready);
+							if (bAlready)
+							{
+								Diagnostics.Error(TEXT("DFX5034"), Module.Location,
+									FString::Printf(TEXT("Emitter '%s' uses 'as %s' on two module calls. Node names are unique per emitter; rename one."),
+										*Emitter.Name, *Module.InstanceName));
+								bOk = false;
+							}
+						}
+					};
+					for (const FPlannedStack& Stack : Planned.Stacks) { CheckStack(Stack); }
+					for (const FPlannedEventHandler& Handler : Planned.EventHandlers) { CheckStack(Handler.Stack); }
+					for (const FPlannedSimulationStage& Stage : Planned.SimulationStages) { CheckStack(Stage.Stack); }
+				}
+
 				OutPlan.Emitters.Add(MoveTemp(Planned));
 			}
 
@@ -2158,7 +2191,17 @@ namespace UE::DreamFX::Editor
 			// the override pin chain, which needs GetStackFunctionInputOverridePin -- public but
 			// unexported. Not-a-switch falls through rather than failing, so an ordinary input asking
 			// the same question costs one name lookup and nothing else.
-			if (Input.Path.Num() == 1 && !Input.NiagaraName.IsNone())
+			//
+			// Literals and enums only: a LINKED static rides the ordinary rail below instead. A link
+			// is an override-pin wire to a parameter map get -- the same graph shape for static and
+			// non-static inputs, and SetLinkedParameterValueForFunctionInput's own KnownParameters
+			// pass upgrades the target to its static-typed twin. The fluid templates are the living
+			// case: every Grid3D_Turbulence links `CalculateTurbulence` to an emitter-scope static
+			// bool, and the pin-default encoding has nothing to encode for it -- the value lives in
+			// the other parameter.
+			const bool bStaticPinEncodable = Input.Value.Mode == EInputValueMode::Literal
+				|| Input.Value.Mode == EInputValueMode::Enum;
+			if (Input.Path.Num() == 1 && !Input.NiagaraName.IsNone() && bStaticPinEncodable)
 			{
 				bool bNotASwitch = false;
 				if (FNiagaraAdapter::SetStaticSwitchByPin(
@@ -2274,6 +2317,25 @@ namespace UE::DreamFX::Editor
 						bOk = false;
 						continue;
 					}
+				}
+
+				// `as <name>`: land the node on the source's name while nothing references the
+				// engine-assigned one -- inside the deferred batch is exactly that moment. Every
+				// later address (the write pass, module locations, Output.* links) uses the final
+				// name.
+				if (!Module.InstanceName.IsEmpty() && Module.InstanceName != AddedName.ToString())
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::RenameModule(StackAddress.WithModule(AddedName),
+						Module.InstanceName, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5020"), Module.Location, Diagnostics);
+						bOk = false;
+						continue;
+					}
+					OutModuleLocations.Remove(AddedName);
+					AddedName = FName(*Module.InstanceName);
+					OutModuleLocations.Add(AddedName, Module.Location);
 				}
 
 				Added.Add({&Module, AddedName});
@@ -3255,6 +3317,21 @@ namespace UE::DreamFX::Editor
 				Diagnostics.Error(TEXT("DFX6005"), Pending.HeaderLocation,
 					FString::Printf(TEXT("Niagara compilation of '%s' did not succeed (status %s)."),
 						*Pending.Plan.FullAssetPath, *CompileState.StatusName));
+
+				// -DreamFXSaveFailedBuilds keeps the wreck on disk for the coroner. A failed build
+				// normally saves nothing, and every later reader then silently measures the LAST
+				// saved asset instead -- a five-hour-stale mirror once answered an afternoon of
+				// questions about a build it had nothing to do with.
+				if (Pending.bSave && FParse::Param(FCommandLine::Get(), TEXT("DreamFXSaveFailedBuilds")))
+				{
+					TArray<FString> SaveErrors;
+					if (FNiagaraAdapter::SaveSystem(System, SaveErrors))
+					{
+						UE_LOG(LogDreamFX, Warning,
+							TEXT("Saved the FAILED build of '%s' for inspection (-DreamFXSaveFailedBuilds)."),
+							*Pending.Plan.FullAssetPath);
+					}
+				}
 				return false;
 			}
 

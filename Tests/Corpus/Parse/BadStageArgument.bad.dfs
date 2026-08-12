@@ -1,6 +1,8 @@
-// A Stage header takes exactly Iteration, DataInterface, NumIterations and Enabled; anything else
-// must be named as unknown rather than skipped, because a dropped argument is a stage that quietly
-// runs with different properties than the source says.
+// A Stage header takes exactly Iteration, DataInterface, NumIterations, ExecuteBehavior and
+// Enabled; anything else must be named as unknown rather than skipped, because a dropped argument
+// is a stage that quietly runs with different properties than the source says. (This fixture once
+// used ExecuteBehavior as its unknown -- then ExecuteBehavior became real syntax and the negative
+// fixture silently passed. Frequency is nobody's stage property.)
 // EXPECT DFX2026
 System(Name="Corpus/NS_BadStageArgument", Root="Plugin.DreamFX")
 {
@@ -8,7 +10,7 @@ System(Name="Corpus/NS_BadStageArgument", Root="Plugin.DreamFX")
     {
         Settings = { SimTarget = GPU; }
 
-        Stage Settle(ExecuteBehavior = Always) = {
+        Stage Settle(Frequency = 3) = {
             ScaleColor();
         }
     }

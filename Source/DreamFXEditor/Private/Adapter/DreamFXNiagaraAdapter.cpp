@@ -26,6 +26,7 @@
 
 #include "Dom/JsonObject.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformMemory.h"
 #include "JsonObjectConverter.h"
 #include "Misc/PackageName.h"
@@ -1077,6 +1078,27 @@ namespace UE::DreamFX::Editor
 
 		bOutCreated = true;
 		return System;
+	}
+
+	FNiagaraAdapter::FTraversalCacheOffScope::FTraversalCacheOffScope()
+	{
+		Variable = IConsoleManager::Get().FindConsoleVariable(TEXT("fx.Niagara.EnableTraversalCache"), false);
+		if (Variable != nullptr)
+		{
+			SavedValue = Variable->GetInt();
+			if (SavedValue != 0)
+			{
+				Variable->SetWithCurrentPriority(0);
+			}
+		}
+	}
+
+	FNiagaraAdapter::FTraversalCacheOffScope::~FTraversalCacheOffScope()
+	{
+		if (Variable != nullptr && SavedValue != 0)
+		{
+			Variable->SetWithCurrentPriority(SavedValue);
+		}
 	}
 
 	FNiagaraAdapter::FReadScope::FReadScope(UNiagaraSystem* InSystem)
@@ -3194,6 +3216,12 @@ namespace UE::DreamFX::Editor
 				Summary.IterationSourceName = SourceEnum->GetNameStringByValue(
 					static_cast<int64>(Generic->IterationSource));
 			}
+			// Declared in NiagaraShader (NiagaraScriptBase.h), a third module for a third enum.
+			if (const UEnum* BehaviorEnum = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraShader.ENiagaraSimStageExecuteBehavior")))
+			{
+				Summary.ExecuteBehaviorName = BehaviorEnum->GetNameStringByValue(
+					static_cast<int64>(Generic->ExecuteBehavior));
+			}
 			// NAME_None prints as the string "None", which an emptiness check happily passes and a
 			// Stage header then binds a data interface literally named None. Unbound = empty here.
 			const FName BoundVariableName = Generic->DataInterface.BoundVariable.GetName();
@@ -3209,6 +3237,17 @@ namespace UE::DreamFX::Editor
 			// parameter can drive it, in which case the number here would be a lie. The Has check
 			// first -- the getter *asserts* on an empty default array, and the raw CDO ships one
 			// (its constructor-time seeding is skipped), which took the whole commandlet down.
+			//
+			// A binding can ALSO ride on top of a default (Ninja's Solve Pressure holds default 6
+			// and binds Emitter.OVERRIDE.PressureSolveIterations); the default alone would export
+			// as an innocent 6, so the bound state travels as its own flag.
+			Summary.bNumIterationsBound =
+				!Generic->NumIterations.ResolvedParameter.GetName().IsNone()
+				|| !Generic->NumIterations.AliasedParameter.GetName().IsNone();
+			// GetName() is the cached display form; RootName itself is protected. Presence is the
+			// question here, and both spell the same binding.
+			const FName EnabledRoot = Generic->EnabledBinding.GetName();
+			Summary.EnabledBindingName = EnabledRoot.IsNone() ? FString() : EnabledRoot.ToString();
 			if (!Generic->NumIterations.HasDefaultValueEditorOnly())
 			{
 				Summary.NumIterationsText = FString();
@@ -3939,6 +3978,21 @@ namespace UE::DreamFX::Editor
 				return false;
 			}
 			Stage->IterationSource = static_cast<ENiagaraIterationSource>(IterationValue);
+		}
+		if (!Spec.ExecuteBehavior.IsEmpty())
+		{
+			const UEnum* BehaviorEnum = FindObject<UEnum>(nullptr,
+				TEXT("/Script/NiagaraShader.ENiagaraSimStageExecuteBehavior"));
+			const int64 BehaviorValue = BehaviorEnum != nullptr
+				? BehaviorEnum->GetValueByNameString(Spec.ExecuteBehavior) : static_cast<int64>(INDEX_NONE);
+			if (BehaviorValue == INDEX_NONE)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("'%s' is not an execute behavior. Valid: Always, OnSimulationReset, NotOnSimulationReset."),
+					*Spec.ExecuteBehavior));
+				return false;
+			}
+			Stage->ExecuteBehavior = static_cast<ENiagaraSimStageExecuteBehavior>(BehaviorValue);
 		}
 		if (!Spec.DataInterface.IsEmpty())
 		{
@@ -4678,6 +4732,71 @@ namespace UE::DreamFX::Editor
 			OwningNode->MarkNodeRequiresSynchronization(TEXT("DreamFX static input write"),
 				/*bRaiseGraphNeedsRecompile=*/true);
 		}
+		return true;
+	}
+
+	bool FNiagaraAdapter::RenameModule(const FStackAddress& ModuleAddress, const FString& NewName,
+		TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("RenameModule"));
+
+		UNiagaraNodeFunctionCall* Node = FindModuleNode(ModuleAddress);
+		if (Node == nullptr)
+		{
+			OutErrors.Add(FString::Printf(TEXT("No module node named '%s' to rename."),
+				*ModuleAddress.ModuleName.ToString()));
+			return false;
+		}
+		if (Node->GetFunctionName() == NewName)
+		{
+			return true;
+		}
+
+		// A birth rename only: the caller renames the node right after AddModule, inside the
+		// deferred-refresh batch, while nothing has been materialized against the engine-assigned
+		// name -- no rapid iteration parameters, no override pins, no referencing links. At that
+		// moment the name is one UPROPERTY string, and writing it is the whole rename. (The stack
+		// UI's mid-life rename has to drag RenameReferencingParameters behind it; a freshly added
+		// node has no referencing parameters to drag.) FunctionDisplayName is a private UPROPERTY
+		// and SuggestName is unexported, hence the reflection write.
+		FStrProperty* NameProperty = CastField<FStrProperty>(
+			Node->GetClass()->FindPropertyByName(TEXT("FunctionDisplayName")));
+		if (NameProperty == nullptr)
+		{
+			OutErrors.Add(TEXT("UNiagaraNodeFunctionCall no longer has a FunctionDisplayName string property -- the engine's node naming moved."));
+			return false;
+		}
+
+		FEpochGuard Epoch(ModuleAddress.System);
+
+		// Regeneration renames into a graph that still holds the PREVIOUS build's nodes: stacks
+		// are cleared one at a time, so a stale twin bearing the wanted name can sit in a stack
+		// whose clear has not run yet. Left alone, every later by-name lookup -- the static switch
+		// pin write above all -- finds whichever twin the graph order offers, writes onto the
+		// stale one, and the clear then deletes the write. (Measured: two of Ninja's four
+		// GetTransients switches landed on 3-hour-old wreckage and compiled as false.) The squatter
+		// is this build's own doomed content, so it is evicted to a throwaway name rather than
+		// deleted -- its own stack's clear owns the deletion.
+		int32 EvictIndex = 0;
+		if (UNiagaraGraph* Graph = Node->GetNiagaraGraph())
+		{
+			for (UEdGraphNode* GraphNode : Graph->Nodes)
+			{
+				UNiagaraNodeFunctionCall* Other = Cast<UNiagaraNodeFunctionCall>(GraphNode);
+				if (Other == nullptr || Other == Node || Other->GetFunctionName() != NewName)
+				{
+					continue;
+				}
+				Other->Modify();
+				NameProperty->SetPropertyValue(NameProperty->ContainerPtrToValuePtr<void>(Other),
+					FString::Printf(TEXT("%s_dfxevicted%d"), *NewName, EvictIndex++));
+			}
+		}
+
+		Node->Modify();
+		NameProperty->SetPropertyValue(NameProperty->ContainerPtrToValuePtr<void>(Node), NewName);
+		Node->MarkNodeRequiresSynchronization(TEXT("DreamFX module rename"),
+			/*bRaiseGraphNeedsRecompile=*/true);
 		return true;
 	}
 

@@ -747,6 +747,48 @@ namespace UE::DreamFX::Editor
 				FString Text;
 				switch (Value->Type)
 				{
+				case EJson::Object:
+				{
+					// The one struct with a DSL spelling: an FBox as `box(min..., max...)`. Written
+					// only when it is live -- an emitter computes its own bounds unless
+					// CalculateBoundsMode is Fixed, a system unless bFixedBounds is set -- because a
+					// stale authored box under dynamic bounds is inert noise. Everything else
+					// object-shaped still has no spelling and falls through.
+					//
+					// This closes what the field table's old comment called deliberate: the box was
+					// left out because this function only wrote scalars, and the cost surfaced as
+					// every rebuilt GPU mirror running with the freshly-created +/-100 default --
+					// NS_Spawn_Ninja_Root's fluid volume is 2000 units wide -- while DFX7101 warned
+					// about a FixedBounds the source really did declare, one export earlier.
+					const TSharedPtr<FJsonObject>* Box = nullptr;
+					const TSharedPtr<FJsonObject>* Min = nullptr;
+					const TSharedPtr<FJsonObject>* Max = nullptr;
+					if (!Value->TryGetObject(Box)
+						|| !(*Box)->TryGetObjectField(TEXT("Min"), Min)
+						|| !(*Box)->TryGetObjectField(TEXT("Max"), Max))
+					{
+						continue;
+					}
+					bool bSystemFlag = false;
+					if (Current->TryGetBoolField(TEXT("bFixedBounds"), bSystemFlag) && !bSystemFlag)
+					{
+						continue;
+					}
+					FString BoundsMode;
+					if (Current->TryGetStringField(TEXT("CalculateBoundsMode"), BoundsMode)
+						&& BoundsMode != TEXT("Fixed"))
+					{
+						continue;
+					}
+					const auto Axis = [](const TSharedPtr<FJsonObject>& Corner, const TCHAR* Name)
+					{
+						return FormatFloat(static_cast<float>(Corner->GetNumberField(Name)));
+					};
+					Text = FString::Printf(TEXT("box(%s, %s, %s, %s, %s, %s)"),
+						*Axis(*Min, TEXT("X")), *Axis(*Min, TEXT("Y")), *Axis(*Min, TEXT("Z")),
+						*Axis(*Max, TEXT("X")), *Axis(*Max, TEXT("Y")), *Axis(*Max, TEXT("Z")));
+					break;
+				}
 				case EJson::Boolean:
 					Text = Value->AsBool() ? TEXT("true") : TEXT("false");
 					break;
@@ -1156,8 +1198,10 @@ namespace UE::DreamFX::Editor
 		 * to compile a system that reads `Particles.ID` without it -- 8 of the 63 remaining rebuild
 		 * errors were that one missing checkbox (plan-v5, item A).
 		 *
-		 * `FixedBounds` is deliberately absent: it is an FBox, and WriteChangedSettings only writes
-		 * scalars. Listing it here would produce nothing and imply it round-trips.
+		 * `FixedBounds` earned its row the hard way: it was left out while WriteChangedSettings
+		 * only wrote scalars, and every rebuilt GPU mirror ran with the fresh-emitter +/-100
+		 * default while DFX7101 warned into a log nobody reads twice. The writer grew a box
+		 * spelling (gated on CalculateBoundsMode) and the row went in.
 		 */
 		const TPair<const TCHAR*, const TCHAR*> EmitterSettingFields[] =
 		{
@@ -1169,6 +1213,7 @@ namespace UE::DreamFX::Editor
 			{ TEXT("PreAllocationCount"),   TEXT("PreAllocationCount") },
 			{ TEXT("InterpolatedSpawning"), TEXT("InterpolatedSpawnMode") },
 			{ TEXT("CalculateBoundsMode"),  TEXT("CalculateBoundsMode") },
+			{ TEXT("FixedBounds"),          TEXT("FixedBounds") },
 			{ TEXT("RequiresPersistentIDs"),TEXT("bRequiresPersistentIDs") },
 			{ TEXT("Enabled"),              TEXT("bIsEnabled") },
 			// Found by diffing all 112 properties of one emitter against its mirror: 31 in the asset,
@@ -1188,6 +1233,8 @@ namespace UE::DreamFX::Editor
 			// birth velocity 2273 (=136500 * 1/60) original vs 4529 (=136500 * 1/30) mirror.
 			{ TEXT("FixedTickDelta"),     TEXT("bFixedTickDelta") },
 			{ TEXT("FixedTickDeltaTime"), TEXT("FixedTickDeltaTime") },
+			// Same story as the emitter's row: the box only writes when bFixedBounds is set.
+			{ TEXT("FixedBounds"),        TEXT("FixedBounds") },
 		};
 
 		/**
@@ -1513,6 +1560,25 @@ namespace UE::DreamFX::Editor
 				Errors.Reset();
 				FNiagaraAdapter::GetModuleInputValues(ModuleAddress, Values, Errors);
 
+				// -DreamFXTraceInputs names every input the reader returned, before any gate
+				// touches it. The suppression trace below only sees values that were SET and then
+				// judged; the Ninja fluid case needed the step before that -- which inputs arrive
+				// at all, in which mode, and what the visibility gate would decide.
+				if (FParse::Param(FCommandLine::Get(), TEXT("DreamFXTraceInputs")))
+				{
+					for (const TTuple<FName, FInputValue>& Entry : Values)
+					{
+						const FInputInfo* TraceInfo = Module.FindInput(Entry.Get<0>());
+						UE_LOG(LogDreamFX, Warning,
+							TEXT("DFXTRACE-INPUT %s / %s / %s mode=%d set=%d visible=%d editable=%d"),
+							*Stack.ScriptName.ToString(), *Module.ModuleName.ToString(),
+							*Entry.Get<0>().ToString(), static_cast<int32>(Entry.Get<1>().Mode),
+							Entry.Get<1>().IsSet() ? 1 : 0,
+							TraceInfo ? (TraceInfo->bVisible ? 1 : 0) : -1,
+							TraceInfo ? (TraceInfo->bEditable ? 1 : 0) : -1);
+					}
+				}
+
 				if (Module.bIsSetParameters)
 				{
 					// A Set Parameters module exports as the assignment block it came from,
@@ -1829,14 +1895,27 @@ namespace UE::DreamFX::Editor
 				// reason someone disables one instead of deleting it.
 				const FString Prefix = Module.bEnabled ? FString() : FString(TEXT("disabled "));
 
+				// `as <node>`: whenever the node's name is not simply the module asset's. That is
+				// exactly the set of names an `Output.<node>.<value>` link can carry that a
+				// rebuild's add counter cannot be trusted to reproduce -- the original's numbering
+				// carries its editing history (a 003 whose siblings are long deleted), and a link
+				// resolving against a renumbered node dangles as "read before set".
+				FString InstanceSuffix;
+				if (Module.Script != nullptr
+					&& Module.ModuleName != Module.Script->GetFName())
+				{
+					InstanceSuffix = FString::Printf(TEXT(" as %s"),
+						*ToNameToken(Module.ModuleName.ToString()));
+				}
+
 				if (Arguments.Num() == 0)
 				{
-					Writer.Line(FString::Printf(TEXT("%s%s();"), *Prefix, *ModuleSourceName));
+					Writer.Line(FString::Printf(TEXT("%s%s()%s;"), *Prefix, *ModuleSourceName, *InstanceSuffix));
 				}
 				else
 				{
-					const FString OneLine = FString::Printf(TEXT("%s%s(%s);"),
-						*Prefix, *ModuleSourceName, *FString::Join(Arguments, TEXT(", ")));
+					const FString OneLine = FString::Printf(TEXT("%s%s(%s)%s;"),
+						*Prefix, *ModuleSourceName, *FString::Join(Arguments, TEXT(", ")), *InstanceSuffix);
 					if (OneLine.Len() <= 100 && !OneLine.Contains(LINE_TERMINATOR))
 					{
 						Writer.Line(OneLine);
@@ -1850,7 +1929,7 @@ namespace UE::DreamFX::Editor
 							Writer.Line(Arguments[Index] + (Index + 1 < Arguments.Num() ? TEXT(",") : TEXT("")));
 						}
 						Writer.Pop();
-						Writer.Line(TEXT(");"));
+						Writer.Line(FString::Printf(TEXT(")%s;"), *InstanceSuffix));
 					}
 				}
 			}
@@ -2199,6 +2278,11 @@ namespace UE::DreamFX::Editor
 				{
 					Arguments.Add(FString::Printf(TEXT("Iteration = %s"), *Stage.IterationSourceName));
 				}
+				if (!Stage.ExecuteBehaviorName.IsEmpty()
+					&& Stage.ExecuteBehaviorName != Defaults.ExecuteBehaviorName)
+				{
+					Arguments.Add(FString::Printf(TEXT("ExecuteBehavior = %s"), *Stage.ExecuteBehaviorName));
+				}
 				if (Stage.NumIterationsText == TEXT("<bound>"))
 				{
 					// A parameter drives the count; Stage(NumIterations = ...) can only say a number.
@@ -2210,6 +2294,21 @@ namespace UE::DreamFX::Editor
 					&& Stage.NumIterationsText != Defaults.NumIterationsText)
 				{
 					Arguments.Add(FString::Printf(TEXT("NumIterations = %s"), *Stage.NumIterationsText));
+				}
+				if (Stage.bNumIterationsBound)
+				{
+					// The default number above still exports, so the loss is only the LIVE link --
+					// but a link is exactly what an author reaches for to tune iteration cost at
+					// runtime, so it gets its own line rather than hiding behind the number.
+					Result.UnsupportedFeatures.AddUnique(FString::Printf(
+						TEXT("simulation stage '%s' additionally BINDS its iteration count to a parameter -- the rebuilt stage keeps only the default number"),
+						*Stage.StageName.ToString()));
+				}
+				if (!Stage.EnabledBindingName.IsEmpty())
+				{
+					Result.UnsupportedFeatures.AddUnique(FString::Printf(
+						TEXT("simulation stage '%s' drives its enabled state from '%s' -- the rebuilt stage is enabled by its literal flag only"),
+						*Stage.StageName.ToString(), *Stage.EnabledBindingName));
 				}
 				if (Stage.bEnabled != Defaults.bEnabled)
 				{
