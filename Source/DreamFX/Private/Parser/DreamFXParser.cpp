@@ -356,10 +356,14 @@ namespace UE::DreamFX
 							Key.bHasLeave = bHasNumber;
 							Key.LeaveTangent = bHasNumber ? static_cast<float>(Attribute.Value->Number) : 0.0f;
 						}
+						else if (Attribute.Key == TEXT("Tangent"))
+						{
+							Key.TangentMode = Attribute.Value.IsValid() ? Attribute.Value->Text : FString();
+						}
 						else
 						{
 							Diagnostics.Error(TEXT("DFX2020"), Attribute.Location,
-								FString::Printf(TEXT("Unknown curve key attribute '%s'. Expected Interp, Arrive or Leave."),
+								FString::Printf(TEXT("Unknown curve key attribute '%s'. Expected Interp, Tangent, Arrive or Leave."),
 									*Attribute.Key));
 						}
 					}
@@ -1411,6 +1415,10 @@ namespace UE::DreamFX
 				{
 					bOk = ReadDottedName(OutSpec.DataInterface);
 				}
+				// NumIterations and Enabled each take a value OR a parameter that drives them. The
+				// value position decides which: a number / true / false is the literal, anything
+				// that reads as a name is a binding. Nothing is ambiguous -- no parameter is spelled
+				// `true` or `7` -- so neither form needs a keyword to introduce it.
 				else if (Key == TEXT("NumIterations"))
 				{
 					if (ValueToken.Kind == ETokenKind::Number)
@@ -1419,7 +1427,7 @@ namespace UE::DreamFX
 					}
 					else
 					{
-						bOk = false;
+						bOk = ReadDottedName(OutSpec.NumIterationsBinding);
 					}
 				}
 				else if (Key == TEXT("Enabled"))
@@ -1431,7 +1439,7 @@ namespace UE::DreamFX
 					}
 					else
 					{
-						bOk = false;
+						bOk = ReadDottedName(OutSpec.EnabledBinding);
 					}
 				}
 				else
@@ -1445,7 +1453,7 @@ namespace UE::DreamFX
 				if (!bOk)
 				{
 					Diagnostics.Error(TEXT("DFX2026"), ValueToken.Location,
-						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: Iteration and ExecuteBehavior are identifiers, DataInterface is a dotted parameter name, NumIterations is an integer and Enabled is true/false."),
+						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: Iteration and ExecuteBehavior are identifiers, DataInterface is a dotted parameter name, NumIterations is an integer or a parameter name and Enabled is true/false or a parameter name."),
 							*Key));
 					return false;
 				}

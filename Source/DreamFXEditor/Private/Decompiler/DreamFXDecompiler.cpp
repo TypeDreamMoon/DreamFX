@@ -128,14 +128,59 @@ namespace UE::DreamFX::Editor
 				return false;
 			}
 
-			// Multi-channel curve interfaces hold XCurve/YCurve/...; the scalar one holds Curve. Only
-			// the first channel is exported, matching what the generator can express.
-			const TSharedPtr<FJsonObject>* Curve = nullptr;
-			for (const TCHAR* Field : { TEXT("Curve"), TEXT("XCurve") })
+			// A curve data interface has knobs either side of its keys -- exposure, the LUT, an
+			// external curve asset -- and the `curve { }` form carries none of them. When any is off
+			// its default, saying no here hands the value to the verbatim-JSON path below, which
+			// keeps everything. The readable form is a convenience, and a convenience does not get
+			// to lose data.
+			for (const TCHAR* Field : { TEXT("bExposeCurve"), TEXT("bOverrideOptimizeThreshold") })
 			{
-				if (Root->TryGetObjectField(Field, Curve))
+				bool bFlag = false;
+				if (Root->TryGetBoolField(Field, bFlag) && bFlag)
 				{
-					break;
+					return false;
+				}
+			}
+			bool bUseLUT = true;
+			if (Root->TryGetBoolField(TEXT("bUseLUT"), bUseLUT) && !bUseLUT)
+			{
+				return false;
+			}
+			FString CurveAsset;
+			if (Root->TryGetStringField(TEXT("CurveAsset"), CurveAsset)
+				&& !CurveAsset.IsEmpty() && CurveAsset != TEXT("None"))
+			{
+				return false;
+			}
+
+			// Multi-channel curve interfaces hold XCurve/YCurve/...; the scalar one holds Curve. The
+			// generator can only say "one shape", which it feeds to every channel -- so the readable
+			// form is only honest when the channels ARE one shape. They usually are not: a vector
+			// curve whose Y differs from its X used to come back as three copies of X, and nothing
+			// in the round-trip said so, because the comparison ran on this exporter's own output.
+			const TSharedPtr<FJsonObject>* Curve = nullptr;
+			if (!Root->TryGetObjectField(TEXT("Curve"), Curve))
+			{
+				if (!Root->TryGetObjectField(TEXT("XCurve"), Curve))
+				{
+					return false;
+				}
+
+				auto Serialise = [](const TSharedPtr<FJsonObject>& Object)
+				{
+					FString Text;
+					const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Text);
+					FJsonSerializer::Serialize(Object.ToSharedRef(), Writer);
+					return Text;
+				};
+				const FString First = Serialise(*Curve);
+				for (const TCHAR* Field : { TEXT("YCurve"), TEXT("ZCurve"), TEXT("WCurve") })
+				{
+					const TSharedPtr<FJsonObject>* Channel = nullptr;
+					if (Root->TryGetObjectField(Field, Channel) && Serialise(*Channel) != First)
+					{
+						return false;
+					}
 				}
 			}
 			if (Curve == nullptr || !Curve->IsValid())
@@ -170,14 +215,44 @@ namespace UE::DreamFX::Editor
 				else if (InterpMode == TEXT("RCIM_Constant")) { Attributes.Add(TEXT("Interp=Constant")); }
 				else if (InterpMode == TEXT("RCIM_Cubic"))    { Attributes.Add(TEXT("Interp=Cubic")); }
 
-				// Tangents are only meaningful in User mode; exporting the auto-derived ones would
-				// turn a re-import into a differently-shaped curve.
-				if (Key->GetStringField(TEXT("TangentMode")) == TEXT("RCTM_User"))
+				// Tangents are stored per key and read straight out at evaluation time -- FRichCurve
+				// re-derives them only when something EDITS the curve. So "the mode is Auto, the
+				// engine will work them out" is false for a curve nobody is editing, and the old rule
+				// here (export them under RCTM_User, drop them otherwise) sent every Break key's
+				// corner and every Auto key's stored slope to zero. A rebuilt colour ramp or size
+				// curve came back flat where the author had drawn a fall-off, which is the shape the
+				// 2026-08-11 round saw only as a Curve DI difference it could not yet name.
+				FString TangentMode;
+				Key->TryGetStringField(TEXT("TangentMode"), TangentMode);
+				double Arrive = 0.0;
+				double Leave = 0.0;
+				Key->TryGetNumberField(TEXT("ArriveTangent"), Arrive);
+				Key->TryGetNumberField(TEXT("LeaveTangent"), Leave);
+
+				// Under an explicit mode both tangents are written as a pair: a zero under Break is a
+				// deliberate flat corner, not an absence.
+				const bool bAuto = TangentMode.IsEmpty() || TangentMode == TEXT("RCTM_Auto");
+				const bool bWriteTangents = !bAuto || Arrive != 0.0 || Leave != 0.0;
+
+				// The mode is named only when writing the tangents alone would say the wrong thing.
+				// The reader infers User from any tangent and Auto from none, so User keys -- the
+				// overwhelming majority -- keep the exact spelling every existing source already has,
+				// and only Break, None, and the Auto key that carries a stored slope gain a word.
+				const TCHAR* Named =
+					TangentMode == TEXT("RCTM_Break") ? TEXT("Break") :
+					TangentMode == TEXT("RCTM_None") ? TEXT("None") :
+					(bAuto && bWriteTangents) ? TEXT("Auto") : nullptr;
+				if (Named != nullptr)
+				{
+					Attributes.Add(FString::Printf(TEXT("Tangent=%s"), Named));
+				}
+
+				if (bWriteTangents)
 				{
 					Attributes.Add(FString::Printf(TEXT("Arrive=%s"),
-						*FormatFloat(static_cast<float>(Key->GetNumberField(TEXT("ArriveTangent"))))));
+						*FormatFloat(static_cast<float>(Arrive))));
 					Attributes.Add(FString::Printf(TEXT("Leave=%s"),
-						*FormatFloat(static_cast<float>(Key->GetNumberField(TEXT("LeaveTangent"))))));
+						*FormatFloat(static_cast<float>(Leave))));
 				}
 
 				Result += InnerIndent + FString::Printf(TEXT("%s -> %s"),
@@ -2283,11 +2358,16 @@ namespace UE::DreamFX::Editor
 				{
 					Arguments.Add(FString::Printf(TEXT("ExecuteBehavior = %s"), *Stage.ExecuteBehaviorName));
 				}
+				// The count and the enabled flag are each a number-or-name. A stage can hold both a
+				// literal and a binding at once (Ninja's Solve Pressure keeps 6 and binds
+				// Emitter.OVERRIDE.PressureSolveIterations), so both are written -- the binding
+				// second, because the reader takes the last one for the field it fills and they
+				// fill different fields.
 				if (Stage.NumIterationsText == TEXT("<bound>"))
 				{
-					// A parameter drives the count; Stage(NumIterations = ...) can only say a number.
+					// No readable default underneath: the binding is the whole value.
 					Result.UnsupportedFeatures.AddUnique(FString::Printf(
-						TEXT("simulation stage '%s' drives its iteration count from a parameter -- the rebuilt stage keeps the default count"),
+						TEXT("simulation stage '%s' stores its iteration count in a shape this reader does not recognise"),
 						*Stage.StageName.ToString()));
 				}
 				else if (!Stage.NumIterationsText.IsEmpty()
@@ -2295,24 +2375,19 @@ namespace UE::DreamFX::Editor
 				{
 					Arguments.Add(FString::Printf(TEXT("NumIterations = %s"), *Stage.NumIterationsText));
 				}
-				if (Stage.bNumIterationsBound)
+				if (!Stage.NumIterationsBindingName.IsEmpty())
 				{
-					// The default number above still exports, so the loss is only the LIVE link --
-					// but a link is exactly what an author reaches for to tune iteration cost at
-					// runtime, so it gets its own line rather than hiding behind the number.
-					Result.UnsupportedFeatures.AddUnique(FString::Printf(
-						TEXT("simulation stage '%s' additionally BINDS its iteration count to a parameter -- the rebuilt stage keeps only the default number"),
-						*Stage.StageName.ToString()));
-				}
-				if (!Stage.EnabledBindingName.IsEmpty())
-				{
-					Result.UnsupportedFeatures.AddUnique(FString::Printf(
-						TEXT("simulation stage '%s' drives its enabled state from '%s' -- the rebuilt stage is enabled by its literal flag only"),
-						*Stage.StageName.ToString(), *Stage.EnabledBindingName));
+					Arguments.Add(FString::Printf(TEXT("NumIterations = %s"),
+						*ToNameToken(Stage.NumIterationsBindingName)));
 				}
 				if (Stage.bEnabled != Defaults.bEnabled)
 				{
 					Arguments.Add(Stage.bEnabled ? TEXT("Enabled = true") : TEXT("Enabled = false"));
+				}
+				if (!Stage.EnabledBindingName.IsEmpty())
+				{
+					Arguments.Add(FString::Printf(TEXT("Enabled = %s"),
+						*ToNameToken(Stage.EnabledBindingName)));
 				}
 
 				const FString Name = ToNameToken(Stage.StageName.ToString());
@@ -2458,8 +2533,21 @@ namespace UE::DreamFX::Editor
 						Line += FString::Printf(TEXT(" = \"%s\""),
 							*Variable.DefaultValue.ObjectAsset->GetPathName());
 					}
-					// A data interface or object default has no inline spelling, so those still
-					// declare bare -- the same state every user parameter used to be exported in.
+					else if (FString DataInterfaceLiteral;
+						Variable.DefaultValue.Mode == EInputValueMode::DataInterface
+						&& !Variable.DefaultValue.DataInterfaceJson.IsEmpty()
+						&& JsonTextToSourceString(Variable.DefaultValue.DataInterfaceJson, DataInterfaceLiteral))
+					{
+						// The same verbatim-JSON spelling a module input's data interface uses, and
+						// the same reason for it: a collision source or a property reader IS its
+						// configuration, and a declaration without one rebuilds as a default-
+						// constructed object that queries nothing. Through JsonTextToSourceString so
+						// the blob is re-serialised to one canonical form, which is what keeps a
+						// re-export of the mirror identical to the export it came from.
+						Line += FString::Printf(TEXT(" = %s"), *DataInterfaceLiteral);
+					}
+					// An object default with no asset still declares bare, so "no asset" and "an
+					// asset we failed to record" do not end up looking alike in the source.
 
 					if (!Variable.Description.IsEmpty())
 					{

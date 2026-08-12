@@ -645,6 +645,24 @@ namespace UE::DreamFX::Editor
 			TArray<FString>& OutErrors);
 
 		/**
+		 * Applies a user data-interface parameter's declared configuration to the system's own
+		 * instance of it. Call after AddUserVariable, which is what creates that instance.
+		 *
+		 * Configuring the store's instance rather than handing over one built here is deliberate.
+		 * `FNiagaraParameterStore::AddParameter(bInitInterfaces=true)` news the interface up against
+		 * the store's owner with `BuildObjectFlagsForOwner` -- correct outer, correct flags, part of
+		 * the asset -- while `SetDataInterface` would store whatever pointer it is given, so an
+		 * interface built in the transient package would leave the saved asset referencing something
+		 * that does not travel with it. The engine's own stack UI takes the same route for the same
+		 * reason: add the parameter, then write into the slot it allocated.
+		 *
+		 * The JSON goes through the engine's property provider -- the very function the module-input
+		 * data interface track already uses -- so the two paths cannot drift in what a blob means.
+		 */
+		static bool SetUserDataInterfaceProperties(UNiagaraSystem* System, FName Name,
+			const FNiagaraTypeDefinition& Type, const FString& PropertiesJson, TArray<FString>& OutErrors);
+
+		/**
 		 * Adds an emitter. AddEmitter rejects a null template outright, so a transient emitter is
 		 * synthesised through the engine's own UNiagaraEmitterFactoryNew::InitializeEmitter with
 		 * bAddDefaultModulesAndRenderers = false: DreamFX declares every module itself, and inheriting
@@ -997,6 +1015,8 @@ namespace UE::DreamFX::Editor
 			FString NumIterationsText;
 			/** True when NumIterations is additionally BOUND to a parameter (default + binding). */
 			bool bNumIterationsBound = false;
+			/** That parameter, in its aliased (`Emitter.X`) spelling; empty when unbound. */
+			FString NumIterationsBindingName;
 			/** The parameter driving bEnabled, when one is bound; empty otherwise. */
 			FString EnabledBindingName;
 			/** The stage script's usage id -- per stage, random on authored content (never zero). */

@@ -233,6 +233,31 @@ namespace UE::DreamFX::Editor
 			bOutRecognised = false;
 			return TEXT("RCIM_Cubic");
 		}
+
+		/**
+		 * The written tangent mode, or the inference for a source that names none.
+		 *
+		 * The inference is what every source written before the attribute existed meant, so it has
+		 * to stay: a key with a tangent is User, a key without is Auto. Break can only be reached by
+		 * asking for it, because it is the one mode whose two tangents are independent -- inferring
+		 * it from "the two numbers happen to differ" would silently reinterpret a User key that an
+		 * author wrote with mismatched numbers.
+		 */
+		const TCHAR* TangentModeToEnum(const FCurveKey& Key, bool& bOutRecognised)
+		{
+			bOutRecognised = true;
+			const FString& Written = Key.TangentMode;
+			if (Written.IsEmpty())
+			{
+				return (Key.bHasArrive || Key.bHasLeave) ? TEXT("RCTM_User") : TEXT("RCTM_Auto");
+			}
+			if (Written.Equals(TEXT("Auto"), ESearchCase::IgnoreCase))   { return TEXT("RCTM_Auto"); }
+			if (Written.Equals(TEXT("User"), ESearchCase::IgnoreCase))   { return TEXT("RCTM_User"); }
+			if (Written.Equals(TEXT("Break"), ESearchCase::IgnoreCase))  { return TEXT("RCTM_Break"); }
+			if (Written.Equals(TEXT("None"), ESearchCase::IgnoreCase))   { return TEXT("RCTM_None"); }
+			bOutRecognised = false;
+			return TEXT("RCTM_Auto");
+		}
 	}
 
 	bool FExpressions::IsBuiltinFunction(const FString& Name)
@@ -356,12 +381,21 @@ namespace UE::DreamFX::Editor
 				return false;
 			}
 
+			bool bTangentRecognised = false;
+			const TCHAR* TangentMode = TangentModeToEnum(Key, bTangentRecognised);
+			if (!bTangentRecognised)
+			{
+				Diagnostics.Error(TEXT("DFX4042"), Key.Location,
+					FString::Printf(TEXT("Unknown curve tangent mode '%s'. Expected Auto, User, Break or None."),
+						*Key.TangentMode));
+				return false;
+			}
+
 			TSharedRef<FJsonObject> KeyObject = MakeShared<FJsonObject>();
 			KeyObject->SetStringField(TEXT("InterpMode"), InterpMode);
-			// An explicit tangent is only honoured in User tangent mode; without it the curve
-			// re-derives its own and the authored shape is quietly discarded.
-			KeyObject->SetStringField(TEXT("TangentMode"),
-				(Key.bHasArrive || Key.bHasLeave) ? TEXT("RCTM_User") : TEXT("RCTM_Auto"));
+			// An explicit tangent is only honoured outside Auto mode; under Auto the curve re-derives
+			// its own on the next edit and the authored shape is quietly discarded.
+			KeyObject->SetStringField(TEXT("TangentMode"), TangentMode);
 			KeyObject->SetStringField(TEXT("TangentWeightMode"), TEXT("RCTWM_WeightedNone"));
 			KeyObject->SetNumberField(TEXT("Time"), Key.Time);
 			KeyObject->SetNumberField(TEXT("Value"), Key.Value);

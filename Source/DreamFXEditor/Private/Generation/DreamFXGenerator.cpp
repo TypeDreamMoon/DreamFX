@@ -237,6 +237,8 @@ namespace UE::DreamFX::Editor
 			FNiagaraTypeDefinition Type;
 			FString Description;
 			FInputValue DefaultValue;
+			/** A `DI<T>` parameter's declared configuration, verbatim. Empty for every other type. */
+			FString DataInterfaceJson;
 			FSourceLocation Location;
 		};
 
@@ -1760,12 +1762,41 @@ namespace UE::DreamFX::Editor
 				{
 					if (bIsDataInterface)
 					{
-						// Plan 3.5: v1 declares data interface parameters and lets a blueprint or
-						// component feed them. Configuring the DI's own properties from text is
-						// explicitly out of scope, so a default here would be quietly ignored.
-						Diagnostics.Warning(TEXT("DFX5098"), Declaration.Location,
-							FString::Printf(TEXT("Data interface parameter '%s' has a default value, which v1 does not apply. Feed it at runtime instead."),
-								*Declaration.Name));
+						// The declared configuration, carried as the JSON blob the decompiler wrote
+						// and the module-input data interface track already understands. It is
+						// applied after the parameter exists, because what it configures is the
+						// instance the parameter's creation allocates -- see the write below.
+						//
+						// Until 2026-08-12 this was DFX5098, "declared only, feed it at runtime".
+						// That was a design decision (plan 3.5) and it aged badly: Ninja's collision
+						// sources and directional-light readers are all user data interfaces, so
+						// every mirror of it default-constructed the things the effect queries the
+						// world through. The smoke came out; what it collided with did not.
+						const FValue& Default = *Declaration.DefaultValue;
+						if (Default.Kind != EValueKind::String || !Default.Text.StartsWith(TEXT("{")))
+						{
+							Diagnostics.Error(TEXT("DFX5098"), Declaration.Location,
+								FString::Printf(TEXT("Data interface parameter '%s' takes its configuration as a quoted JSON object, the form the decompiler writes."),
+									*Declaration.Name));
+							bOk = false;
+							continue;
+						}
+
+						// The same acceptance guard the module-input track carries, in the one other
+						// channel that can hold such a reference: a refPath naming another asset's
+						// private subobject aborts SavePackage rather than failing it.
+						FString Offender;
+						if (FindForeignSubobjectReference(Default.Text,
+							OutPlan.PackagePath / OutPlan.AssetName, Offender))
+						{
+							Diagnostics.Error(TEXT("DFX3010"), Default.Location,
+								FString::Printf(TEXT("User parameter '%s' configures a data interface with a reference to '%s', which is a private subobject of another asset. Saving a system that holds one aborts the editor rather than failing, so DreamFX refuses it here."),
+									*Declaration.Name, *Offender));
+							bOk = false;
+							continue;
+						}
+
+						Planned.DataInterfaceJson = Default.Text;
 					}
 					else if (!FValueLowering::Lower(*Declaration.DefaultValue, Type,
 						FString::Printf(TEXT("User.%s"), *Declaration.Name), Diagnostics, Planned.DefaultValue))
@@ -2721,6 +2752,19 @@ namespace UE::DreamFX::Editor
 				{
 					ReportAdapterErrors(Errors, TEXT("DFX5018"), Variable.Location, Diagnostics);
 					return false;
+				}
+
+				// Second, and only for a data interface: the add above is what allocates the
+				// instance, so its configuration cannot travel with the add.
+				if (!Variable.DataInterfaceJson.IsEmpty())
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::SetUserDataInterfaceProperties(System, Variable.Name,
+						Variable.Type, Variable.DataInterfaceJson, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5098"), Variable.Location, Diagnostics);
+						return false;
+					}
 				}
 			}
 

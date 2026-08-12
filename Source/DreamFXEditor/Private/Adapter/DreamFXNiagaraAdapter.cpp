@@ -660,7 +660,54 @@ namespace UE::DreamFX::Editor
 			}
 			if (const FNiagaraExt_VariableValue_DataInterface* Data = In.GetPtr<FNiagaraExt_VariableValue_DataInterface>())
 			{
-				OutValue = FInputValue::MakeDataInterface(nullptr, FString());
+				// The configuration IS the value, exactly as it is for the object reference below.
+				// Reporting an empty one -- which this did, deliberately, while plan 3.5's "declare
+				// but do not configure" stood -- exported every user data interface as a bare
+				// declaration, so a rebuilt mirror default-constructed the collision sources and
+				// property readers the effect queries the world through.
+				//
+				// The property list is built by the same rule the engine's own reader uses for
+				// module-input interfaces (its private GetAllPropertyNames): everything visible to
+				// blueprints or the details panel, minus the deprecated. Matching that rule is the
+				// point -- the two channels must mean the same thing by a blob, because they share
+				// the applier that consumes it.
+				UNiagaraDataInterface* Instance = Data->DataInterface;
+				FString Json;
+				if (Instance != nullptr)
+				{
+					EPropertyFlags CheckFlags = CPF_BlueprintVisible | CPF_BlueprintAssignable;
+					if (GEditor != nullptr)
+					{
+						CheckFlags |= CPF_Edit;
+					}
+					TArray<FName> PropertyNames;
+					for (TFieldIterator<FProperty> It(Instance->GetClass()); It; ++It)
+					{
+						if (It->HasAnyPropertyFlags(CheckFlags) && !It->HasAnyPropertyFlags(CPF_Deprecated))
+						{
+							PropertyNames.Add(It->GetFName());
+						}
+					}
+					const FNiagaraExternalEditPropertyProvider& Provider =
+						UNiagaraExternalEditUtilities::GetPropertyProvider();
+					Json = Provider.GetObjectProperties(Instance, PropertyNames);
+
+					// Suppressed against the class default, the same bargain every other value in the
+					// export makes. A parameter meant to be filled at runtime is declared bare, and
+					// without this every one of them would come back carrying a full blob of its own
+					// defaults -- true, useless, and enough of it to bury the parameters that do say
+					// something. The CDO is the baseline because it is what the store's own
+					// AddParameter news up.
+					if (const UObject* Pristine = Instance->GetClass()->GetDefaultObject())
+					{
+						if (Json == Provider.GetObjectProperties(Pristine, PropertyNames))
+						{
+							Json.Reset();
+						}
+					}
+				}
+				OutValue = FInputValue::MakeDataInterface(
+					Instance != nullptr ? Instance->GetClass() : Data->DataInterfaceClass.Get(), Json);
 				return;
 			}
 			if (const FNiagaraExt_VariableValue_Object* Data = In.GetPtr<FNiagaraExt_VariableValue_Object>())
@@ -1754,6 +1801,53 @@ namespace UE::DreamFX::Editor
 
 		UNiagaraExternalEditUtilities::AddUserVariable(System, Variable, Context);
 		return Drain(Context, OutErrors);
+	}
+
+	bool FNiagaraAdapter::SetUserDataInterfaceProperties(UNiagaraSystem* System, FName Name,
+		const FNiagaraTypeDefinition& Type, const FString& PropertiesJson, TArray<FString>& OutErrors)
+	{
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot configure a user data interface on a null system."));
+			return false;
+		}
+		if (PropertiesJson.IsEmpty())
+		{
+			return true;
+		}
+
+		FEpochGuard Epoch(System);
+
+		FNiagaraParameterStore& UserParameters = System->GetExposedParameters();
+		const FNiagaraVariable Parameter(Type, FName(*FString::Printf(TEXT("User.%s"), *Name.ToString())));
+		UNiagaraDataInterface* Instance = UserParameters.GetDataInterface(Parameter);
+		if (Instance == nullptr)
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("User parameter '%s' has no data interface instance to configure -- it was not added, or was added as a different type."),
+				*Parameter.GetName().ToString()));
+			return false;
+		}
+
+		System->Modify();
+		Instance->Modify();
+
+		// NormalizeObjectReferences for the reason its own comment gives: 5.8.1 swapped the property
+		// importer for one that rejects the `{"refPath": ...}` spelling the exporter still emits, and
+		// one bad reference fails the whole blob rather than the one property.
+		if (!UNiagaraExternalEditUtilities::GetPropertyProvider().SetObjectProperties(
+			Instance, NormalizeObjectReferences(PropertiesJson)))
+		{
+			OutErrors.Add(FString::Printf(
+				TEXT("Failed to apply the declared configuration to user data interface '%s' (%s)."),
+				*Parameter.GetName().ToString(), *Instance->GetClass()->GetName()));
+			return false;
+		}
+
+		// The store caches interface state for the runtime; without this the asset holds the new
+		// configuration and the running system keeps the old one.
+		UserParameters.OnInterfaceChange();
+		return true;
 	}
 
 	bool FNiagaraAdapter::RemoveUserVariable(UNiagaraSystem* System, FName Name, const FNiagaraTypeDefinition& Type,
@@ -3193,6 +3287,25 @@ namespace UE::DreamFX::Editor
 
 	namespace
 	{
+		/**
+		 * One FName UPROPERTY off a struct whose accessor is protected, as a string; empty for None.
+		 *
+		 * Reflection rather than a patched export because the field is data, not behaviour: an
+		 * engine that renames it says so by returning nothing, and the caller reports a gap instead
+		 * of failing to link.
+		 */
+		FString ReadProtectedName(const void* Container, const UScriptStruct* Struct, const TCHAR* PropertyName)
+		{
+			const FNameProperty* Property = Struct != nullptr
+				? CastField<FNameProperty>(Struct->FindPropertyByName(PropertyName)) : nullptr;
+			if (Property == nullptr)
+			{
+				return FString();
+			}
+			const FName Value = Property->GetPropertyValue_InContainer(Container);
+			return Value.IsNone() ? FString() : Value.ToString();
+		}
+
 		void SummarizeSimulationStage(const UNiagaraSimulationStageBase& Stage,
 			FNiagaraAdapter::FSimulationStageSummary& Summary)
 		{
@@ -3241,13 +3354,23 @@ namespace UE::DreamFX::Editor
 			// A binding can ALSO ride on top of a default (Ninja's Solve Pressure holds default 6
 			// and binds Emitter.OVERRIDE.PressureSolveIterations); the default alone would export
 			// as an innocent 6, so the bound state travels as its own flag.
-			Summary.bNumIterationsBound =
-				!Generic->NumIterations.ResolvedParameter.GetName().IsNone()
-				|| !Generic->NumIterations.AliasedParameter.GetName().IsNone();
-			// GetName() is the cached display form; RootName itself is protected. Presence is the
-			// question here, and both spell the same binding.
-			const FName EnabledRoot = Generic->EnabledBinding.GetName();
-			Summary.EnabledBindingName = EnabledRoot.IsNone() ? FString() : EnabledRoot.ToString();
+			//
+			// The ALIASED half is the one that travels: it spells the emitter as `Emitter`, while
+			// the resolved half spells it as the emitter's unique name, which a mirror under a
+			// different name could not reuse.
+			const FName IterationsAlias = Generic->NumIterations.AliasedParameter.GetName();
+			const FName IterationsResolved = Generic->NumIterations.ResolvedParameter.GetName();
+			Summary.bNumIterationsBound = !IterationsAlias.IsNone() || !IterationsResolved.IsNone();
+			Summary.NumIterationsBindingName = !IterationsAlias.IsNone() ? IterationsAlias.ToString()
+				: (!IterationsResolved.IsNone() ? IterationsResolved.ToString() : FString());
+
+			// RootName, not GetName(). GetName() is CachedDisplayName -- recomputed by CacheValues
+			// from the emitter, and empty on an asset nobody has cached this session -- while
+			// RootName is the stored, authored spelling and the one SetValue takes back unchanged
+			// (SetValue strips the namespace it recognises, so a stored RootName is already that
+			// function's fixed point). Protected, hence the reflected read.
+			Summary.EnabledBindingName = ReadProtectedName(
+				&Generic->EnabledBinding, FNiagaraVariableAttributeBinding::StaticStruct(), TEXT("RootName"));
 			if (!Generic->NumIterations.HasDefaultValueEditorOnly())
 			{
 				Summary.NumIterationsText = FString();
@@ -4031,6 +4154,37 @@ namespace UE::DreamFX::Editor
 			const int32 Iterations = FMath::Max(1, Spec.NumIterations.GetValue());
 			Stage->NumIterations.SetDefaultValueEditorOnly(
 				MakeArrayView(reinterpret_cast<const uint8*>(&Iterations), sizeof(int32)));
+		}
+
+		// The two binding-driven knobs. Both ride ON TOP of the literal above rather than replacing
+		// it: the engine keeps the number as the fallback the binding overrides, and the enabled
+		// flag stays whatever it was while a parameter decides per frame.
+		if (!Spec.NumIterationsBinding.IsEmpty())
+		{
+			// Both halves are written because the compiler reads the resolved one
+			// (FillCompilationData takes NumIterations.ResolvedParameter) and the editor UI the
+			// aliased one. Source carries the aliased spelling -- `Emitter.X` -- and the resolved
+			// form is that name with the emitter's own name in place of `Emitter`, which is the
+			// same substitution ResolveAliases performs everywhere else in this file.
+			const FNiagaraTypeDefinition IterationsType = FNiagaraTypeDefinition::GetIntDef();
+			const FString Aliased = Spec.NumIterationsBinding;
+			FString Resolved = Aliased;
+			if (Aliased.StartsWith(TEXT("Emitter.")))
+			{
+				Resolved = Instance.Emitter->GetUniqueEmitterName() + Aliased.RightChop(FCString::Strlen(TEXT("Emitter")));
+			}
+			Stage->NumIterations.AliasedParameter = FNiagaraVariableBase(IterationsType, FName(*Aliased));
+			Stage->NumIterations.ResolvedParameter = FNiagaraVariableBase(IterationsType, FName(*Resolved));
+		}
+		if (!Spec.EnabledBinding.IsEmpty())
+		{
+			// SetValue does the whole job -- root name, param-map variable, data-set key, binding
+			// source mode and the cached display name -- against the emitter it is bound on. The
+			// Emitter source mode is the one the engine itself sets a stage's EnabledBinding up
+			// with (UNiagaraSimulationStageGeneric::PostInitProperties); a stage is per emitter,
+			// not per particle. ToBase() because the FVersionedNiagaraEmitter overload is deprecated.
+			Stage->EnabledBinding.SetValue(FName(*Spec.EnabledBinding), Instance.ToBase(),
+				ENiagaraRendererSourceDataMode::Emitter);
 		}
 
 		// The end of the time slice: the stage moves to the engine's own id convention (its merge

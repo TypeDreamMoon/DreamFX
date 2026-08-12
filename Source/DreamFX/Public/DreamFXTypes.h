@@ -85,6 +85,16 @@ namespace UE::DreamFX
 		/** Auto | Cubic | Linear | Constant. Empty means Auto. */
 		FString Interpolation;
 
+		/**
+		 * Auto | User | Break | None. Empty means "infer": User when a tangent was written, Auto
+		 * otherwise, which is what every source written before this attribute existed meant.
+		 *
+		 * Break is the one that had to be spelled out. It is how a key holds two independent
+		 * tangents -- a corner -- and a rebuild that quietly reads it as Auto puts a smooth curve
+		 * where the author drew a corner.
+		 */
+		FString TangentMode;
+
 		bool bHasArrive = false;
 		float ArriveTangent = 0.0f;
 		bool bHasLeave = false;
@@ -319,6 +329,18 @@ namespace UE::DreamFX
 		FString DataInterface;
 		TOptional<int32> NumIterations;
 		TOptional<bool> Enabled;
+
+		/**
+		 * The parameter driving the count / the enabled flag, when one does.
+		 *
+		 * Both knobs are a value OR a link, and the link is the interesting half: a stage whose
+		 * Enabled is bound runs when the effect says so, and a rebuild that keeps only the literal
+		 * flag runs it always -- Ninja's debug slice drew over the fluid on every frame of every
+		 * mirror for exactly that reason. NumIterations keeps its number as well as its link,
+		 * because the engine stores both (the number is the fallback the binding overrides).
+		 */
+		FString EnabledBinding;
+		FString NumIterationsBinding;
 	};
 
 	struct FStack
