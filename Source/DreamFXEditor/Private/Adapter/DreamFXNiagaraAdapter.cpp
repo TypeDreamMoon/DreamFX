@@ -6,6 +6,7 @@
 #include "ViewModels/Stack/NiagaraParameterHandle.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #include "NiagaraCommon.h"
+#include "NiagaraEditorUtilities.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraDataInterfaceCurveBase.h"
 #include "NiagaraEmitter.h"
@@ -34,6 +35,7 @@
 #include "Serialization/JsonWriter.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
+#include "UObject/UObjectArray.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
@@ -1877,7 +1879,47 @@ namespace UE::DreamFX::Editor
 		}
 
 		UNiagaraExternalEditUtilities::AddUserVariable(System, Variable, Context);
-		return Drain(Context, OutErrors);
+		if (!Drain(Context, OutErrors))
+		{
+			return false;
+		}
+
+		// Stock 5.8.1's AddUserVariable returns without adding anything when the declaration
+		// carries no default value: the parameter, its type and its description silently dropped
+		// (the Moon engine patches a synthetic default in; an installed build cannot be patched).
+		// A bare `DI<T>` or description-only declaration is still a parameter, so when the engine
+		// call left no entry behind, add it through the store's own public path: plain data
+		// zero-fills, and bInitialize allocates a data interface instance against the store's
+		// owner -- the very instance SetUserDataInterfaceProperties then writes into. Presence is
+		// probed under both spellings because the exposed store is a user-redirection store:
+		// callers hand it the bare name, the physical entry carries the `User.` prefix.
+		FNiagaraParameterStore& Exposed = System->GetExposedParameters();
+		const FNiagaraVariableBase Bare(Type, Name);
+		const FNiagaraVariableBase Prefixed(Type, FName(*FString::Printf(TEXT("User.%s"), *Name.ToString())));
+		if (Exposed.IndexOf(Bare) == INDEX_NONE && Exposed.IndexOf(Prefixed) == INDEX_NONE)
+		{
+			System->Modify();
+			FNiagaraVariable Added(Type, Name);
+			if (!Exposed.AddParameter(Added, /*bInitialize=*/true, /*bTriggerRebind=*/true))
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("User parameter '%s' was refused by the engine's add path and by the parameter store."),
+					*Name.ToString()));
+				return false;
+			}
+			if (!Description.IsEmpty())
+			{
+				if (UNiagaraScriptVariable* ScriptVariable =
+					FNiagaraEditorUtilities::UserParameters::GetScriptVariableForUserParameter(Added, *System))
+				{
+					ScriptVariable->Modify();
+					ScriptVariable->Metadata.Description = FText::FromString(Description);
+				}
+			}
+			FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
+			System->PostEditChangeProperty(PropertyChangedEvent);
+		}
+		return true;
 	}
 
 	bool FNiagaraAdapter::SetUserDataInterfaceProperties(UNiagaraSystem* System, FName Name,
@@ -4703,6 +4745,14 @@ namespace UE::DreamFX::Editor
 		constexpr uint64 CollectAboveBytes = 6ull * 1024 * 1024 * 1024;
 		constexpr uint64 GrowthSinceLastCollectBytes = 2ull * 1024 * 1024 * 1024;
 
+		// The object COUNT is a second, independent ceiling. A stock-engine tree build died at the
+		// editor's 25M UObject cap with physical memory never crossing the byte gate: without the
+		// fast-edit engine exports every operation rebuilds view models, and their debris is
+		// millions of tiny objects, not gigabytes -- a full hour with zero collections. Bytes and
+		// count each keep their own watermark; either being heavy collects both kinds of debris.
+		constexpr int32 CollectAboveLiveObjects = 8 * 1024 * 1024;
+		constexpr int32 GrowthSinceLastCollectObjects = 2 * 1024 * 1024;
+
 		// What the last collection left behind. The threshold alone is not a stopping condition: a
 		// build of the four content packs sits at roughly 8 GB of live, reachable assets, so it is
 		// permanently over any fixed threshold and collected on every single call -- a full purge per
@@ -4710,21 +4760,46 @@ namespace UE::DreamFX::Editor
 		// again only after the process has grown *since the last collection* is what makes this a
 		// ceiling rather than a treadmill.
 		static uint64 UsedAfterLastCollect = 0;
+		static int32 LiveAfterLastCollect = 0;
 
 		const uint64 Used = FPlatformMemory::GetStats().UsedPhysical;
-		if (Used <= CollectAboveBytes)
+		const int32 Live = GUObjectArray.GetObjectArrayNumMinusAvailable();
+
+		const bool bBytesHeavy = Used > CollectAboveBytes
+			&& (UsedAfterLastCollect == 0 || Used >= UsedAfterLastCollect + GrowthSinceLastCollectBytes);
+		const bool bCountHeavy = Live > CollectAboveLiveObjects
+			&& (LiveAfterLastCollect == 0 || Live >= LiveAfterLastCollect + GrowthSinceLastCollectObjects);
+		if (!bBytesHeavy && !bCountHeavy)
 		{
 			return;
 		}
-		if (UsedAfterLastCollect != 0 && Used < UsedAfterLastCollect + GrowthSinceLastCollectBytes)
+
+		// A read scope holds a raw pointer to its shared context across many calls, so a
+		// collection under one waits for it to close. Write-scope contexts are DROPPED before
+		// collecting instead: in a commandlet nothing GC-roots the view models a kept context
+		// holds -- the editor UI that would is not running -- so collecting around a live one
+		// guts its stack view, and the next write reads empty ("hidden by static-switch" on an
+		// input its switch had revealed; measured on the stock vehicle, where the same source
+		// line built green or red depending on where the collection landed). Dropping first
+		// turns that into the ordinary epoch boundary every caller already pays correctly, and
+		// hands the collector the largest debris pile there is. Safe because every call site
+		// sits between adapter calls, where no FEditContext holder is alive.
+		if (GReadScopedSystems.Num() > 0)
 		{
 			return;
+		}
+		TArray<UNiagaraSystem*> KeptSystems;
+		GSharedContexts.GetKeys(KeptSystems);
+		for (UNiagaraSystem* KeptSystem : KeptSystems)
+		{
+			DropSharedContext(KeptSystem);
 		}
 
 		// What goes is exactly the view-model debris: the assets being read or written are reachable
 		// from their packages, and the schema probe holds its own root.
 		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS, /*bPerformFullPurge=*/true);
 		UsedAfterLastCollect = FPlatformMemory::GetStats().UsedPhysical;
+		LiveAfterLastCollect = GUObjectArray.GetObjectArrayNumMinusAvailable();
 	}
 
 	void FNiagaraAdapter::RefreshCurveLookupTables(UNiagaraSystem* System)
@@ -4736,17 +4811,26 @@ namespace UE::DreamFX::Editor
 			return;
 		}
 
-		int32 Refreshed = 0;
+		// Collected first, mutated after. UpdateLUT is not a pure recompute: with bExposeCurve set
+		// it CREATES the exposed curve object, and creating a UObject inside ForEachObjectWithOuter
+		// is a fatal hash-table modification (UObjectHash.cpp FindOrAdd; measured on the stock
+		// vehicle the first time an exposed curve actually travelled through a rebuild).
+		TArray<UNiagaraDataInterfaceCurveBase*> Curves;
 		ForEachObjectWithOuter(System->GetOutermost(),
-			[&Refreshed](UObject* Object)
+			[&Curves](UObject* Object)
 			{
 				if (UNiagaraDataInterfaceCurveBase* Curve = Cast<UNiagaraDataInterfaceCurveBase>(Object))
 				{
-					Curve->UpdateLUT();
-					++Refreshed;
+					Curves.Add(Curve);
 				}
 			},
 			EGetObjectsFlags::IncludeNestedObjects);
+
+		const int32 Refreshed = Curves.Num();
+		for (UNiagaraDataInterfaceCurveBase* Curve : Curves)
+		{
+			Curve->UpdateLUT();
+		}
 
 		if (Refreshed > 0)
 		{
