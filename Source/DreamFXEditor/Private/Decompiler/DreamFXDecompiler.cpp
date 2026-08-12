@@ -1626,7 +1626,7 @@ namespace UE::DreamFX::Editor
 
 				// Between modules, not inside one: a collection here cannot run while a chain walk is
 				// holding adapter results, and one module is a small enough step to keep the ceiling.
-				FNiagaraAdapter::CollectIfHeavy();
+				FNiagaraAdapter::CollectIfHeavy(/*bIncludeObjectCountGate=*/true);
 
 				const FStackAddress ModuleAddress = StackOwner
 					.WithScript(Stack.ScriptName).WithModule(Module.ModuleName);

@@ -4740,7 +4740,7 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
-	void FNiagaraAdapter::CollectIfHeavy()
+	void FNiagaraAdapter::CollectIfHeavy(bool bIncludeObjectCountGate)
 	{
 		constexpr uint64 CollectAboveBytes = 6ull * 1024 * 1024 * 1024;
 		constexpr uint64 GrowthSinceLastCollectBytes = 2ull * 1024 * 1024 * 1024;
@@ -4748,8 +4748,16 @@ namespace UE::DreamFX::Editor
 		// The object COUNT is a second, independent ceiling. A stock-engine tree build died at the
 		// editor's 25M UObject cap with physical memory never crossing the byte gate: without the
 		// fast-edit engine exports every operation rebuilds view models, and their debris is
-		// millions of tiny objects, not gigabytes -- a full hour with zero collections. Bytes and
-		// count each keep their own watermark; either being heavy collects both kinds of debris.
+		// millions of tiny objects, not gigabytes -- a full hour with zero collections.
+		//
+		// The count gate is only armed at FILE BOUNDARIES (the commandlet's per-source loop, the
+		// decompiler's per-system loop). Armed mid-pipeline it made stock builds nondeterministic:
+		// a full purge landing between a switch write and the input that switch reveals left the
+		// rebuilt view judging the input hidden -- the same source built green or red run to run,
+		// on byte-identical exports. A single system's own growth is a few million objects, so
+		// boundary collections keep the 25M cap comfortably out of reach without ever purging a
+		// build in flight. The byte gate stays live mid-pipeline as it always was -- on the Moon
+		// engine, whose contexts survive it; on stock it does not fire in practice.
 		constexpr int32 CollectAboveLiveObjects = 8 * 1024 * 1024;
 		constexpr int32 GrowthSinceLastCollectObjects = 2 * 1024 * 1024;
 
@@ -4767,7 +4775,7 @@ namespace UE::DreamFX::Editor
 
 		const bool bBytesHeavy = Used > CollectAboveBytes
 			&& (UsedAfterLastCollect == 0 || Used >= UsedAfterLastCollect + GrowthSinceLastCollectBytes);
-		const bool bCountHeavy = Live > CollectAboveLiveObjects
+		const bool bCountHeavy = bIncludeObjectCountGate && Live > CollectAboveLiveObjects
 			&& (LiveAfterLastCollect == 0 || Live >= LiveAfterLastCollect + GrowthSinceLastCollectObjects);
 		if (!bBytesHeavy && !bCountHeavy)
 		{

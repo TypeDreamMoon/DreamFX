@@ -560,7 +560,13 @@ namespace UE::DreamFX::Editor
 		 * A memory threshold rather than a call counter is what keeps it free on the small systems
 		 * that never approach it: those finish before the first check ever trips.
 		 */
-		static void CollectIfHeavy();
+		/**
+		 * Garbage-collects when the process is heavy, with every guard a live edit surface needs.
+		 * The object-count gate is only armed from file/system boundaries (pass true there): armed
+		 * mid-pipeline it purged builds in flight and made stock trees nondeterministic. The byte
+		 * gate is always live.
+		 */
+		static void CollectIfHeavy(bool bIncludeObjectCountGate = false);
 
 		/**
 		 * Regenerates the sample tables of every curve data interface the system owns.

@@ -1262,6 +1262,11 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 
 	for (const FString& SourceFile : SourceFiles)
 	{
+		// The one place the object-count collection gate is armed: between source files, where no
+		// build is in flight to purge. A stock-engine tree run exhausts the 25M UObject cap without
+		// this -- and regressed nondeterministically with the gate armed anywhere deeper.
+		UE::DreamFX::Editor::FNiagaraAdapter::CollectIfHeavy(/*bIncludeObjectCountGate=*/true);
+
 		// .dfs and .dfm produce assets. A .dfe does not -- it is merged into its host by copy (R3), so
 		// it is parsed and linted only, which still fails the gate on a broken one rather than waiting
 		// until something references it.
