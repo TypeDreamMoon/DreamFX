@@ -53,7 +53,7 @@ This system declares no emitters, so it will produce nothing.
 '%s' is not declared in this source, so its existing modules are left as-is: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2836`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2849`
 <!-- generated:end DFX5003 -->
 
 **Cause.** Declaring a stack means taking it over; a stack this source never mentions keeps whatever it had. `CreateNiagaraSystem` puts a `SystemState` in `SystemUpdate`, and clearing it wholesale would make every `.dfs` without an explicit `SystemUpdate` produce a system that never runs. Informational so the difference is visible rather than silent.
@@ -71,7 +71,7 @@ This system declares no emitters, so it will produce nothing.
 No Material was set, so the engine default was applied: %s. Write 'Material = \"...\";' to choose your own.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2949`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2962`
 <!-- generated:end DFX5004 -->
 
 **Cause.** A renderer with no `Material` gets the engine default, which is why an untextured effect still draws.
@@ -150,7 +150,7 @@ its own.
 Emitter '%s' declares Stage blocks but simulates on the CPU. Simulation stages are a GPU feature: set `SimTarget = GPU` in the emitter's Settings.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3078`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3091`
 <!-- generated:end DFX5033 -->
 
 **Cause.** An emitter declares `Stage` blocks while simulating on the CPU. Simulation stages are a
@@ -212,7 +212,7 @@ are unique by construction, so this fires on hand-edited sources.
 Only System documents can be generated right now; this file declares a %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3498`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3511`
 <!-- generated:end DFX5097 -->
 
 **Cause.** Only `.dfs` and `.dfm` produce assets. A `.dfe` is merged into its host by copy (R3) and has nothing of its own to generate.

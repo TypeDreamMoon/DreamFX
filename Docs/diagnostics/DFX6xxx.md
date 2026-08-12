@@ -14,7 +14,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3197`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3210`
 <!-- generated:end DFX6001 -->
 
 **Cause.** A Niagara compile error, mapped back to the source line of the module that raised it.
@@ -32,7 +32,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3231`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3244`
 <!-- generated:end DFX6002 -->
 
 **Cause.** A Niagara compile warning, mapped back to source.
@@ -50,7 +50,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3272`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3285`
 <!-- generated:end DFX6003 -->
 
 **Cause.** A Niagara stack issue at error level -- an unmet module dependency, most often. Stack issues are only readable where Slate exists, so these appear in the editor and in the corpus suite but not in a headless build (`GetStackIssues` is not headless-safe).
@@ -68,7 +68,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3276`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3289`
 <!-- generated:end DFX6004 -->
 
 **Cause.** A Niagara stack issue at warning level. A deprecated module reports here.
@@ -86,7 +86,7 @@
 Niagara compilation of '%s' did not succeed (status %s).
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3361`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3711`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3374`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3724`
 <!-- generated:end DFX6005 -->
 
 **Cause.** The system's compile did not reach a successful state. Individual errors are reported as DFX6001 above this.
@@ -122,7 +122,7 @@ Niagara could not compile the body of '%s':\n%s
 Nothing in this source writes that parameter, so there is no graph parameter for a default to sit on and Niagara refuses the read. Check the asset before the effect: the decompiler drops any module input whose value matches a freshly probed module, and a value the author set that happens to equal the default is dropped with them -- NS_Spawn_Ground_Root reads Particles.MySize and builds clean once the suppressed writes are exported, so its text was missing a write its asset had. If the source really is the whole story, write the parameter before whatever reads it -- for an 'Emitter.<Module>.<Output>' name, move the module that produces it ahead of its readers -- or drop the read. Building on an engine with the MoonEngine additions makes the message go away by supplying the type's zero, which is not the same as making the effect work.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3224`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3237`
 <!-- generated:end DFX6007 -->
 
 **Cause.** Attached to a DFX6001 "read before being set": nothing in the **source text** writes the parameter, so no link write created it and there is no graph parameter for a default to sit on.
@@ -146,7 +146,7 @@ Nothing in this source writes that parameter, so there is no graph parameter for
 '%s' finished its compile with stale scripts: %s. The compiled VM was not rebuilt from the graphs this build wrote, so the asset would simulate something other than what the source says. This is a DreamFX pipeline defect -- report it with this source file.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3410`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3423`
 <!-- generated:end DFX6008 -->
 
 **Cause.** The build finished its Niagara compile, and the engine's own synchronization test then said some script's stored VM was **not** compiled from the graphs as this build left them. That should be impossible with the build forcing its final compile, which is exactly why it is an error: either a write path mutated a graph after the compile was issued, or the force was lost somewhere. The check exists because this class of asset has shipped before --- `NE_C` of `NS_Spawn_Teleport_Root` carried bytecode from an all-Unset-switches era under the compile id of the correct graph, and simulated the wrong branches for days while every text-level check agreed with the source (2026-08-11).

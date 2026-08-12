@@ -200,7 +200,7 @@ Because DFX8010 already ruled out every *known* gap, a mismatch here is a real d
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3319`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3332`
 <!-- generated:end DFX8013 -->
 
 **Cause.** The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its
