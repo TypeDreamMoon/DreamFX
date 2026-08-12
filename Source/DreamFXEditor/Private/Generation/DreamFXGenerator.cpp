@@ -2223,22 +2223,29 @@ namespace UE::DreamFX::Editor
 			// unexported. Not-a-switch falls through rather than failing, so an ordinary input asking
 			// the same question costs one name lookup and nothing else.
 			//
-			// Literals and enums only: a LINKED static rides the ordinary rail below instead. A link
-			// is an override-pin wire to a parameter map get -- the same graph shape for static and
-			// non-static inputs, and SetLinkedParameterValueForFunctionInput's own KnownParameters
-			// pass upgrades the target to its static-typed twin. The fluid templates are the living
-			// case: every Grid3D_Turbulence links `CalculateTurbulence` to an emitter-scope static
-			// bool, and the pin-default encoding has nothing to encode for it -- the value lives in
-			// the other parameter.
+			// Literals, enums AND links. The earlier revision sent linked statics down the ordinary
+			// rail on the theory that the engine's KnownParameters pass handles them -- and the fluid
+			// templates seemed to prove it. They proved something narrower: the ordinary rail only
+			// survives when the engine's value-unchanged early-out fires first. For any genuinely new
+			// link, SetLinkedParameterValue calls RemoveOverridePin unconditionally, the override-pin
+			// finder returns the module node's own switch pin before it looks at the map set
+			// (NiagaraStackGraphUtilities.cpp:1964), and the CastChecked on its owner is an appError
+			// -- the editor dies on a legal source line (open-problems section 9). So every value
+			// form a DECLARED switch goes through the pin route; a linked value resolves there
+			// against the module's own default binding -- equal is a no-op, different is a worded
+			// refusal (a map-get wire into the pin was tried and the digest rejects it).
 			const bool bStaticPinEncodable = Input.Value.Mode == EInputValueMode::Literal
-				|| Input.Value.Mode == EInputValueMode::Enum;
+				|| Input.Value.Mode == EInputValueMode::Enum
+				|| Input.Value.Mode == EInputValueMode::Linked;
 			if (Input.Path.Num() == 1 && !Input.NiagaraName.IsNone() && bStaticPinEncodable)
 			{
 				bool bNotASwitch = false;
 				if (FNiagaraAdapter::SetStaticSwitchByPin(
 					InputAddress, Input.NiagaraName, Input.Value, bNotASwitch, OutErrors))
 				{
-					bWroteSwitch = true;
+					// A linked switch that succeeded wrote nothing -- it named the module's own
+					// default binding -- so nothing was revealed or hidden and the epoch survives.
+					bWroteSwitch = Input.Value.Mode != EInputValueMode::Linked;
 					return true;
 				}
 				if (!bNotASwitch)
@@ -2256,7 +2263,13 @@ namespace UE::DreamFX::Editor
 				//
 				// Routed on the type rather than on bIsStaticSwitch: the flag is false whenever the
 				// topology could not be probed, and `/NiagaraFluids/*` is exactly that case.
-				if (Input.InputType.IsStatic())
+				//
+				// Literals and enums only. A LINKED value here rides the ordinary rail below: the pin
+				// encoder has no linked form, while the API is safe for exactly this home -- with no
+				// switch pin on the node, the override-pin finder resolves to the map set and the
+				// CastChecked that kills the declared-switch case holds. The fluids' linked
+				// `Use Seed Turbulence` / `Calculate Turbulence` built green this way all along.
+				if (Input.InputType.IsStatic() && Input.Value.Mode != EInputValueMode::Linked)
 				{
 					bWroteSwitch = true;
 					return FNiagaraAdapter::SetStaticInputByOverridePin(

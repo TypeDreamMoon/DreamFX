@@ -1205,6 +1205,14 @@ namespace UE::DreamFX::Editor
 		 * input, asked speculatively, and the caller should use the normal write path -- from a real
 		 * failure. The question is put to the module node rather than to the schema because the
 		 * schema's `bIsStaticSwitch` is false for any module whose topology could not be probed.
+		 *
+		 * Linked values are handled here too, resolved against the module's own default binding:
+		 * equal is a no-op, different is a worded refusal -- the call site has no link mechanism
+		 * (a wire into the pin fails the digest; measured). They MUST not ride the API rail:
+		 * SetLinkedParameterValue's unconditional RemoveOverridePin CastCheckeds the switch pin's
+		 * owner as a parameter map set and appErrors -- a process death a legal .dfs could trigger
+		 * (open-problems section 9). The fluid templates survived that rail only through the
+		 * engine's value-unchanged early-out.
 		 */
 		static bool SetStaticSwitchByPin(const FStackAddress& ModuleAddress, FName SwitchVariableName,
 			const FInputValue& Value, bool& bOutNotASwitch, TArray<FString>& OutErrors);

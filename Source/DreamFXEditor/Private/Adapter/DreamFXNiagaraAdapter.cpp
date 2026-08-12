@@ -413,6 +413,83 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
+		/**
+		 * A linked value for a static switch, resolved against the module's own default binding.
+		 *
+		 * The engine has no call-site mechanism for this at all. A calling node can hand a switch a
+		 * compile-time constant (the pin default), and nothing else: the traversal resolves the pin
+		 * with ResolveConstantValue (NiagaraTraversalStateContext.cpp:54), and a wire onto the pin
+		 * leaves the selector INDEX_NONE with two ensures (NiagaraGraphDigest.cpp:4235; measured --
+		 * the wire shape was built and rejected). Every "linked" switch the stack shows in real
+		 * content is the module's OWN default binding, which the caller never writes.
+		 *
+		 * So a linked value that names the module's default binding is a no-op -- writing nothing is
+		 * exactly what reproduces the original, and it is what the API rail's value-unchanged
+		 * early-out used to do by accident. A linked value that names anything else asks for a
+		 * mechanism the engine does not have, and says so in words. The API rail said it with an
+		 * appError instead: SetLinkedParameterValue's unconditional RemoveOverridePin CastCheckeds
+		 * this pin's owner as a parameter map set (open-problems section 9).
+		 *
+		 * The default binding is read off the called graph's VariableToScriptVariable map through
+		 * reflection -- the map and UNiagaraScriptVariable's DefaultMode/DefaultBinding are
+		 * UPROPERTYs, the same route FindGraphVariableTypeByName takes for types.
+		 */
+		bool LinkStaticSwitchPin(UNiagaraNodeFunctionCall& Node, UNiagaraGraph& CalledGraph,
+			FName SwitchVariableName, const FNiagaraVariableBase& LinkedVariable,
+			TArray<FString>& OutErrors)
+		{
+			FName DefaultBindingName;
+
+			FMapProperty* MapProperty = CastField<FMapProperty>(
+				CalledGraph.GetClass()->FindPropertyByName(TEXT("VariableToScriptVariable")));
+			if (MapProperty != nullptr)
+			{
+				FScriptMapHelper Map(MapProperty, MapProperty->ContainerPtrToValuePtr<void>(&CalledGraph));
+				for (FScriptMapHelper::FIterator It(Map); It; ++It)
+				{
+					const FNiagaraVariable* Key = reinterpret_cast<const FNiagaraVariable*>(
+						Map.GetKeyPtr(It.GetInternalIndex()));
+					if (Key == nullptr || Key->GetName() != SwitchVariableName)
+					{
+						continue;
+					}
+					UObject* ScriptVariable = *reinterpret_cast<UObject* const*>(
+						Map.GetValuePtr(It.GetInternalIndex()));
+					if (ScriptVariable == nullptr)
+					{
+						break;
+					}
+					FStructProperty* BindingProperty = CastField<FStructProperty>(
+						ScriptVariable->GetClass()->FindPropertyByName(TEXT("DefaultBinding")));
+					FNameProperty* NameProperty = BindingProperty != nullptr
+						? CastField<FNameProperty>(BindingProperty->Struct->FindPropertyByName(TEXT("Name")))
+						: nullptr;
+					if (NameProperty != nullptr)
+					{
+						const void* Binding = BindingProperty->ContainerPtrToValuePtr<void>(ScriptVariable);
+						DefaultBindingName = NameProperty->GetPropertyValue_InContainer(Binding);
+					}
+					break;
+				}
+			}
+
+			if (DefaultBindingName == LinkedVariable.GetName())
+			{
+				// The source spells out what the module already does. Writing nothing is the exact
+				// reproduction -- the pin default stays untouched and the module's binding governs,
+				// same as the original asset.
+				return true;
+			}
+
+			OutErrors.Add(FString::Printf(
+				TEXT("Static switch '%s' cannot be linked to '%s' from a module call: Niagara resolves a switch from a compile-time constant or from the module's own default binding%s. Set a literal value, or change the binding inside the module."),
+				*SwitchVariableName.ToString(), *LinkedVariable.GetName().ToString(),
+				DefaultBindingName.IsNone()
+					? TEXT("")
+					: *FString::Printf(TEXT(" (which is '%s' here)"), *DefaultBindingName.ToString())));
+			return false;
+		}
+
 		// Defined further down, next to the other graph lookups; declared here because the pin-default
 		// repair below runs before them in the file and there is no reason to reorder either.
 		UNiagaraNodeFunctionCall* FindModuleNode(const FStackAddress& ModuleAddress);
@@ -2266,6 +2343,35 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::SetInput(const FStackAddress& InputAddress, const FInputValue& Value, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("SetInput"));
+
+		// Invariant guard (open-problems section 9): a linked value for a static switch must never
+		// reach the API rail. SetLinkedParameterValue calls RemoveOverridePin unconditionally, the
+		// override-pin finder returns the switch pin on the function call node before it looks
+		// anywhere else, and the CastChecked on that pin's owner is an appError -- the process dies,
+		// nothing is reported. Routing sends these through the pin path; if a caller gets here
+		// anyway, refuse with words instead of forwarding. A legal source file must never be able
+		// to kill the editor.
+		if (Value.Mode == EInputValueMode::Linked && InputAddress.InputNameStack.Num() == 1)
+		{
+			if (UNiagaraNodeFunctionCall* GuardNode = FindModuleNode(InputAddress))
+			{
+				if (UNiagaraGraph* GuardGraph = GuardNode->GetCalledGraph())
+				{
+					const FName GuardInputName = InputAddress.InputNameStack[0];
+					for (const FNiagaraVariable& SwitchVariable : GuardGraph->FindStaticSwitchInputs())
+					{
+						if (SwitchVariable.GetName().IsEqual(GuardInputName))
+						{
+							OutErrors.Add(FString::Printf(
+								TEXT("'%s' is a static switch of '%s' and was handed a linked value on the API rail. That path terminates the process; the pin route must carry it. This is an internal routing error."),
+								*GuardInputName.ToString(), *InputAddress.ModuleName.ToString()));
+							return false;
+						}
+					}
+				}
+			}
+		}
+
 		FNiagaraExt_StackInputValue StackValue;
 		if (!ToStackInputValue(Value, StackValue, OutErrors))
 		{
@@ -4834,6 +4940,16 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
+		// A linked value never goes near the API rail: SetLinkedParameterValue would find this very
+		// pin first and CastChecked its owner as a parameter map set -- appError, process gone
+		// (open-problems section 9). Resolved against the module's default binding instead: equal
+		// is a no-op (nothing to write, the module provides it), different is a worded refusal
+		// (the engine has no call-site mechanism for it -- measured, see LinkStaticSwitchPin).
+		if (Value.Mode == EInputValueMode::Linked)
+		{
+			return LinkStaticSwitchPin(*Node, *CalledGraph, SwitchVariableName, Value.LinkedVariable, OutErrors);
+		}
+
 		FString PinDefaultValue;
 		if (!EncodeStaticPinDefault(SwitchType, SwitchVariableName, Value, PinDefaultValue, OutErrors))
 		{
@@ -4841,6 +4957,11 @@ namespace UE::DreamFX::Editor
 		}
 
 		SwitchPin->Modify();
+		if (SwitchPin->LinkedTo.Num() > 0)
+		{
+			// A literal replacing a link: the wire must go, or the default is dead text.
+			SwitchPin->BreakAllPinLinks();
+		}
 		SwitchPin->DefaultValue = PinDefaultValue;
 		Node->MarkNodeRequiresSynchronization(TEXT("DreamFX static switch write"), /*bRaiseGraphNeedsRecompile=*/true);
 		return true;

@@ -648,6 +648,15 @@ namespace UE::DreamFX::Editor
 		for (const TPair<FName, FInputValue>& Switch : SwitchValues)
 		{
 			Errors.Reset();
+
+			// The API rail, exactly as before section 9: SetInput's entry guard now refuses a linked
+			// declared switch with a diagnostic instead of letting the API appError the process, so
+			// the crash is gone without changing what any probe reports. Applying switches through
+			// the pin route here instead was tried and measured out: in a full-tree run two systems
+			// regressed -- inputs their switches reveal read as hidden at generation time (52/3 vs
+			// 55/0) -- while the same systems built green single-file, so the damage needs a
+			// long-lived probe process and did not reproduce under isolation. The probe keeps the
+			// rail whose reveal behavior every schema in the tree was measured under.
 			if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Switch.Key), Switch.Value, Errors))
 			{
 				UE_LOG(LogDreamFX, Warning,
