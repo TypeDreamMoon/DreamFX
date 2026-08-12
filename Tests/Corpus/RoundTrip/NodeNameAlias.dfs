@@ -1,0 +1,42 @@
+// Round-trip fixture for the `as` node name (2026-08-12 round 2, cause #2).
+//
+// A function call node's name is not decoration: `Output.<node>.<value>` links resolve by it, and
+// the engine numbers fresh nodes by ADD order. An original whose numbering carries years of editing
+// history -- a `003` whose siblings are long deleted -- rebuilt with different numbers and left
+// every output link dangling as "read before set". Fifteen of Ninja's seventeen rebuild errors were
+// that one shape.
+//
+// The names below are deliberately out of step with add order (003 first, then 001, then 002). That
+// is what gives the fixture teeth: if `as` stopped being emitted, the rebuild would renumber by add
+// order into 000/001/002 and the second export would disagree with the first. Names that happened
+// to match add order would round-trip through a broken exporter without complaint.
+System(Name="Corpus/NS_NodeNameAlias", Root="Plugin.DreamFX")
+{
+    Emitter Motes
+    {
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 20.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode = DirectSet,
+                Lifetime     = 2.0
+            );
+            SystemLocation();
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            GravityForce(Gravity = (0, 0, -100)) as GravityForce003;
+            GravityForce(Gravity = (0, 0, -200)) as GravityForce001;
+            GravityForce(Gravity = (0, 0, -300)) as GravityForce002;
+            SolveForcesAndVelocity();
+        }
+
+        SpriteRenderer Body
+        {
+        }
+    }
+}

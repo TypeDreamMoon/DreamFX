@@ -4,6 +4,7 @@
 #include "DreamFXModule.h"
 #include "DreamFXParser.h"
 #include "Decompiler/DreamFXDecompiler.h"
+#include "Diff/DreamFXAssetFacts.h"
 #include "Generation/DreamFXGenerator.h"
 #include "Lint/DreamFXLint.h"
 #include "SourceFiles/DreamFXPaths.h"
@@ -740,355 +741,8 @@ namespace
 
 	// ---------------------------------------------------------------- asset diff
 	//
-	// The house rule's enforcer (plan.md design principle 5): proving anything about an asset takes
-	// asset-level evidence, and until this existed the only routine comparison channel WAS the
-	// export -- both sides of L1 are the same lossy exporter's output, so a loss on the export side
-	// is structurally invisible there. This walks the assets themselves by reflection and compares
-	// facts as multisets: what each side has that the other does not, never "first difference".
-
-	/**
-	 * Identity noise scrubbed out of a fact, so two assets that differ only in who they are compare
-	 * equal: 32-hex guids, `_123` autoname suffixes (subobject names, node names), and references to
-	 * the asset's own package. Everything else -- values, real names, resolution state -- survives.
-	 */
-	FString ScrubIdentity(const FString& Text, const FString& SelfPackage)
-	{
-		FString Out;
-		Out.Reserve(Text.Len());
-
-		int32 Index = 0;
-		while (Index < Text.Len())
-		{
-			if (!SelfPackage.IsEmpty() && FCString::Strncmp(&Text[Index], *SelfPackage, SelfPackage.Len()) == 0)
-			{
-				Out += TEXT("<self>");
-				Index += SelfPackage.Len();
-				continue;
-			}
-
-			const TCHAR Character = Text[Index];
-
-			auto IsHex = [](TCHAR C) { return FChar::IsDigit(C) || (C >= 'A' && C <= 'F'); };
-			// Only a MAXIMAL run of exactly 32 hex characters is a guid. FLT_MAX prints as 39
-			// decimal digits, whose 32-character tail this used to eat.
-			if (IsHex(Character) && (Index == 0 || !IsHex(Text[Index - 1])))
-			{
-				int32 Run = Index;
-				while (Run < Text.Len() && IsHex(Text[Run]))
-				{
-					++Run;
-				}
-				if (Run - Index == 32)
-				{
-					Out += TEXT("<guid>");
-					Index = Run;
-					continue;
-				}
-			}
-
-			if (Character == TEXT('_') && Index + 1 < Text.Len() && FChar::IsDigit(Text[Index + 1]))
-			{
-				int32 Run = Index + 1;
-				while (Run < Text.Len() && FChar::IsDigit(Text[Run]))
-				{
-					++Run;
-				}
-				if (Run >= Text.Len() || !FChar::IsAlpha(Text[Run]))
-				{
-					Out += TEXT("~");
-					Index = Run;
-					continue;
-				}
-			}
-
-			Out.AppendChar(Character);
-			++Index;
-		}
-		return Out;
-	}
-
-	/** One fact per top-level reflected property, skipping transients and an explicit list. */
-	void AppendPropertyFacts(const FString& Prefix, const void* Container, const UStruct* Struct,
-		const TSet<FName>& Skip, const FString& SelfPackage, TArray<FString>& OutFacts)
-	{
-		for (TFieldIterator<FProperty> It(Struct); It; ++It)
-		{
-			FProperty* Property = *It;
-			if (Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated)
-				|| Skip.Contains(Property->GetFName()))
-			{
-				continue;
-			}
-			FString Value;
-			Property->ExportText_InContainer(0, Value, Container, Container, nullptr, PPF_None);
-			OutFacts.Add(FString::Printf(TEXT("%s %s = %s"),
-				*Prefix, *Property->GetName(), *ScrubIdentity(Value, SelfPackage)));
-		}
-	}
-
-	/**
-	 * Rapid-iteration and exposed parameter stores, one fact per parameter with its value bytes.
-	 *
-	 * The module segment of a name has its trailing digits stripped ("Collision001" and "Collision"
-	 * are one module authored twice under Niagara's uniquifier), which is what let this tool see
-	 * that Down_Root's original DOES carry Advanced Aging Rate -- the claim "the original has no
-	 * value at all" had been read off the lossy export.
-	 */
-	void AppendParameterStoreFacts(const FString& Prefix, FNiagaraParameterStore& Store,
-		TArray<FString>& OutFacts)
-	{
-		TArrayView<const FNiagaraVariableWithOffset> Variables = Store.ReadParameterVariables();
-		const TArray<uint8>& Data = Store.GetParameterDataArray();
-
-		for (const FNiagaraVariableWithOffset& Variable : Variables)
-		{
-			FString Name = Variable.GetName().ToString();
-			TArray<FString> Segments;
-			Name.ParseIntoArray(Segments, TEXT("."));
-			if (Segments.Num() >= 3)
-			{
-				FString& Module = Segments[2];
-				while (Module.Len() > 0 && FChar::IsDigit(Module[Module.Len() - 1]))
-				{
-					Module.LeftChopInline(1, EAllowShrinking::No);
-				}
-				Name = FString::Join(Segments, TEXT("."));
-			}
-
-			FString Value;
-			if (Variable.IsDataInterface() || Variable.IsUObject())
-			{
-				Value = TEXT("<object>");
-			}
-			else if (Variable.Offset >= 0 && Variable.Offset + Variable.GetSizeInBytes() <= Data.Num())
-			{
-				Value = BytesToHex(Data.GetData() + Variable.Offset, Variable.GetSizeInBytes());
-			}
-			else
-			{
-				Value = TEXT("<no data>");
-			}
-
-			OutFacts.Add(FString::Printf(TEXT("%s %s (%s) = %s"),
-				*Prefix, *Name, *Variable.GetType().GetName(), *Value));
-		}
-	}
-
-	/** Every comparable fact about one system, unsorted; the caller compares as a multiset. */
-	void DescribeSystem(UNiagaraSystem* System, TArray<FString>& OutFacts)
-	{
-		const FString SelfPackage = System->GetOutermost()->GetName();
-
-		// Identity, wiring and editor bookkeeping. Graphs and scripts are deliberately absent as
-		// objects -- their observable content arrives through the parameter stores here, the export
-		// (L1) and the simulation (L3); their node soup is all identity.
-		static const TSet<FName> EmitterDataSkip = {
-			TEXT("GraphSource"), TEXT("SpawnScriptProps"), TEXT("UpdateScriptProps"),
-			TEXT("EventHandlerScriptProps"), TEXT("SimulationStages"), TEXT("GPUComputeScript"),
-			TEXT("EmitterSpawnScriptProps"), TEXT("EmitterUpdateScriptProps"),
-			TEXT("ScratchPads"), TEXT("ParentScratchPads"),
-			TEXT("VersionedParent"), TEXT("VersionedParentAtLastMerge"),
-			TEXT("RendererProperties"), TEXT("MessageStore"), TEXT("Version"),
-		};
-		static const TSet<FName> RendererSkip = { TEXT("MessageStore"), TEXT("StackMessages") };
-
-		if (UNiagaraScript* SystemSpawn = System->GetSystemSpawnScript())
-		{
-			AppendParameterStoreFacts(TEXT("ri system-spawn"), SystemSpawn->RapidIterationParameters, OutFacts);
-		}
-		if (UNiagaraScript* SystemUpdate = System->GetSystemUpdateScript())
-		{
-			AppendParameterStoreFacts(TEXT("ri system-update"), SystemUpdate->RapidIterationParameters, OutFacts);
-		}
-		AppendParameterStoreFacts(TEXT("user"), System->GetExposedParameters(), OutFacts);
-
-		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
-		{
-			const FString EmitterName = Handle.GetName().ToString();
-			const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
-			if (Data == nullptr)
-			{
-				OutFacts.Add(FString::Printf(TEXT("emitter %s has no data"), *EmitterName));
-				continue;
-			}
-
-			OutFacts.Add(FString::Printf(TEXT("emitter %s enabled = %s"),
-				*EmitterName, Handle.GetIsEnabled() ? TEXT("true") : TEXT("false")));
-
-			// Parentage is a first-class fact, not a property to scrub: an inheriting original and
-			// its flattened mirror SHOULD read differently here, and this line is where that shows.
-			const FVersionedNiagaraEmitter Parent = Data->GetParent();
-			OutFacts.Add(FString::Printf(TEXT("emitter %s parent = %s"),
-				*EmitterName, Parent.Emitter != nullptr ? *Parent.Emitter->GetPathName() : TEXT("none")));
-
-			// Event handlers as dedicated facts, source spoken by NAME. The generic property walk
-			// used to SKIP EventHandlerScriptProps -- which is precisely how a mirror with no event
-			// handlers at all sailed through this tool while its event-spawned emitters rendered
-			// nothing (2026-08-11, Descend/Up). The raw struct would compare on the source handle
-			// guid and the script object path, both identity; the name form compares on meaning.
-			{
-				TArray<FNiagaraAdapter::FEventHandlerSummary> Handlers;
-				TArray<FString> HandlerErrors;
-				FNiagaraAdapter::GetEmitterEventHandlers(
-					FStackAddress(System).WithEmitter(Handle.GetName()), Handlers, HandlerErrors);
-				for (const FNiagaraAdapter::FEventHandlerSummary& Handler : Handlers)
-				{
-					OutFacts.Add(FString::Printf(TEXT("emitter %s event handler: '%s' from '%s' (%s x%d)"),
-						*EmitterName, *Handler.SourceEventName.ToString(), *Handler.SourceEmitterName,
-						*Handler.ExecutionMode, Handler.SpawnNumber));
-				}
-			}
-
-			// Simulation stages as dedicated facts, for the same reason as the event handlers above:
-			// the raw property walk skips SimulationStages because the array itself is subobject
-			// identity, which is exactly how a mirror with no stages at all would sail through this
-			// tool while a Grid3D fluid renders nothing. One fact per stage -- class plus full
-			// property text, the shape the data interfaces use below. The script object is identity
-			// (its content arrives through the export and the simulation), the outer version guid too.
-			//
-			// Every binding-struct field is reduced to its NAMES (plus default bytes where the
-			// binding carries a value). The raw struct text prints registered-type handles, and a
-			// handle is serialization residue: on authored content it resolves to an unrelated type
-			// in any later session (GroomRods' PressureGrid binding reads as Vector4f) while the
-			// asset simulates fine, because the engine resolves every binding by name and never
-			// reads the stored type back. Comparing handles would fail every rebuilt mirror against
-			// noise the engine itself ignores. DataInterface was normalized first; EnabledBinding,
-			// NumIterations and the dispatch element counts are the same family.
-			{
-				static const TSet<FName> StageSkipBase = { TEXT("Script"), TEXT("OuterEmitterVersion") };
-				int32 StageIndex = 0;
-				for (const UNiagaraSimulationStageBase* Stage : Data->GetSimulationStages())
-				{
-					if (Stage != nullptr)
-					{
-						TSet<FName> StageSkip = StageSkipBase;
-						TArray<FString> StageFacts;
-
-						for (TFieldIterator<FStructProperty> It(Stage->GetClass()); It; ++It)
-						{
-							const FString StructName = It->Struct->GetName();
-							const bool bIsBinding =
-								StructName.Contains(TEXT("NiagaraParameterBinding"))
-								|| StructName.Contains(TEXT("NiagaraVariableAttributeBinding"))
-								|| StructName == TEXT("NiagaraVariableDataInterfaceBinding");
-							if (!bIsBinding)
-							{
-								continue;
-							}
-							StageSkip.Add(It->GetFName());
-
-							const void* BindingPtr = It->ContainerPtrToValuePtr<void>(Stage);
-							TArray<FString> Parts;
-							for (TFieldIterator<FProperty> Inner(It->Struct); Inner; ++Inner)
-							{
-								// Derived caches carry no semantics of their own: the resolved
-								// variable, the data set spelling and the exists/cached flags are
-								// all recomputed from the root name -- and bBindingExistsOnSource
-								// is the documented false-diff of the NE_C round.
-								const FString InnerName = Inner->GetName();
-								if (InnerName.StartsWith(TEXT("Cached"))
-									|| InnerName.StartsWith(TEXT("bBindingExists"))
-									|| InnerName.StartsWith(TEXT("bIsCached"))
-									|| InnerName == TEXT("ParamMapVariable")
-									|| InnerName == TEXT("DataSetName")
-									|| InnerName == TEXT("DataSetVariable")
-									// The RootName's variable-shaped twin, recomputed from it.
-									|| InnerName == TEXT("RootVariable"))
-								{
-									continue;
-								}
-
-								if (const FStructProperty* Var = CastField<FStructProperty>(*Inner))
-								{
-									// FNiagaraVariable/-Base sub-fields: the name is the meaning;
-									// the stored type handle is cross-session residue.
-									if (Var->Struct->IsChildOf(FNiagaraVariableBase::StaticStruct()))
-									{
-										const FNiagaraVariableBase* Variable =
-											Var->ContainerPtrToValuePtr<FNiagaraVariableBase>(BindingPtr);
-										Parts.Add(FString::Printf(TEXT("%s=%s"), *Var->GetName(),
-											*Variable->GetName().ToString()));
-										continue;
-									}
-								}
-
-								// Everything else in a binding struct is plain data (a root FName,
-								// a source-mode enum, default-value bytes) and exports safely.
-								FString ValueText;
-								Inner->ExportText_InContainer(0, ValueText, BindingPtr, BindingPtr,
-									nullptr, PPF_None);
-								Parts.Add(FString::Printf(TEXT("%s=%s"), *InnerName, *ValueText));
-							}
-							StageFacts.Add(FString::Printf(TEXT("%s = bind(%s)"),
-								*It->GetName(), *FString::Join(Parts, TEXT(","))));
-						}
-
-						AppendPropertyFacts(TEXT(""), Stage, Stage->GetClass(), StageSkip, SelfPackage, StageFacts);
-						StageFacts.Sort();
-						OutFacts.Add(FString::Printf(TEXT("emitter %s simulation stage %d:%s { %s }"),
-							*EmitterName, StageIndex, *Stage->GetClass()->GetName(),
-							*FString::Join(StageFacts, TEXT("; "))));
-					}
-					++StageIndex;
-				}
-			}
-
-			AppendPropertyFacts(FString::Printf(TEXT("emitter %s"), *EmitterName),
-				Data, FVersionedNiagaraEmitterData::StaticStruct(), EmitterDataSkip, SelfPackage, OutFacts);
-
-			TArray<UNiagaraScript*> Scripts;
-			Data->GetScripts(Scripts, /*bCompilableOnly=*/true);
-			for (UNiagaraScript* Script : Scripts)
-			{
-				if (Script == nullptr)
-				{
-					continue;
-				}
-				const FString Prefix = FString::Printf(TEXT("ri %s %s"),
-					*EmitterName, *StaticEnum<ENiagaraScriptUsage>()->GetNameStringByValue(
-						static_cast<int64>(Script->GetUsage())));
-				AppendParameterStoreFacts(Prefix, Script->RapidIterationParameters, OutFacts);
-			}
-
-			int32 RendererIndex = 0;
-			Data->ForEachRenderer([&](UNiagaraRendererProperties* Renderer)
-			{
-				if (Renderer != nullptr)
-				{
-					AppendPropertyFacts(
-						FString::Printf(TEXT("emitter %s renderer %d:%s"),
-							*EmitterName, RendererIndex, *Renderer->GetClass()->GetName()),
-						Renderer, Renderer->GetClass(), RendererSkip, SelfPackage, OutFacts);
-				}
-				++RendererIndex;
-			});
-		}
-
-		// Data interfaces live as subobjects wherever a module input placed them. One fact per
-		// interface, class plus full property text, so a DI whose configuration fails to round-trip
-		// shows up as a one-in/one-out pair instead of hiding behind an object path.
-		TArray<UObject*> Inner;
-		GetObjectsWithOuter(System->GetOutermost(), Inner, /*bIncludeNestedObjects=*/true);
-		for (UObject* Object : Inner)
-		{
-			UNiagaraDataInterface* Interface = Cast<UNiagaraDataInterface>(Object);
-			if (Interface == nullptr)
-			{
-				continue;
-			}
-			// The cooked LUT family is derived from Curve at save time; comparing it repeats the
-			// curve comparison with extra baked noise.
-			static const TSet<FName> InterfaceSkip = {
-				TEXT("CurveCookedEditorCache"), TEXT("ShaderLUT"), TEXT("LUTMinTime"),
-				TEXT("LUTMaxTime"), TEXT("LUTInvTimeRange"), TEXT("LUTNumSamplesMinusOne"),
-			};
-			TArray<FString> InterfaceFacts;
-			AppendPropertyFacts(TEXT(""), Interface, Interface->GetClass(), InterfaceSkip, SelfPackage, InterfaceFacts);
-			InterfaceFacts.Sort();
-			OutFacts.Add(FString::Printf(TEXT("di %s { %s }"),
-				*Interface->GetClass()->GetName(), *FString::Join(InterfaceFacts, TEXT("; "))));
-		}
-	}
+	// The facts themselves live in Diff/DreamFXAssetFacts.cpp -- the round-trip corpus needs the
+	// same walk, for the same reason this command exists.
 
 	/**
 	 * `-AssetDiff`: compare every original against its mirror at the asset level, as fact multisets.
@@ -1097,7 +751,7 @@ namespace
 	 * an export-side loss that L1 cannot see (both L1 sides being the exporter's own output) lands
 	 * here as a fact one side has and the other does not.
 	 */
-	int32 RunAssetDiff(const FString& SearchRoot)
+	int32 RunAssetDiff(const FString& SearchRoot, bool bCompileFirst)
 	{
 		const TArray<FString> Roots = ParseContentRoots(SearchRoot);
 		TArray<FAssetData> Assets;
@@ -1140,10 +794,35 @@ namespace
 				continue;
 			}
 
+			// Both sides are compiled before they are described, because the compiled facts are the
+			// compiler's view and there is no such view without running the compiler. Loading alone
+			// does not give one: PostLoad throws away a cached VM whose stored id does not match the
+			// graph it was built from, so an authored asset last compiled by an older engine reads as
+			// having no stages, no data interfaces and no written attributes -- which is a statement
+			// about that asset's compile history, not about its content, and would have made this
+			// whole family a false-difference generator.
+			//
+			// Forced, for the reason RequestCompileAsync's comment gives: a stored id can lie (NE_C
+			// carried the right graph's id over bytecode from a different graph), and a channel whose
+			// job is to be the last honest witness cannot take an id's word for it. Requested on both
+			// sides before either is waited on, so the two translations overlap.
+			if (bCompileFirst)
+			{
+				FNiagaraAdapter::RequestCompileAsync(Original, /*bForce=*/true);
+				FNiagaraAdapter::RequestCompileAsync(Mirror, /*bForce=*/true);
+
+				FCompileStateInfo CompileState;
+				TArray<FString> CompileErrors;
+				FNiagaraAdapter::WaitAndCollect(Original, /*bIncludingGpuShaders=*/false,
+					CompileState, CompileErrors);
+				FNiagaraAdapter::WaitAndCollect(Mirror, /*bIncludingGpuShaders=*/false,
+					CompileState, CompileErrors);
+			}
+
 			TArray<FString> LeftFacts;
 			TArray<FString> RightFacts;
-			DescribeSystem(Original, LeftFacts);
-			DescribeSystem(Mirror, RightFacts);
+			DescribeSystemFacts(Original, LeftFacts);
+			DescribeSystemFacts(Mirror, RightFacts);
 
 			// -DreamFXDumpFacts writes both sides' full fact lists to Saved/DreamFX/. The console
 			// report truncates every fact to 400 characters, which is exactly wrong for chasing a
@@ -1422,8 +1101,8 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("AssetDiff")))
 	{
 		FString SearchRoot;
-		FParse::Value(*Params, TEXT("-Path="), SearchRoot);
-		return RunAssetDiff(SearchRoot);
+		FParse::Value(*Params, TEXT("Path="), SearchRoot);
+		return RunAssetDiff(SearchRoot, /*bCompileFirst=*/!FParse::Param(*Params, TEXT("NoCompile")));
 	}
 
 	if (FParse::Param(*Params, TEXT("MirrorDiff")))

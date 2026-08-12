@@ -4,6 +4,7 @@
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
 #include "Decompiler/DreamFXDecompiler.h"
+#include "Diff/DreamFXAssetFacts.h"
 #include "DreamFXDiagnostics.h"
 #include "DreamFXParser.h"
 #include "DreamFXTypes.h"
@@ -545,6 +546,32 @@ bool FDreamFXRoundTripCorpusTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	// Snapshotted BEFORE the rebuild, not after. The rebuild targets the same asset path the
+	// fixture named, so it may legitimately land on the very object First is holding -- rebuilding
+	// an existing system in place is the normal case, not an edge one -- and facts read from that
+	// object afterwards would be the rebuild's own, compared against themselves.
+	TArray<FString> FactsFromFixture;
+	DescribeSystemFacts(First.System, FactsFromFixture);
+
+	// The fixture's build is moved out of the way before the rebuild takes its place.
+	//
+	// Both builds name the same asset, so without this they share a package -- and a rebuild that
+	// lands on an existing system leaves the previous run's data interface subobjects parented to
+	// it. That is Niagara's own bookkeeping and harmless in the editor, but here it is fatal to the
+	// measurement in the worst way: the stale interface still carries the fixture's values, so a
+	// tangent the export DROPPED is still found on the rebuilt side and the comparison reports no
+	// loss. Measured, not feared -- with the pre-fix exporter restored, the curve fixture passed.
+	//
+	// Renaming the package rather than deleting anything: the old objects stay alive and valid for
+	// as long as this test needs them, simply somewhere the walk will not reach.
+	if (UPackage* FixturePackage = First.System->GetOutermost())
+	{
+		const FName Parked = MakeUniqueObjectName(
+			nullptr, UPackage::StaticClass(), FName(*(FixturePackage->GetName() + TEXT("_FixtureBuild"))));
+		FixturePackage->Rename(*Parked.ToString(), nullptr,
+			REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+	}
+
 	// Rebuild from the export rather than from the fixture: the fixed point being asserted is the
 	// decompiler's, and feeding it its own output is the only way to see it.
 	FDocument Rebuilt;
@@ -581,6 +608,61 @@ bool FDreamFXRoundTripCorpusTest::RunTest(const FString& Parameters)
 	{
 		AddError(FString::Printf(TEXT("%s: decompile is not idempotent.\n%s"),
 			*Parameters, *DiffFirstLines(ExportOne.Source, ExportTwo.Source)));
+	}
+
+	// The two exports agreeing is necessary and not sufficient, and the difference is the whole
+	// reason this second check exists. Both sides of that comparison are the SAME exporter's
+	// output, so anything the exporter drops is missing from both and the texts match perfectly
+	// while the assets do not. Every curve tangent and every stage binding lost before 2026-08-12
+	// was invisible in exactly this way -- symmetric, and therefore silent.
+	//
+	// The assets are not: First was built from the fixture and holds what the fixture said; Second
+	// was built from the export and holds only what the export carried. Comparing them as fact
+	// multisets is what turns a symmetric export loss into a failing test, and it is why a fixture
+	// here has to SAY the thing it is guarding (write the Break tangent, bind the stage) rather
+	// than merely exercise the feature.
+	{
+		TArray<FString> FactsFromExport;
+		DescribeSystemFacts(Second.System, FactsFromExport);
+
+		TMap<FString, int32> Counts;
+		for (const FString& Fact : FactsFromFixture)
+		{
+			Counts.FindOrAdd(Fact)++;
+		}
+		for (const FString& Fact : FactsFromExport)
+		{
+			Counts.FindOrAdd(Fact)--;
+		}
+
+		TArray<FString> OnlyFirst;
+		TArray<FString> OnlySecond;
+		for (const TPair<FString, int32>& Entry : Counts)
+		{
+			for (int32 Copy = 0; Copy < FMath::Abs(Entry.Value); ++Copy)
+			{
+				(Entry.Value > 0 ? OnlyFirst : OnlySecond).Add(Entry.Key);
+			}
+		}
+		OnlyFirst.Sort();
+		OnlySecond.Sort();
+
+		if (OnlyFirst.Num() > 0 || OnlySecond.Num() > 0)
+		{
+			constexpr int32 MaxReported = 12;
+			FString Report;
+			for (int32 Index = 0; Index < FMath::Min(OnlyFirst.Num(), MaxReported); ++Index)
+			{
+				Report += FString::Printf(TEXT("\n  built-from-source only | %s"), *OnlyFirst[Index].Left(300));
+			}
+			for (int32 Index = 0; Index < FMath::Min(OnlySecond.Num(), MaxReported); ++Index)
+			{
+				Report += FString::Printf(TEXT("\n  built-from-export only | %s"), *OnlySecond[Index].Left(300));
+			}
+			AddError(FString::Printf(
+				TEXT("%s: the export loses asset state. %d fact(s) only in the asset built from the fixture, %d only in the asset rebuilt from its export.%s"),
+				*Parameters, OnlyFirst.Num(), OnlySecond.Num(), *Report));
+		}
 	}
 
 	return true;

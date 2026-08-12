@@ -1,0 +1,75 @@
+// Round-trip fixture for gap 2.3: an event handler whose module carries INPUTS.
+//
+// The existing event fixture (EventHandler.dfs) calls a bare `ReceiveLocationEvent()`, which is what
+// the round of 2026-08-12 exposed as a hole: the traversal-cache case proved that reading and
+// writing inputs on a zero-usage-id stack had been broken all along, and every event fixture was
+// blind to it because none of them wrote an input. A fixture that only proves a stack EXISTS cannot
+// notice that everything inside it came back at its default.
+//
+// `InterpolateSpawnedPositions` is a static SWITCH, which makes this the one event fixture where
+// switch state and gated inputs meet inside a zero-usage-id stack -- the exact combination the
+// traversal-cache case broke.
+//
+// The names come from `dfx schema ReceiveLocationEvent`, not from reading them off content: the
+// four inputs a nearby asset writes belong to that module's pinned `@1.0` version and do not exist
+// on the current one. That mistake cost a corpus run, and it is the same rule the verify skill
+// states -- discover input names, never guess them, and never copy them from a versioned call.
+System(Name="Corpus/NS_EventHandlerInputs", Root="Plugin.DreamFX")
+{
+    Emitter Source
+    {
+        Settings = {
+            RequiresPersistentIDs = true;
+            Determinism = true;
+            RandomSeed = 17;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.5);
+            SpawnBurst_Instantaneous(SpawnCount = 3);
+        }
+
+        ParticleSpawn = {
+            V2/InitializeParticle(LifetimeMode = DirectSet, Lifetime = 0.4);
+        }
+
+        ParticleUpdate = {
+            // GenerateLocationEvent declares SolveForcesAndVelocity as a required predecessor.
+            SolveForcesAndVelocity();
+            GenerateLocationEvent();
+        }
+    }
+
+    Emitter Receiver
+    {
+        Settings = {
+            Determinism = true;
+            RandomSeed = 19;
+        }
+
+        ParticleSpawn = {
+            V2/InitializeParticle(LifetimeMode = DirectSet, Lifetime = 0.3);
+        }
+
+        OnEvent(Source = Source, Event = "LocationEvent", Mode = SpawnedParticles, SpawnNumber = 2,
+                UpdateAttributeInitialValues = false) = {
+            // Source order is write order, and each switch here reveals the input under it: writing
+            // the gated one first is DFX5021. Three of the four switches are enum-typed, spelled
+            // with back quotes because their Niagara names are not identifiers.
+            ReceiveLocationEvent(
+                InterpolateSpawnedPositions = true,
+                `Velocity(Vector2)`         = Apply,
+                InheritedVelocityScale      = 0.75,
+                `NormalizedAge(Float1)`     = Apply,
+                InheritParentNormalizedAge  = true,
+                `Color(LinearColor)`        = Apply,
+                ApplyRGB                    = true,
+                ApplyAlpha                  = false
+            );
+        }
+
+        SpriteRenderer
+        {
+        }
+    }
+}

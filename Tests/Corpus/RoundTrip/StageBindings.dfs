@@ -1,0 +1,69 @@
+// Round-trip fixture for gap 1.3: the two stage knobs that can be a value OR a link.
+//
+// Both were on the 2026-08-12 gap head as declared losses. What they cost is not subtle: a stage
+// whose Enabled is bound runs when the effect says so, and a mirror that kept only the literal flag
+// ran it every frame -- which is why Ninja's debug slice drew over the fluid in every rebuild. The
+// iteration count is the same story one step quieter: the number still exported, so the mirror
+// looked right and simply stopped responding to the parameter that was meant to tune it.
+//
+// The fixture holds all four combinations that have to stay distinguishable:
+//
+//   Settle    neither -- the literal defaults, and the baseline that proves a bound stage's
+//             attributes are not being written onto an unbound one
+//   Sharpen   both, on top of literals: the engine keeps the number as the fallback the binding
+//             overrides, so `NumIterations` legitimately appears twice with different shapes
+//   Polish    a binding with no literal beside it
+//
+// The parameters are declared in EmitterUpdate rather than assumed: a binding names a parameter, and
+// a fixture that bound to something nothing writes would be testing the name and not the link.
+System(Name="Corpus/NS_StageBindings", Root="Plugin.DreamFX")
+{
+    Emitter Motes
+    {
+        Settings = {
+            SimTarget          = GPU;
+            Determinism        = true;
+            RandomSeed         = 13;
+            AllocationMode     = Fixed;
+            PreAllocationCount = 64;
+            FixedBounds        = box(-100, -100, -100, 100, 100, 100);
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 25.0);
+            int Emitter.StageIterations = 3;
+            bool Emitter.RunSharpen = true;
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 1.0,
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 6.0
+            );
+            SystemLocation();
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+        }
+
+        Stage Settle = {
+            ScaleColor();
+        }
+
+        Stage Sharpen(NumIterations = 4, NumIterations = Emitter.StageIterations, Enabled = false, Enabled = Emitter.RunSharpen) = {
+            ScaleColor();
+        }
+
+        Stage Polish(Enabled = Emitter.RunSharpen, ExecuteBehavior = NotOnSimulationReset) = {
+            ScaleColor();
+        }
+
+        SpriteRenderer Core
+        {
+        }
+    }
+}

@@ -115,6 +115,9 @@ param(
     # the result is not meant to be maintained, it answers "what did the baseline hide?".
     [switch]$NoDefaults,
 
+    # mirror-diff: skip L2. asset-diff: describe both sides as loaded instead of compiling them
+    # first. Diagnostic only -- without the compile the `compiled` fact family reports each side's
+    # compile history rather than its content, which is not a comparison of anything.
     [switch]$NoCompile,
 
     # schema: which stack to probe the module in. Defaults to trying each in turn.
@@ -129,6 +132,11 @@ param(
     # Delete the assets this run created that git reports as untracked. Tracked assets are
     # never touched -- they are reported instead.
     [switch]$CleanNew,
+
+    # asset-diff: write both sides' full fact lists to Saved/DreamFX/*.facts. The console report
+    # truncates every fact to 400 characters, which is exactly wrong for chasing a difference that
+    # lives past that mark -- and the compiled-fact family routinely does.
+    [switch]$DumpFacts,
 
     # Echo the full commandlet output instead of just the DreamFX lines.
     [switch]$Raw
@@ -322,6 +330,8 @@ switch ($Command) {
     'asset-diff' {
         $arguments += '-AssetDiff'
         if ($Path) { $arguments += "-Path=$Path" }
+        if ($DumpFacts) { $arguments += '-DreamFXDumpFacts' }
+        if ($NoCompile) { $arguments += '-NoCompile' }
     }
     'coverage' {
         $arguments += '-Coverage'

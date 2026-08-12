@@ -1,0 +1,59 @@
+// Round-trip fixture for gap 1.1: curve tangents.
+//
+// Tangents are stored per key and read straight out at evaluation time -- FRichCurve re-derives them
+// only when something EDITS the curve -- so the exporter's old rule ("write them under RCTM_User,
+// drop them otherwise") sent every Break key's corner and every Auto key's stored slope to zero on
+// the way back in. A colour ramp or a size curve came back flat where the author had drawn a
+// fall-off, and the only channel that saw it was an asset-level Curve DI difference nobody could
+// name yet.
+//
+// Each key below is one of the shapes that used to be lost:
+//
+//   Tangent=Auto with numbers   the mode says "derived", the data says otherwise, and the data wins
+//                               until an edit happens. Dropping the numbers changes the curve.
+//   Tangent=Break, both sides   a corner: two independent tangents, which no other mode can hold
+//   Tangent=Break with a zero   the zero is deliberate -- a flat approach into a sloped departure --
+//                               so it has to survive as a zero and not as an absence
+//   bare Arrive/Leave           the pre-existing spelling, which still means User. It is here so a
+//                               change to the inference shows up as a diff instead of as silence.
+System(Name="Corpus/NS_CurveTangents", Root="Plugin.DreamFX")
+{
+    Emitter Motes
+    {
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 20.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode      = DirectSet,
+                Lifetime          = 2.0,
+                SpriteSizeMode    = Uniform,
+                UniformSpriteSize = 10.0
+            );
+            SystemLocation();
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            ScaleSpriteSize(
+                ScaleSpriteSizeMode = Uniform,
+                UniformScaleFactor  = FloatFromCurve(
+                    FloatCurve = curve {
+                        0.0 -> 0.0 [ Interp=Cubic; Tangent=Auto; Arrive=29.182631; Leave=1.5 ];
+                        0.3 -> 1.0 [ Interp=Cubic; Arrive=0.25; Leave=0.25 ];
+                        0.6 -> 0.8 [ Interp=Cubic; Tangent=Break; Arrive=-4.537578; Leave=0.5 ];
+                        0.8 -> 0.4 [ Interp=Cubic; Tangent=Break; Arrive=0.0; Leave=-2.25 ];
+                        1.0 -> 0.0 [ Interp=Linear ];
+                    },
+                    CurveIndex = Particles.NormalizedAge
+                )
+            );
+        }
+
+        SpriteRenderer Body
+        {
+        }
+    }
+}
