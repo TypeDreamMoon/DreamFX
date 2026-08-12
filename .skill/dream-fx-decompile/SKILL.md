@@ -47,6 +47,22 @@ paths). `mirror-diff` then decompiles the original and its mirror and compares t
 line — a stronger check than the round-trip corpus, which only reads back what DreamFX itself wrote.
 Only the `// Decompiled from` line is excused. `-NoCompile` skips the per-mirror compile check.
 
+```bash
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 asset-diff -Path '/Game/FX' -DumpFacts
+```
+
+`asset-diff` is the one that does **not** go through the exporter. It walks both assets by reflection
+and compares facts as multisets, so a loss the exporter makes on both sides — invisible to
+`mirror-diff`, whose two inputs are that same exporter's output — lands here as a fact one side has
+and the other does not. Exit code is the number of systems that differ.
+
+It compiles both sides first, and has to: `PostLoad` throws away a cached script VM whose stored id
+does not match its graph, so an asset last compiled by an older engine reads as having no simulation
+stages, no data interfaces and no written attributes. `-NoCompile` skips that — diagnostic only, and
+what it then reports about the `compiled` fact family is each side's compile history rather than its
+content. `-DumpFacts` writes both sides' full fact lists to `Saved/DreamFX/*.facts`; the console
+report truncates each fact to 400 characters, which is exactly wrong for the long ones.
+
 ## What it does and does not recover
 
 **Recovered**: system and emitter settings that differ from a new asset's, user parameters, every
@@ -66,7 +82,11 @@ properties and `Bind` statements.
   the asset; rebuilding does not clear it.
 
 **Consequence for round trips**: text is idempotent from the *second* pass on, not the first. Export,
-rebuild, export again — the two exports match byte for byte. That is the property the corpus tests.
+rebuild, export again — the two exports match byte for byte. That is one of the two properties the
+corpus tests. The other is that the *asset* survives: a fixture's asset and the asset rebuilt from
+its export must hold the same reflected facts. Text idempotence alone cannot see a loss the exporter
+makes on both sides — every curve tangent and every stage binding missing before 2026-08-12 was
+symmetric in exactly that way, and therefore silent.
 
 ## Why an export is always rebuildable
 

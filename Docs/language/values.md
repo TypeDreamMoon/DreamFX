@@ -125,6 +125,7 @@ An `hlsl` block carries no type of its own, so an assignment to a new attribute 
 curve {
     0.0 -> 1.0;
     0.7 -> 0.85 [ Interp=Cubic; Arrive=-0.4; Leave=-1.2 ];
+    0.9 -> 0.40 [ Interp=Cubic; Tangent=Break; Arrive=0.0; Leave=-2.25 ];
     1.0 -> 0.0  [ Interp=Linear ];
 }
 ```
@@ -133,9 +134,22 @@ Fills a curve data interface, so it goes where one is expected — usually a dyn
 `FloatFromCurve` (DFX4037).
 
 Tangents are per key and are exported per key. They matter: a hand-tuned shape written back without its
-tangents is a different curve, and losing shape is losing data. `Interp` defaults to `Auto`, and
-explicit tangents are only honoured when the mode makes them meaningful — which is why the exporter
-writes `TangentMode = RCTM_User` alongside them.
+tangents is a different curve, and losing shape is losing data. `Interp` defaults to `Auto`.
+
+`Tangent` names the tangent mode — `Auto`, `User`, `Break` or `None` — and may be left out, in which
+case a key with a tangent means `User` and a key without means `Auto`. Only `Break` and `None` ever
+have to be written, plus the `Auto` key that carries a stored slope, so ordinary hand-written sources
+never mention it. **`Break` is the one that had to be spelled**: it is how a key holds two
+independent tangents — a corner — and until 2026-08-12 the exporter wrote tangents only under `User`
+and dropped everything else, so every corner came back smooth and every Auto key's stored slope came
+back zero. A curve is *evaluated* from its stored tangents whatever the mode says; the engine
+re-derives them only when something edits the curve, so "the mode is Auto, the engine will work them
+out" is false for a curve nobody is editing.
+
+A curve data interface with anything set outside its keys — an exposed curve, a LUT turned off, an
+external curve asset — is written as raw configuration JSON instead of a `curve { }` literal, and a
+multi-channel interface (vector, colour) takes the readable form only when its channels are the same
+shape. The readable form is a convenience, and a convenience does not get to lose data.
 
 ---
 
@@ -191,6 +205,7 @@ the rule is one-directional.
 | `Quat` | `Quat` |
 | `Texture2D`, `DI<X>` | data interfaces |
 
-Data interface parameters are declared only. v1 does not configure them from text and does not apply a
-default (DFX5098) — feed them at runtime. `curve { }` is the one exception, because a curve literal
-really is configuring a curve data interface's key data.
+Data interface parameters carry their configuration as a quoted JSON object, the same verbatim form a
+module's data interface input uses and the same form the exporter writes. Declared bare, they stay a
+slot to fill at runtime. `curve { }` is the readable spelling for a curve interface. DFX5098 means
+the value is the wrong shape — it no longer means "declared only, will be ignored".

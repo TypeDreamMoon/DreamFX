@@ -56,9 +56,23 @@ key across rebuilds (plan 4.5), so renaming one breaks every blueprint that refe
 variable struct has no metadata fields for them, which the build says once as DFX5099. They stay in
 the source as documentation.
 
-Data interface parameters are declared only; v1 does not configure them from text and does not apply a
-default (DFX5098). Feed them at runtime. The single exception is `curve { }`, which is really
-configuring a curve data interface — see [values.md](values.md).
+Data interface parameters carry their configuration, as the quoted JSON blob the exporter writes:
+
+```cpp
+Properties = {
+    DI<RigidMeshCollisionQuery> Collide_StaticMesh = "{\"ActorTags\":[\"collider\"], … }";
+    DI<Curve>                   SizeCurve;          // declared bare: a slot to fill at runtime
+}
+```
+
+Until 2026-08-12 this was declaration-only (plan 3.5, DFX5098 "feed it at runtime"). That was a
+deliberate scope cut and it aged badly: a collision source or a property reader **is** its
+configuration, so a rebuilt mirror default-constructed the objects the effect queries the world
+through — the smoke came out, and what it collided with did not. DFX5098 now means the value is the
+wrong *shape*, not that it will be ignored.
+
+A declaration with no value is still a slot to fill at runtime, and stays one. `curve { }` remains
+the readable spelling for a curve interface — see [values.md](values.md).
 
 ## Stacks
 
@@ -226,9 +240,21 @@ usually materialized by a module's internal writes — it does not need to be a 
 for the binding to work, and a misspelt name surfaces as the stage compiling against a grid that
 does not exist.
 
-A count driven by a *parameter* rather than a number is not representable; the export says so and
-the rebuilt stage keeps the default count. A stage of a custom C++ stage class (anything that is
-not the engine's generic stage) stays a gap with its own header line (DFX8016).
+`NumIterations` and `Enabled` each take a **value or a parameter**. The value position decides
+which: a number, `true` or `false` is the literal, and anything that reads as a name is a binding.
+
+```cpp
+Stage Project(NumIterations = 6, NumIterations = Emitter.OVERRIDE.SolveIterations) = { … }
+Stage DebugSlice(Enabled = Grid3D_GAS_CONTROLS_SPAWN.RenderDebugSlice) = { … }
+```
+
+Both may appear at once, as above, because the engine stores both: the number is the fallback the
+binding overrides. That is worth writing rather than simplifying away — a stage whose `Enabled` is
+bound runs when the effect says so, and a rebuild that kept only the literal flag ran it *always*,
+which is how Ninja's debug slice came to draw over the fluid in every mirror.
+
+A stage of a custom C++ stage class (anything that is not the engine's generic stage) stays a gap
+with its own header line (DFX8016).
 
 ## `Defaults` — what a read produces when nothing wrote
 

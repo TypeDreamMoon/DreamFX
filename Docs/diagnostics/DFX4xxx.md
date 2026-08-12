@@ -32,7 +32,7 @@ Input '%s' expects %s, but a number was written.
 Expression for '%s': a vector literal must have 2 to 4 components.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:119`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:329`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:444`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:514`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:553`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:119`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:331`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:444`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:514`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:553`
 <!-- generated:end DFX4002 -->
 
 **Cause.** Niagara vector types are 2, 3 or 4 components.
@@ -86,7 +86,7 @@ Input '%s' has no resolvable Niagara type.
 Property '%s': component %d is not a number.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1120`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1441`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:343`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:370`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:567`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:669`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1122`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1443`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:345`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:372`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:567`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:669`
 <!-- generated:end DFX4005 -->
 
 **Cause.** A vector or `box()` component is not a number.
@@ -140,7 +140,7 @@ Input '%s' expects %s. '%s' is neither a literal of that type nor a parameter re
 Input '%s' is set more than once on dynamic input '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1030`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1431`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1032`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1433`
 <!-- generated:end DFX4010 -->
 
 **Cause.** The same input was given twice on one dynamic input call.
@@ -212,7 +212,7 @@ Cannot infer the type of '%s' from its value. A first assignment to a new attrib
 Property '%s': box() takes 6 numbers -- minX, minY, minZ, maxX, maxY, maxZ.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:455`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:467`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:457`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:469`
 <!-- generated:end DFX4023 -->
 
 **Cause.** `box()` is minX, minY, minZ, maxX, maxY, maxZ.
@@ -230,7 +230,7 @@ Property '%s': box() takes 6 numbers -- minX, minY, minZ, maxX, maxY, maxZ.
 Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Properties, or assign a literal first so the type is explicit.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:733`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:735`
 <!-- generated:end DFX4024 -->
 
 **Cause.** The right-hand side references a parameter whose type is not known at this point.
@@ -248,7 +248,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 '%s' is not a valid assignment target. Parameter names are namespace-qualified, e.g. Particles.MyValue or Emitter.MyCounter.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1111`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1907`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1113`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1938`
 <!-- generated:end DFX4025 -->
 
 **Cause.** An unqualified assignment target has no namespace to live in, and guessing one would put the value somewhere never named.
@@ -266,7 +266,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 'Bind %s -> %s': the target must be a qualified parameter -- either a namespace such as Particles.SpriteSize, or an emitter's own alias such as MyEmitter.Velocity.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1495`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1497`
 <!-- generated:end DFX4026 -->
 
 **Cause.** A renderer binding target is a parameter, not a bare name.
@@ -284,7 +284,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 '%s' is %s, but '%s' is %s. Linking binds a parameter directly -- there is no conversion. Declare '%s' as %s, or drive the input another way.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:780`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:782`
 <!-- generated:end DFX4027 -->
 
 **Cause.** L7 across a link. A linked value binds the parameter directly -- there is no conversion step to truncate or widen in -- so the two types have to match exactly.
@@ -302,7 +302,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 Default for '%s' needs a declared type. A default has no module signature to infer one from, so write it: `float %s = …`.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1915`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1946`
 <!-- generated:end DFX4028 -->
 
 **Cause.** A `Defaults` entry was written without a type. Elsewhere the type can come from the value or from the module signature the input belongs to; a default belongs to no module and its value may be an `hlsl` block or a link, so there is nothing to infer from.
@@ -320,7 +320,7 @@ Default for '%s' needs a declared type. A default has no module signature to inf
 Default for '%s' must be a literal, an enum or another parameter. A dynamic input computes a value per particle, which a default cannot do.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1952`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1983`
 <!-- generated:end DFX4029 -->
 
 **Cause.** A `Defaults` entry was given a dynamic input. A default is one value stored on the parameter, and a dynamic input is a graph that runs per particle -- there is nowhere to run it.
@@ -338,7 +338,7 @@ Default for '%s' must be a literal, an enum or another parameter. A dynamic inpu
 The hlsl block for '%s' must be a single expression: no statements, no local variables, no return. Move multi-statement logic into a .dfm DynamicInput and call it here.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:315`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:340`
 <!-- generated:end DFX4030 -->
 
 **Cause.** A stack input's `hlsl` block lowers to a node with one typed output pin and no body, so it cannot hold statements.
@@ -446,7 +446,7 @@ Expression for '%s' contains a value that has no HLSL form.
 The hlsl block for '%s' is empty.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:305`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:330`
 <!-- generated:end DFX4036 -->
 
 **Cause.** An empty `hlsl` block lowers to an expression with no text in it.
@@ -464,7 +464,7 @@ The hlsl block for '%s' is empty.
 '%s' is %s; a curve { } literal only fits a curve data interface input.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:331`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:356`
 <!-- generated:end DFX4037 -->
 
 **Cause.** A `curve { }` literal fills a curve data interface, and this input is not one.
@@ -482,7 +482,7 @@ The hlsl block for '%s' is empty.
 The curve for '%s' has no keys.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:339`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:364`
 <!-- generated:end DFX4038 -->
 
 **Cause.** An empty curve evaluates to nothing, which reads at runtime as a value stuck at zero.
@@ -500,7 +500,7 @@ The curve for '%s' has no keys.
 Unknown curve interpolation '%s'. Expected Auto, Cubic, Linear or Constant.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:353`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:378`
 <!-- generated:end DFX4039 -->
 
 **Cause.** Curve tangents are data (plan 3.5); an unrecognised mode would fall back to Auto and drop a hand-tuned shape without saying so.
@@ -542,6 +542,26 @@ Parameter '%s': '%s' is a %s, which is not a %s.
 **Cause.** The asset at that path exists but is not the class the parameter declares. `Object<Texture> = ".../M_Fire"` names a material, and Niagara would refuse the binding at runtime rather than at build time.
 
 **Fix.** Either point at an asset of the declared class, or widen the declaration to the class you actually mean --- `Object<Texture>`, `Object<StaticMesh>`, `Object<MaterialInterface>` and so on match what the module's input expects.
+
+## DFX4042
+
+<!-- generated:begin DFX4042 -->
+**Severity** error
+
+**Message**
+
+```
+Unknown curve tangent mode '%s'. Expected Auto, User, Break or None.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:388`
+<!-- generated:end DFX4042 -->
+
+**Cause.** A curve key's `Tangent=` attribute named something that is not one of Unreal's four tangent modes. Refused rather than defaulted for the same reason as DFX4039: falling back to `Auto` would silently discard the tangents written beside it, and a curve whose corners have been rounded off is a different curve.
+
+**Fix.** Use `Auto`, `User`, `Break` or `None` --- or leave `Tangent` out entirely, in which case a key with a tangent means `User` and a key without means `Auto`, which is what every source written before the attribute existed meant.
+
+**Fix.** _Not written yet._
 
 ## DFX4091
 

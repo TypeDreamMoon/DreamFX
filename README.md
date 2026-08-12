@@ -27,10 +27,11 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 | --- | --- |
 | 文本 → Niagara 资产 | `.dfs` 全量重建，包路径与 user 变量名跨重建稳定（plan 4.5 身份契约） |
 | 诊断回映射 | 133 个 `DFXnnnn`，每条带文件、行、列 |
-| 全部值模式 | 字面量 / linked / enum / dynamic input（含嵌套链）/ `hlsl { }` / `curve { }` 带切线 |
+| 全部值模式 | 字面量 / linked / enum / dynamic input（含嵌套链）/ `hlsl { }` / `curve { }` 带切线与切线模式（`Auto`/`User`/`Break`/`None`）。键以外的 DI 开关非默认、或多通道曲线的通道不同形时，自动退回逐字 JSON —— 可读形式是便利，便利没有资格丢数据 |
+| Event handler / Simulation Stage | `OnEvent(...)` 与 `Stage 名(...)` 两族栈全线往返。stage 头带迭代源、绑定网格、`ExecuteBehavior`、`FixedBounds`；`NumIterations` 与 `Enabled` 各自收**值或参数**（值位是数字/布尔即字面量，是名字即绑定） |
 | Renderer | schema 驱动的通用属性赋值（L8），任意 renderer 类型无需专门语法；`Bind` 走 binding 自己的 setter |
 | 内联表达式 | L6 白名单内降为单个 HLSL 表达式 |
-| user 参数 | `Properties` 段，含资产与 DI 类型声明 |
+| user 参数 | `Properties` 段，含资产与 DI 类型声明。**DI 参数带配置往返**（2026-08-12）：碰撞源、UObject 属性读取器这类「本身就是一份配置」的接口，此前只声明不配置（DFX5098 / plan §3.5），于是镜像把它们默认构造 —— 烟照冒，跟场景的交互没了。配置走的是模块输入 DI 那条逐字 JSON 轨道，applier 同一个 |
 | `.dfm` 生成 | Module 支持多语句 body；DynamicInput 单表达式。**stock 引擎同样能生成**：`FGraphSurgeon` 在引擎不导出那五个声明时用公开面重建同样的图手术，形状对不上就拒绝生成并点名。产物与直调路径 schema 逐行一致(含跨引擎) —— [Docs/language/dfm.md](Docs/language/dfm.md) |
 | 反编译 | 资产 → 源码，逐字节幂等；默认值抑制走探针基线。表达不了的东西**逐条写进文件头注释**，绝不静默丢 |
 | Decompiled 命名空间 | 导出件的 `Name=` 落 `Decompiled/<原目录>/<资产名>` ⇒ 重建的是镜像，**结构上碰不到原资产**。整棵 `DFX/Decompiled/` 因此是一等源码：存盘即重编、lint / build / CI 一视同仁（plan-v4 V1） |
@@ -44,9 +45,10 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 | file watcher | 保存即重编；打开生成资产 + 保存文本 = 实时预览 |
 | 覆盖率工具 | 扫全部已挂载 content root（`-Path` 可给多个，`+` 分隔），按特性分桶报告可 round-trip 比例；镜像资产不计入 |
 | 批量导出 / 镜像比对 | `dfx decompile-all -Path=...` 一次导出整个目录；`dfx mirror-diff` 拿镜像与原资产各自反编译逐行比对（L1）并编译镜像（L2） |
+| 资产级比对 | `dfx asset-diff`：**不经过导出器**，直接反射走两侧资产并按事实多重集比对 —— L1 的两侧都是同一个导出器的输出，导出侧的丢失在那里结构上不可见。含 `compiled` 事实族（编译器眼中的 stage 表 / DI 表与调用集 / 写出属性），**两侧先强制编译**，因为 `PostLoad` 会丢弃 stored id 与图不符的 CachedScriptVM |
 | 安全改名 | `dfx rename`，保住 emitter handle 与 rapid iteration 别名（R4） |
 | CI gate | lint → build → verify → corpus 四步 |
-| 语料库 | 46 个 automation 测试：诊断码 + 行列、黄金拓扑、反编译幂等 |
+| 语料库 | 55 个 automation 测试：诊断码 + 行列、黄金拓扑、反编译幂等，外加**资产级事实对比** —— 文本幂等只证明导出器自洽，对称的丢失（两侧都缺）在那里是隐形的，所以每条 round-trip 夹具同时比「按夹具建出来的资产」与「按其导出重建的资产」 |
 | 4 个 skill | `dream-fx-{create,verify,diagnose,decompile}` |
 
 ### 降级
@@ -55,7 +57,6 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 | --- | --- | --- |
 | `.dfm` 生成 | 引擎形状变了才降级 | 五个声明在 stock 引擎无导出宏，但**导出与可达是两回事** —— public 数据成员本就不需要导出宏，public virtual 走 vtable，剩下的私有字段都是 UPROPERTY。反射后端据此重建，启动自检确认每个依赖的形状；只有形状真的挪了才落 DFX5100 / DFX5107，且诊断点名是哪一项。**产物从来不受限**：生成出的是标准 `UNiagaraScript`，任何引擎都能加载、引用、cook、运行 |
 | `.dfm` 的 `[StaticSwitch]` | 降为普通输入 + DFX5102 | 档一把整个 body 塞进一个 CustomHlsl 节点，没有可供 switch 选择的分支 |
-| DI 参数配置 | 只声明不配置，注释保全 | 全库 8 处命中全在引擎插件内容（HairStrands / VRM4U / Water），项目自有内容 0 处 —— 等真有需求再做（plan §3.5） |
 | `#Region` | 只进文本 | 外部编辑 API 没有 stack note 读写函数 |
 | `[Group]` / `[SortPriority]` | 只进文本 + DFX5099 | user 变量结构体没有对应元数据字段 |
 | `MaterialParam` | 保留语法未实现 | 见 plan §7 |
@@ -63,12 +64,15 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 
 ### 未做
 
-Event handler 栈、具名 Simulation Stage、Scratch Pad、模块内部图 lowering（档二）、GPU/CPU 条件分支、
-Scalability 条件逻辑、独立实时预览、workspace 面板。
+Scratch Pad、模块内部图 lowering（档二）、GPU/CPU 条件分支、Scalability 条件逻辑、
+独立实时预览、workspace 面板。
 
-前两项的语法段位已保留、解析已支持；**2026-08-07 覆盖率实测：全项目 20 个 NS 资产，用到 event handler
-或 simulation stage 的是 0 个**，所以继续挂起有据可依 —— 见
-[Docs/coverage-2026-08-07.md](Docs/coverage-2026-08-07.md)。
+> **2026-08-12 更正**：Event handler 栈与具名 Simulation Stage **已经做了**，此处原本写着「未做」。
+> 那条判断的依据是 2026-08-07 的覆盖率实测「全项目 20 个 NS 资产用到它们的是 0 个」——
+> 而那个 0 是**读盲的假数**：普查走的是 stack 形状的读，它结构上看不见 event handler
+> 与 simulation stage（两者都不住在六个固定栈里）。真实数字是全库 27 个 stage。
+> 两族现已全线往返关账，见 [Reports/roundtrip-2026-08-12-stages.md](Reports/roundtrip-2026-08-12-stages.md)
+> 与 [Reports/stages-census-2026-08-12.md](Reports/stages-census-2026-08-12.md)。
 
 ## CI
 
