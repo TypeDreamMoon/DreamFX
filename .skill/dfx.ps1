@@ -412,22 +412,51 @@ if ($Raw) {
     $output | ForEach-Object { $_ }
 }
 else {
-    # Every DreamFX line is emitted twice: once raw and once re-wrapped through LogInit, always
+    # Output is grouped into records before anything is filtered, because a UE_LOG of a multi-line
+    # message writes the category prefix on the FIRST line only. Filtering line by line therefore
+    # kept the first line of a diagnostic and threw away every line after it -- so DFX6006, whose
+    # whole value is the translator's own error text, arrived ending in a bare colon and saying
+    # nothing. That cost an afternoon of looking for the missing message in the compiler.
+    #
+    # A record starts at a line that opens with a log category, optionally behind the engine's
+    # [timestamp][frame] stamp. Anything else continues the record above it.
+    $records = @()
+    $current = $null
+    foreach ($line in $output) {
+        $text = "$line"
+        if ($text -match '^(\[[^\]]*\]\[\s*\d+\])?[A-Za-z_][A-Za-z0-9_]*:\s') {
+            if ($null -ne $current) { $records += , $current }
+            $current = @($text)
+        }
+        elseif ($null -ne $current) {
+            $current += $text
+        }
+        # A continuation before any record has started belongs to nothing and is dropped, which is
+        # what happens to the engine's pre-log banner.
+    }
+    if ($null -ne $current) { $records += , $current }
+
+    # Every DreamFX record is emitted twice: once raw and once re-wrapped through LogInit, always
     # adjacent. Collapsing only *consecutive* duplicates is what makes this safe -- a global
     # seen-set also eats lines that legitimately repeat, such as the same module appearing in the
     # dependency listing of two different source files.
     $previous = $null
-    foreach ($line in $output) {
-        $text = "$line"
-        if ($text -notmatch 'LogDreamFX') { continue }
-        $stripped = ($text -replace '^\[[^\]]*\]\[\s*\d+\]', '') -replace '^LogInit: Display: ', ''
-        if ($stripped -eq $previous) { continue }
-        $previous = $stripped
+    foreach ($record in $records) {
+        if ($record[0] -notmatch 'LogDreamFX') { continue }
 
-        $colour = if ($stripped -match ': Error:| error DFX') { 'Red' }
-                  elseif ($stripped -match ': Warning:| warning DFX') { 'Yellow' }
+        $stripped = @($record | ForEach-Object { $_ -replace '^\[[^\]]*\]\[\s*\d+\]', '' })
+        $stripped[0] = $stripped[0] -replace '^LogInit: Display: ', ''
+
+        $joined = $stripped -join "`n"
+        if ($joined -eq $previous) { continue }
+        $previous = $joined
+
+        $colour = if ($stripped[0] -match ': Error:| error DFX') { 'Red' }
+                  elseif ($stripped[0] -match ': Warning:| warning DFX') { 'Yellow' }
                   else { 'Gray' }
-        Write-Host $stripped -ForegroundColor $colour
+        foreach ($outputLine in $stripped) {
+            Write-Host $outputLine -ForegroundColor $colour
+        }
     }
 }
 

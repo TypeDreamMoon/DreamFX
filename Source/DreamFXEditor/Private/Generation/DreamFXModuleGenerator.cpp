@@ -297,6 +297,80 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
+		 * Removes HLSL comments, keeping the line structure.
+		 *
+		 * Only the dynamic input reduction below uses this. A module's body is emitted verbatim and
+		 * its comments are wanted there; a dynamic input's body is *rewritten*, and every step of that
+		 * rewrite reads the text directly, so a comment is not trivia to it the way it is to a reader.
+		 *
+		 * String-aware because `"http://x"` is not a comment, and newline-preserving because dropping
+		 * the line breaks of a block comment would join the lines around it into one.
+		 */
+		FString StripHlslComments(const FString& Text)
+		{
+			FString Result;
+			Result.Reserve(Text.Len());
+
+			int32 Index = 0;
+			while (Index < Text.Len())
+			{
+				const TCHAR Character = Text[Index];
+
+				if (Character == TEXT('"'))
+				{
+					Result.AppendChar(Character);
+					++Index;
+					while (Index < Text.Len())
+					{
+						const TCHAR StringCharacter = Text[Index];
+						Result.AppendChar(StringCharacter);
+						++Index;
+						if (StringCharacter == TEXT('\\') && Index < Text.Len())
+						{
+							Result.AppendChar(Text[Index]);
+							++Index;
+							continue;
+						}
+						if (StringCharacter == TEXT('"'))
+						{
+							break;
+						}
+					}
+					continue;
+				}
+
+				if (Character == TEXT('/') && Index + 1 < Text.Len() && Text[Index + 1] == TEXT('/'))
+				{
+					while (Index < Text.Len() && Text[Index] != TEXT('\n') && Text[Index] != TEXT('\r'))
+					{
+						++Index;
+					}
+					continue;
+				}
+
+				if (Character == TEXT('/') && Index + 1 < Text.Len() && Text[Index + 1] == TEXT('*'))
+				{
+					Index += 2;
+					while (Index + 1 < Text.Len() && !(Text[Index] == TEXT('*') && Text[Index + 1] == TEXT('/')))
+					{
+						if (Text[Index] == TEXT('\n'))
+						{
+							Result.AppendChar(TEXT('\n'));
+						}
+						++Index;
+					}
+					Index = FMath::Min(Index + 2, Text.Len());
+					continue;
+				}
+
+				Result.AppendChar(Character);
+				++Index;
+			}
+
+			return Result;
+		}
+
+		/**
 		 * Reduces a dynamic input body to the single expression the translator expects.
 		 *
 		 * A custom HLSL node whose ScriptUsage is DynamicInput has its whole body wrapped as
@@ -307,10 +381,18 @@ namespace UE::DreamFX::Editor
 		 *
 		 * Modules are not restricted this way -- their bodies are emitted verbatim, which is exactly the
 		 * multi-statement capability DFX4030 has been pointing at all along.
+		 *
+		 * Comments come off first, and that is not tidiness. All three steps below read the text
+		 * directly: a `//` line in front of the return defeats the StartsWith test, so the `return`
+		 * survives into `Out_X = (type)( return ... );` -- invalid HLSL, which the translator rejects
+		 * with an *empty* message, so the author gets DFX6006 naming neither a line nor a reason. A
+		 * `;` inside a comment trips the multi-statement test the other way, refusing a body that is
+		 * a perfectly good single expression. Both were live until 2026-08-13, and the first was found
+		 * by building a hand-written template rather than by reading this function.
 		 */
 		bool ReduceDynamicInputBody(const FString& Body, FString& OutExpression, FString& OutError)
 		{
-			FString Trimmed = Body.TrimStartAndEnd();
+			FString Trimmed = StripHlslComments(Body).TrimStartAndEnd();
 
 			if (Trimmed.StartsWith(TEXT("return"), ESearchCase::CaseSensitive)
 				&& (Trimmed.Len() == 6 || !IsIdentifierBody(Trimmed[6])))
@@ -326,7 +408,7 @@ namespace UE::DreamFX::Editor
 
 			if (Trimmed.IsEmpty())
 			{
-				OutError = TEXT("The Body is empty after the return statement.");
+				OutError = TEXT("The Body has no expression in it -- a DynamicInput computes a value, so there has to be something to compute.");
 				return false;
 			}
 
@@ -1261,6 +1343,12 @@ namespace UE::DreamFX::Editor
 			FString CompileError = Script->GetVMExecutableData().ErrorMsg;
 			CompileError.ReplaceInline(TEXT("\r\n"), TEXT("\n"));
 
+			// This message is multi-line, and that used to be invisible: dfx.ps1 kept only the lines
+			// carrying a LogDreamFX prefix, which the second and later lines of a UE_LOG do not have,
+			// so the diagnostic reached the terminal ending in a bare colon. The translator's own text
+			// -- which names the generated line and the syntax error -- was there the whole time and
+			// was dropped by the driver. Fixed in dfx.ps1, not here; noted here because a diagnostic
+			// that says nothing is not a thing you go looking for in the *printer*.
 			Diagnostics.Error(TEXT("DFX6006"), Document.BodyLocation,
 				FString::Printf(TEXT("Niagara could not compile the body of '%s':\n%s"),
 					*AssetName, *CompileError.TrimEnd()));
