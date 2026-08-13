@@ -1,127 +1,199 @@
-# DreamFX
+<p align="center">
+  <img alt="DreamFX banner" src="./Images/banner.png" />
+</p>
 
-**1.0.0** · [CHANGELOG](CHANGELOG.md)
+<table>
+  <tr>
+    <td width="64%" valign="top">
+      <h1>DreamFX</h1>
+      <p><strong>Text-first Unreal Engine Niagara authoring with DreamFXLang.</strong></p>
+      <p>
+        DreamFX compiles <code>.dfs</code>, <code>.dfe</code> and <code>.dfm</code> source files into standard
+        <code>UNiagaraSystem</code>, <code>UNiagaraEmitter</code> and <code>UNiagaraScript</code> assets — and
+        decompiles any existing Niagara system back into source. The text is the authoring surface; the asset
+        is build output, and can always be thrown away and regenerated.
+      </p>
+      <p>
+        <img alt="Unreal Engine 5.8" src="https://img.shields.io/badge/Unreal%20Engine-5.8-313131" />
+        <img alt="Version 1.0.0" src="https://img.shields.io/badge/version-1.0.0-blue" />
+        <img alt="Works on stock engine" src="https://img.shields.io/badge/installed%20engine-supported-green" />
+      </p>
+      <p>
+        <a href="README.zh-CN.md">中文文档</a> &nbsp;·&nbsp;
+        <a href="Docs/getting-started.md">Getting started</a> &nbsp;·&nbsp;
+        <a href="Docs/language/README.md">Language reference</a> &nbsp;·&nbsp;
+        <a href="Docs/diagnostics/README.md">Diagnostics</a> &nbsp;·&nbsp;
+        <a href="Docs/tools/editor-integration.md">Editor tools</a> &nbsp;·&nbsp;
+        <a href=".skill/">AI skills</a> &nbsp;·&nbsp;
+        <a href="CHANGELOG.md">Changelog</a>
+      </p>
+      <p>
+        <a href="https://github.com/TypeDreamMoon/DreamFX/issues">
+          <img alt="Issues" src="https://img.shields.io/github/issues/TypeDreamMoon/DreamFX" />
+        </a>
+        <a href=".skill/">
+          <img alt="Agent skills" src="https://img.shields.io/badge/Agent%20skills-4-8A2BE2" />
+        </a>
+        <a href="https://github.com/TypeDreamMoon/DreamShader">
+          <img alt="Sister project DreamShader" src="https://img.shields.io/badge/sister%20project-DreamShader-181717" />
+        </a>
+      </p>
+    </td>
+    <td width="36%" align="center" valign="middle">
+      <img src="./Images/character.png" width="260" alt="DreamFX character" />
+    </td>
+  </tr>
+</table>
 
-用文本源码编写 Niagara 特效，编译生成标准 Niagara 资产。DreamShader 对材质做的事，DreamFX 对 VFX 再做一遍。
+> [!TIP]
+> Keep every `.dfs`, `.dfe` and `.dfm` file in version control. The generated Niagara assets can
+> always be rebuilt from source, so they do not need to be.
 
-**文本是唯一真相，`.uasset` 是构建产物，不手改。**
+---
 
-| 后缀 | 内容 | 生成资产 |
-| --- | --- | --- |
-| `.dfs` | System：user 参数、system stack、emitter 列表 | `UNiagaraSystem` |
-| `.dfe` | 可复用 Emitter（被 `.dfs` 以 `from` 拷入，自身不生成资产） | —— |
-| `.dfm` | Module / Dynamic Input | `UNiagaraScript` |
+## What it looks like
 
-## 快速开始
+```cpp
+System(Name="Effects/NS_Hello", Root="Game")
+{
+    Properties = {
+        float Speed = 150.0 [ Group="Motion" ];   // exposed as User.Speed
+    }
+
+    Emitter Motes
+    {
+        Settings = {
+            SimTarget = CPU;  Determinism = true;  RandomSeed = 1;
+            AllocationMode = Fixed;  PreAllocationCount = 64;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 20.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode = DirectSet, Lifetime = 2.0,
+                SpriteSizeMode = Uniform, UniformSpriteSize = 8.0
+            );
+            SystemLocation();
+            AddVelocityInCone(ConeAngle = 30.0, VelocityStrength = User.Speed);
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            GravityForce(Gravity = (0, 0, -400));
+            SolveForcesAndVelocity();
+        }
+
+        SpriteRenderer Core
+        {
+            Alignment = Unaligned;  FacingMode = FaceCamera;  SortMode = ViewDepth;
+        }
+    }
+}
+```
 
 ```bash
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 ```
 
-完整一遍：[Docs/getting-started.md](Docs/getting-started.md)。语法参考：[Docs/language/](Docs/language/README.md)。
-诊断码逐条：[Docs/diagnostics/](Docs/diagnostics/README.md)。
+No editor required — generation runs headless. With the editor open, saving the file rebuilds the
+asset live (file watcher), so a Niagara preview window doubles as a hot-reloading text workflow.
 
-## 能力清单
+The language covers the full authoring surface: user parameters (including **data-interface
+parameters with their configuration**), all six system/emitter stacks, **event handlers**
+(`OnEvent(...)`), **named simulation stages** (iteration source, bindings, `ExecuteBehavior`,
+`NumIterations`/`Enabled` as value *or* driving parameter), renderers with schema-driven properties
+and `Bind`, static switches in every value form, nested dynamic inputs, `hlsl { }` blocks and
+`curve { }` literals with tangent modes.
 
-### 已通
-
-| 能力 | 说明 |
-| --- | --- |
-| 文本 → Niagara 资产 | `.dfs` 全量重建，包路径与 user 变量名跨重建稳定（plan 4.5 身份契约） |
-| 诊断回映射 | 143 个 `DFXnnnn`，每条带文件、行、列，文档由 `gen-diagnostics.ps1` 从源码生成、`-Check` 防漂移 |
-| 全部值模式 | 字面量 / linked / enum / dynamic input（含嵌套链）/ `hlsl { }` / `curve { }` 带切线与切线模式（`Auto`/`User`/`Break`/`None`）。键以外的 DI 开关非默认、或多通道曲线的通道不同形时，自动退回逐字 JSON —— 可读形式是便利，便利没有资格丢数据 |
-| Event handler / Simulation Stage | `OnEvent(...)` 与 `Stage 名(...)` 两族栈全线往返。stage 头带迭代源、绑定网格、`ExecuteBehavior`、`FixedBounds`；`NumIterations` 与 `Enabled` 各自收**值或参数**（值位是数字/布尔即字面量，是名字即绑定） |
-| Renderer | schema 驱动的通用属性赋值（L8），任意 renderer 类型无需专门语法；`Bind` 走 binding 自己的 setter |
-| 内联表达式 | L6 白名单内降为单个 HLSL 表达式 |
-| user 参数 | `Properties` 段，含资产与 DI 类型声明。**DI 参数带配置往返**（2026-08-12）：碰撞源、UObject 属性读取器这类「本身就是一份配置」的接口，此前只声明不配置（DFX5098 / plan §3.5），于是镜像把它们默认构造 —— 烟照冒，跟场景的交互没了。配置走的是模块输入 DI 那条逐字 JSON 轨道，applier 同一个 |
-| `.dfm` 生成 | Module 支持多语句 body；DynamicInput 单表达式。**stock 引擎同样能生成**：`FGraphSurgeon` 在引擎不导出那五个声明时用公开面重建同样的图手术，形状对不上就拒绝生成并点名。产物与直调路径 schema 逐行一致(含跨引擎) —— [Docs/language/dfm.md](Docs/language/dfm.md) |
-| 反编译 | 资产 → 源码，逐字节幂等；默认值抑制走探针基线。表达不了的东西**逐条写进文件头注释**，绝不静默丢 |
-| Decompiled 命名空间 | 导出件的 `Name=` 落 `Decompiled/<原目录>/<资产名>` ⇒ 重建的是镜像，**结构上碰不到原资产**。整棵 `DFX/Decompiled/` 因此是一等源码：存盘即重编、lint / build / CI 一视同仁（plan-v4 V1） |
-| 编辑器集成 | Tools 菜单 / 关卡工具栏 / Content Browser 右键（System 两态 + Emitter Export .dfe）/ Niagara 系统编辑器工具栏 / VSCode workspace；全部走既有管线，`-NoDreamFXEditor` 一键关掉 —— [Docs/tools/editor-integration.md](Docs/tools/editor-integration.md) |
-| 接管外来资产 | 右键 **Adopt**：反编译落到真源码根 → 重建 → 打戳 → 再导出逐字节比对。有丢失就拒绝，因为接管的意思是「文本从此是唯一真相」 |
-| 溯源戳 | 源 hash + 生成器版本 + 模块版本 GUID 清单（R7） |
-| 静态输入写入 | 走 override pin —— 引擎自己的 stack UI 就是这么写的（静态参数不是 rapid-iteration 候选，必然走这条分支）。外部编辑 API 永远拒绝静态输入（静态标志参与类型相等、却无法从 `UScriptStruct` 复原），所以这不是绕行而是正路，**任何引擎都成立**。两个位置都覆盖：模块自身声明的开关（pin 在函数调用节点上）、静态类型的普通参数（pin 在 override map-set 节点上，`GetOrCreateStackFunctionInputOverridePin` 已导出且找-或-建整链全包）。**MoonEngine 为此加的引擎豁免已于 2026-08-10 退役，触面 4 → 3** |
-| `@版本` 选择 | 不只是记录：`@` 指定的版本会真的选中（模块与 dynamic input 都走 `ChangeScriptVersion` + `RefreshFromExternalChanges`，少了后者拿到的是半新半旧的引脚集）。跳过 Python 升级脚本是有意的 —— 所有输入紧接着从源码重写，remap 出来的东西会被立刻覆盖。R1b；该 API 在 stock 引擎同样导出，不依赖 MoonEngine |
-| 漂移检测 | `-Verify`：改了源没重建、手改了资产、依赖的模块换了版本，三种都报 |
-| lint | GPU 无 FixedBounds、spawn rate 无上限、用随机没开 Determinism 等 |
-| file watcher | 保存即重编；打开生成资产 + 保存文本 = 实时预览 |
-| 覆盖率工具 | 扫全部已挂载 content root（`-Path` 可给多个，`+` 分隔），按特性分桶报告可 round-trip 比例；镜像资产不计入 |
-| 批量导出 / 镜像比对 | `dfx decompile-all -Path=...` 一次导出整个目录；`dfx mirror-diff` 拿镜像与原资产各自反编译逐行比对（L1）并编译镜像（L2） |
-| 资产级比对 | `dfx asset-diff`：**不经过导出器**，直接反射走两侧资产并按事实多重集比对 —— L1 的两侧都是同一个导出器的输出，导出侧的丢失在那里结构上不可见。含 `compiled` 事实族（编译器眼中的 stage 表 / DI 表与调用集 / 写出属性），**两侧先强制编译**，因为 `PostLoad` 会丢弃 stored id 与图不符的 CachedScriptVM |
-| 安全改名 | `dfx rename`，保住 emitter handle 与 rapid iteration 别名（R4） |
-| CI gate | lint → build → verify → corpus 四步 |
-| 语料库 | 55 个 automation 测试：诊断码 + 行列、黄金拓扑、反编译幂等，外加**资产级事实对比** —— 文本幂等只证明导出器自洽，对称的丢失（两侧都缺）在那里是隐形的，所以每条 round-trip 夹具同时比「按夹具建出来的资产」与「按其导出重建的资产」 |
-| 4 个 skill | `dream-fx-{create,verify,diagnose,decompile}` |
-
-### 降级
-
-| 项 | 现状 | 原因 |
-| --- | --- | --- |
-| `.dfm` 生成 | 引擎形状变了才降级 | 五个声明在 stock 引擎无导出宏，但**导出与可达是两回事** —— public 数据成员本就不需要导出宏，public virtual 走 vtable，剩下的私有字段都是 UPROPERTY。反射后端据此重建，启动自检确认每个依赖的形状；只有形状真的挪了才落 DFX5100 / DFX5107，且诊断点名是哪一项。**产物从来不受限**：生成出的是标准 `UNiagaraScript`，任何引擎都能加载、引用、cook、运行 |
-| `.dfm` 的 `[StaticSwitch]` | 降为普通输入 + DFX5102 | 档一把整个 body 塞进一个 CustomHlsl 节点，没有可供 switch 选择的分支 |
-| `#Region` | 只进文本 | 外部编辑 API 没有 stack note 读写函数 |
-| `[Group]` / `[SortPriority]` | 只进文本 + DFX5099 | user 变量结构体没有对应元数据字段 |
-| `MaterialParam` | 保留语法未实现 | 见 plan §7 |
-| Emitter 继承 | `from` 是拷贝不是继承（R3） | 真继承需要 merge manager，另立项 |
-
-### 未做
-
-Scratch Pad、模块内部图 lowering（档二）、GPU/CPU 条件分支、Scalability 条件逻辑、
-独立实时预览、workspace 面板。
-
-（Event handler 与具名 Simulation Stage 曾因覆盖率普查的读盲被误列于此——真实数字是全库
-27 个 stage——两族已于 2026-08-12 全线往返关账，见能力表与
-[Reports/roundtrip-2026-08-12-stages.md](Reports/roundtrip-2026-08-12-stages.md)。）
-
-## 运行环境要求
-
-- **双引擎**：MoonEngine（源码构建 5.8.1）与 stock installed 5.8.1 同一份源码零 `#if` 分叉;
-  `.dfm` 生成在 stock 走反射后端（启动自检,形状不符降级并点名）。
-- **宿主项目必须启用与创作项目相同的内容插件**（如 NiagaraFluids）：插件未挂载时探针没有
-  基线,引用其模块的资产会以缺口/编译错的形式显形（绝不静默,但也绝不可用）。
-- 依赖引擎的 **Niagara 外部编辑 API**（`UNiagaraExternalEditUtilities`,引擎侧标记
-  EXPERIMENTAL）：API 若在后续引擎版本漂移,`-Check` 与启动自检会显形,详见 R7 版本记录。
-- 写包命令（`build` / `corpus` / `mirror-diff` / `decompile-all`）**必须关编辑器**（见 CI 节）。
-
-## CI
+## Quick start
 
 ```bash
+# 1. sanity check: can the driver reach the engine?
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 list
+
+# 2. build one file / verify without writing / lint only
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build  DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 verify DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 lint   DFX/Effects/NS_Hello.dfs
+
+# 3. bring an existing Niagara system into text
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion
+
+# 4. the whole tree, CI-style
 pwsh -File Plugins/DreamFX/.skill/ci.ps1
 ```
 
-| 步 | 抓什么 |
-| --- | --- |
-| `lint` | 源码静态检查，不碰资产，失败最快 |
-| `build` | 每个 `.dfs` / `.dfm` 都能生成且 Niagara 编译干净 |
-| `verify` | **改了源没重建就一起提交了** —— 单跑 build 一定通过，因为 build 会把它修好 |
-| `corpus` | 行为变了（不是坏了）：诊断位置漂移、拓扑变化、反编译丢幂等 |
+Fifteen-minute walkthrough: [Docs/getting-started.md](Docs/getting-started.md).
 
-`-SkipCorpus` 跳过第四步（它要起编辑器，比前三步加起来还贵）；`-StrictVersions` 把 R7 版本漂移
-从 warning 升成 error，给发布分支用。
+## What it generates
 
-**跑 CI 前先关编辑器**：`build` 和 `corpus` 都写 `.uasset`，编辑器开着同一个工程也在写，
-谁后存谁赢，而且两边都不吭声。commandlet 启动时探到编辑器进程会警告一句，但它分不清那个编辑器
-开的是不是本工程，所以只是提醒、不是门禁。
+| File | Declares | Produces |
+| :-- | :-- | :-- |
+| `.dfs` | `System` | a `UNiagaraSystem` |
+| `.dfe` | `Emitter` | nothing on its own — merged into a `.dfs` by `from` |
+| `.dfm` | `Module` / `DynamicInput` | a `UNiagaraScript` (works on the installed engine through a reflection backend) |
 
-构建耗时的实测与结论见 [Docs/performance-2026-08-08.md](Docs/performance-2026-08-08.md)。
+## Round-trip, verified four ways
 
-## 结构
+Decompilation is not a convenience export — it is a contract. Anything the language cannot express
+is written into the file header as an explicit gap, never dropped silently, and `Adopt` refuses to
+take over an asset unless the re-export matches byte for byte.
 
-```
-Plugins/DreamFX/
-├── DFX/                        源文件：Samples / Emitters / Modules
-├── Docs/                       getting-started · language/ · tools/ · diagnostics/
-├── Plan/                       plan.md · plan-v2…v7.md（本地工作笔记，gitignore）
-├── Tests/Corpus/               Parse / Generate / RoundTrip 语料
-├── .skill/                     dfx.ps1 · ci.ps1 · gen-diagnostics.ps1 · 4 个 skill
-└── Source/
-    ├── DreamFX/                Runtime：词法、语法、AST、诊断
-    └── DreamFXEditor/          Editor：adapter · schema · 生成 · 反编译 · commandlet · watcher · 测试
-```
+| Layer | Question it answers |
+| :-- | :-- |
+| **L1** `mirror-diff` | does the mirror's export match the original's, line by line? |
+| **L2** | does the mirror compile clean? |
+| **L3** | does the rebuilt system *simulate* like the original? (fixed-step SimCache, per-frame particle counts, self-control for nondeterministic content) |
+| **asset-diff** | do the two assets agree *as assets* — reflection-walked facts including the compiler's own view, independent of the exporter? |
 
-设计与逐期实测记录见 [Plan/plan.md](Plan/plan.md)，收尾工作项见 [Plan/plan-v2.md](Plan/plan-v2.md)，
-编辑器集成与完整反编译见 [Plan/plan-v3.md](Plan/plan-v3.md)，Decompiled 命名空间与内容包
-等价往返见 [Plan/plan-v4.md](Plan/plan-v4.md)，四包跑通（v4-V3 续篇）见
-[Plan/plan-v5.md](Plan/plan-v5.md)，生成性能与工作区入库见 [Plan/plan-v6.md](Plan/plan-v6.md)，
-预编译引擎支持见 [Plan/plan-v7.md](Plan/plan-v7.md)。
-`Plan/` 在本仓库 gitignore 中，只存在于磁盘上；`Docs/` 随插件入库。
+The 55-case corpus additionally compares "the asset built from a fixture" against "the asset rebuilt
+from its export", so a loss that is symmetric on both sides of the text comparison still shows.
+Exports land in a `Decompiled/<original path>` namespace: the whole tree is first-class source that
+rebuilds into mirrors and structurally cannot touch the originals.
+
+One more thing: the same source tree builds with **zero `#if` engine forks** on a customized source
+build and on the stock installed engine.
+
+## Documentation
+
+| | |
+| :-- | :-- |
+| **[Getting started](Docs/getting-started.md)** | nothing → running effect, no editor required |
+| **[Language reference](Docs/language/README.md)** | `.dfs` / `.dfe` / `.dfm`, values, curves, events, stages |
+| **[Diagnostics](Docs/diagnostics/README.md)** | all 143 `DFXnnnn` codes with file/line/column, generated from source and drift-checked |
+| **[Editor tools](Docs/tools/editor-integration.md)** | menus, right-click actions, toolbar, VSCode workspace |
+| **[Performance notes](Docs/performance-2026-08-08.md)** | measured build-time work, and what made it fast |
+
+## Editor and tooling
+
+| | |
+| :-- | :-- |
+| **Editor integration** | *Tools* menu, Content Browser right-click (build / decompile / Adopt / export `.dfe`), Niagara editor toolbar, level toolbar — all on the same pipeline, `-NoDreamFXEditor` turns it off |
+| **File watcher** | save the source, the asset rebuilds; open the generated asset for a live preview |
+| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus` |
+| **`ci.ps1`** | lint → build → verify → corpus, one command, editor closed |
+| **Provenance stamps** | source hash + generator version + module version GUIDs on every generated asset; `verify` reports edited-by-hand, stale, and version-drifted assets |
+
+## AI support
+
+Four agent skills ship with the plugin under [`.skill/`](.skill/): `dream-fx-create`,
+`dream-fx-verify`, `dream-fx-diagnose`, `dream-fx-decompile` — a coding agent can author, build,
+debug and migrate effects headlessly.
+
+## Requirements and boundaries
+
+- **Engine**: Unreal Engine 5.8 (source builds and the installed/stock engine are both supported and
+  release-verified). Depends on the engine's Niagara external-edit API (`UNiagaraExternalEditUtilities`,
+  marked EXPERIMENTAL engine-side); drift is surfaced by startup self-checks, never absorbed silently.
+- **Host projects must enable the same content plugins as the authoring project** (e.g.
+  `NiagaraFluids`): an unmounted plugin blinds the module probe, and sources referencing its modules
+  surface as explicit gaps or compile errors.
+- **Close the editor for package-writing commands** (`build`, `corpus`, `mirror-diff`,
+  `decompile-all`) — two processes saving the same packages race silently.
+- Not covered (by design or not yet): Scratch Pad, module-internal graph lowering, GPU/CPU branch
+  conditions, Scalability conditions, true emitter inheritance (`from` is a copy). Degradations are
+  diagnosed, not silent — see [CHANGELOG](CHANGELOG.md) for the 1.0.0 known-issues list.
