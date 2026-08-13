@@ -2230,7 +2230,7 @@ namespace UE::DreamFX::Editor
 			// link, SetLinkedParameterValue calls RemoveOverridePin unconditionally, the override-pin
 			// finder returns the module node's own switch pin before it looks at the map set
 			// (NiagaraStackGraphUtilities.cpp:1964), and the CastChecked on its owner is an appError
-			// -- the editor dies on a legal source line (open-problems section 9). So every value
+			// -- the editor dies on a legal source line. So every value
 			// form a DECLARED switch goes through the pin route; a linked value resolves there
 			// against the module's own default binding -- equal is a no-op, different is a worded
 			// refusal (a map-get wire into the pin was tried and the digest rejects it).

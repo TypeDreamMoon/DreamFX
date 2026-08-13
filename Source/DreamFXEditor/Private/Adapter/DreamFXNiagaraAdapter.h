@@ -1136,8 +1136,8 @@ namespace UE::DreamFX::Editor
 		 * Read from UNiagaraScript, not from the external edit API: that API has no notion of versions
 		 * at all -- AddModule takes a bare asset pointer, no topology struct reports which version a
 		 * stack entry uses, and nothing in it selects one. So a version can be recorded and compared,
-		 * which is what detects the drift R7 is about, but not chosen. The plan-v2 W3 probe conclusion
-		 * is written up in Plan/plan-v2.md.
+		 * which is what detects the drift R7 is about, but not chosen -- measured against the live
+		 * API surface rather than assumed.
 		 *
 		 * UNiagaraScript::GetExposedVersion and IsVersioningEnabled are NIAGARA_API on the runtime type,
 		 * so this stays inside the portability boundary.
@@ -1217,7 +1217,7 @@ namespace UE::DreamFX::Editor
 		 * (a wire into the pin fails the digest; measured). They MUST not ride the API rail:
 		 * SetLinkedParameterValue's unconditional RemoveOverridePin CastCheckeds the switch pin's
 		 * owner as a parameter map set and appErrors -- a process death a legal .dfs could trigger
-		 * (open-problems section 9). The fluid templates survived that rail only through the
+		 * from a legal `.dfs`. The fluid templates survived that rail only through the
 		 * engine's value-unchanged early-out.
 		 */
 		static bool SetStaticSwitchByPin(const FStackAddress& ModuleAddress, FName SwitchVariableName,

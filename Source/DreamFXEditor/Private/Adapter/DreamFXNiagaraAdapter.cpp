@@ -430,7 +430,7 @@ namespace UE::DreamFX::Editor
 		 * early-out used to do by accident. A linked value that names anything else asks for a
 		 * mechanism the engine does not have, and says so in words. The API rail said it with an
 		 * appError instead: SetLinkedParameterValue's unconditional RemoveOverridePin CastCheckeds
-		 * this pin's owner as a parameter map set (open-problems section 9).
+		 * this pin's owner as a parameter map set -- a legal source file killing the editor.
 		 *
 		 * The default binding is read off the called graph's VariableToScriptVariable map through
 		 * reflection -- the map and UNiagaraScriptVariable's DefaultMode/DefaultBinding are
@@ -2386,7 +2386,7 @@ namespace UE::DreamFX::Editor
 	{
 		FOpTimer OpTimer(TEXT("SetInput"));
 
-		// Invariant guard (open-problems section 9): a linked value for a static switch must never
+		// Invariant guard: a linked value for a static switch must never
 		// reach the API rail. SetLinkedParameterValue calls RemoveOverridePin unconditionally, the
 		// override-pin finder returns the switch pin on the function call node before it looks
 		// anywhere else, and the CastChecked on that pin's owner is an appError -- the process dies,
@@ -5034,7 +5034,7 @@ namespace UE::DreamFX::Editor
 
 		// A linked value never goes near the API rail: SetLinkedParameterValue would find this very
 		// pin first and CastChecked its owner as a parameter map set -- appError, process gone
-		// (open-problems section 9). Resolved against the module's default binding instead: equal
+		// -- a legal source file killing the editor. Resolved against the default binding instead: equal
 		// is a no-op (nothing to write, the module provides it), different is a worded refusal
 		// (the engine has no call-site mechanism for it -- measured, see LinkStaticSwitchPin).
 		if (Value.Mode == EInputValueMode::Linked)
