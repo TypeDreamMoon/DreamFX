@@ -45,6 +45,8 @@ namespace UE::DreamFX::Editor
 		constexpr double HeartbeatSeconds = 2.0;
 
 		FTSTicker::FDelegateHandle GTickerHandle;
+		/** When this service started listening. Anything written before it had no listener. */
+		FDateTime GListeningSince = FDateTime::MinValue();
 		double GLastHeartbeat = 0.0;
 		bool GBusy = false;
 		FString GBusyAction;
@@ -374,6 +376,26 @@ namespace UE::DreamFX::Editor
 			WriteFileAtomically(DiagnosticsPath(), DiagnosticsText);
 		}
 
+		/**
+		 * Discards a request that was written while nobody was listening.
+		 *
+		 * A request waits on disk when the editor is closed -- that is the point of using files. What
+		 * must not happen is executing it later: by then the client has long since timed out, fallen
+		 * back to the CLI and moved on, so the work is nobody's. Measured: three requests sent to an
+		 * editor that had already exited sat in the queue, and the next editor to start would have
+		 * served all three. For `openAsset` that is three surprise windows. For `build` it is package
+		 * writes at startup that no one asked for.
+		 *
+		 * The cutoff is this service's own start time rather than an age limit, because age is the
+		 * wrong question: a request queued behind a five-minute build is old and still wanted. "Was
+		 * anyone listening when it was written" is the actual condition, and it needs no constant.
+		 */
+		bool IsAbandoned(const FString& RequestPath)
+		{
+			const FDateTime Written = IFileManager::Get().GetTimeStamp(*RequestPath);
+			return Written != FDateTime::MinValue() && Written < GListeningSince;
+		}
+
 		void ServeOneRequest(const FString& RequestPath)
 		{
 			FString Text;
@@ -460,7 +482,16 @@ namespace UE::DreamFX::Editor
 				Requests.Sort();
 				for (const FString& Name : Requests)
 				{
-					ServeOneRequest(FPaths::Combine(RequestsDir(), Name));
+					const FString RequestPath = FPaths::Combine(RequestsDir(), Name);
+					if (IsAbandoned(RequestPath))
+					{
+						IFileManager::Get().Delete(*RequestPath);
+						UE_LOG(LogDreamFX, Display,
+							TEXT("Bridge: discarded '%s' -- written before this editor started listening, so whoever sent it has already given up."),
+							*Name);
+						continue;
+					}
+					ServeOneRequest(RequestPath);
 				}
 			}
 			else if (FPlatformTime::Seconds() - GLastHeartbeat > HeartbeatSeconds)
@@ -494,6 +525,9 @@ namespace UE::DreamFX::Editor
 
 		GBusy = false;
 		GLastResult.Reset();
+		// Stamped before the first poll, so anything already in the queue is recognised as having been
+		// written to a room with nobody in it.
+		GListeningSince = FDateTime::UtcNow();
 		PublishStatus();
 
 		GTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
