@@ -1,5 +1,6 @@
 #include "DreamFXEditorModule.h"
 
+#include "Bridge/DreamFXBridgeService.h"
 #include "DreamFXModule.h"
 #include "UI/DreamFXGeneratedAssetGuard.h"
 #include "UI/DreamFXMenus.h"
@@ -48,6 +49,7 @@ void FDreamFXEditorModule::StartupModule()
 		UE::DreamFX::Editor::FGeneratedAssetGuard::Register();
 		UE::DreamFX::Editor::FSourceWatcher::Register();
 		UE::DreamFX::Editor::FDreamFXMenus::Register();
+		UE::DreamFX::Editor::FBridgeService::Register();
 	}
 }
 
@@ -55,6 +57,7 @@ void FDreamFXEditorModule::ShutdownModule()
 {
 	if (bInteractiveSurfaceEnabled)
 	{
+		UE::DreamFX::Editor::FBridgeService::Unregister();
 		UE::DreamFX::Editor::FDreamFXMenus::Unregister();
 		UE::DreamFX::Editor::FSourceWatcher::Unregister();
 		UE::DreamFX::Editor::FGeneratedAssetGuard::Unregister();
