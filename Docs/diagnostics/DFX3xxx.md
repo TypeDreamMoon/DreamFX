@@ -179,7 +179,7 @@ Dynamic input '%s' is pinned to version %s, which its asset does not offer. Avai
 **Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1280`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:948`
 <!-- generated:end DFX3009 -->
 
-**Cause.** An R7 `@version` pin disagrees with the module asset's exposed version, or pins an asset that never opted into versioning. The pin records which version the source was written against; DreamFX cannot build against any other one, because the external edit API has no way to select a version (plan-v2 W3).
+**Cause.** An R7 `@version` pin disagrees with the module asset's exposed version, or pins an asset that never opted into versioning. The pin records which version the source was written against; DreamFX cannot build against any other one, because the external edit API has no way to select a version.
 
 **Fix.** Retest against the exposed version and update the pin, restore the version on the asset, or drop the `@` if the module is unversioned.
 
@@ -379,7 +379,7 @@ The Body block is empty.
 
 **Cause.** A dynamic input's body is not a single expression. The Niagara translator wraps it as `Output = (Type)( <body> );`, so statements before the return produce invalid HLSL rather than an error naming the real problem.
 
-**Fix.** Fold it into one expression, or write it as a `Module` -- a module's body is emitted verbatim and can hold as many statements as it likes (plan-v2 W1).
+**Fix.** Fold it into one expression, or write it as a `Module` -- a module's body is emitted verbatim and can hold as many statements as it likes.
 
 ## DFX3038
 
@@ -539,7 +539,7 @@ The default for input '%s' has to be a literal or an enum entry. A module input 
 **Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:517`
 <!-- generated:end DFX3046 -->
 
-**Cause.** A `.dfm` body touches a `Particles.*` attribute that is neither a common Niagara attribute nor declared in the body. The pin wired for it needs a type, and guessing would wire one of the wrong width (plan-v2 W1).
+**Cause.** A `.dfm` body touches a `Particles.*` attribute that is neither a common Niagara attribute nor declared in the body. The pin wired for it needs a type, and guessing would wire one of the wrong width.
 
 **Fix.** Write the type at its first use, the way a `.dfs` declares a new attribute: `float Particles.Moon.Phase = 0.0;`
 

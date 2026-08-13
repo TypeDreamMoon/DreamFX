@@ -343,7 +343,7 @@ The hlsl block for '%s' must be a single expression: no statements, no local var
 
 **Cause.** A stack input's `hlsl` block lowers to a node with one typed output pin and no body, so it cannot hold statements.
 
-**Fix.** Fold it into one expression, or move the logic into a `.dfm` Module, whose body is emitted verbatim (plan-v2 W1). This is the gap `.dfm` generation exists to close.
+**Fix.** Fold it into one expression, or move the logic into a `.dfm` Module, whose body is emitted verbatim. This is the gap `.dfm` generation exists to close.
 
 ## DFX4031
 

@@ -159,9 +159,9 @@ VelocityStrength = RandomRangeFloat(
 `dfx schema <Module> -Stack <Stack>` prints the signature as the build sees it, static switches
 included.
 
-`@1.2` records which version the source was written against and errors if the asset now exposes a
-different one (DFX3009). It cannot *select* a version — the external edit API has no way to
-(plan-v2 W3).
+`@1.2` records which version the source was written against, **selects** it on the module node, and
+errors if the asset no longer exposes it (DFX3009). Selection is a graph-level operation, so it
+works on any engine.
 
 ### Assignments
 
@@ -258,10 +258,10 @@ with its own header line (DFX8016).
 
 ## `Defaults` — what a read produces when nothing wrote
 
-> Working since 2026-08-09: the ordering fix (defaults applied after the stacks, with an implied
-> Value pass) closed what [roundtrip-2026-08-08-3.md](../roundtrip-2026-08-08-3.md) measured as dead
-> ends — the writes were creating the entry they then refused to fill. The decompiler exports a
-> `Defaults` block when an emitter graph carries one that differs from what a fresh build produces.
+> Working since 2026-08-09. What looked like an API gap was an ordering bug: the writes were
+> creating the very entry they then refused to fill, so defaults are now applied after the stacks
+> with an implied Value pass. The decompiler exports a `Defaults` block when an emitter graph
+> carries one that differs from what a fresh build produces.
 
 ```cpp
 Emitter Sparks

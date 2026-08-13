@@ -131,7 +131,7 @@ Nothing in this source writes that parameter, so there is no graph parameter for
 
 **Fix.** First re-export the asset with a current build --- if the message goes away, the source was missing something the exporter used to drop, and nothing was ever wrong with the effect. If the source genuinely is the whole story (hand-written, or the asset really has no writer), fix it there: write the parameter before whatever reads it --- for an `Emitter.<Module>.<Output>` name, move the module that produces it above its readers --- or drop the read. Building on MoonEngine makes the message go away by supplying the type's zero, which is not the same as making the effect work.
 
-**Why DreamFX does not just create the parameter.** It could: `FGraphSurgeon::AddParameter` already creates one by reflection for the `.dfm` path. Deliberately not wired in (decision record, `Plan/open-problems-fixes.md`, 2026-08-10; the record's factual basis is void but this guardrail stands on its own) --- reflection parameter creation in the `.dfs` path would invert the layer dependency and paper over real source defects on every engine.
+**Why DreamFX does not just create the parameter.** It could: `FGraphSurgeon::AddParameter` already creates one by reflection for the `.dfm` path. Deliberately not wired in --- reflection parameter creation in the `.dfs` path would invert the layer dependency and paper over real source defects on every engine.
 
 **Not** a reason to distrust the build. It is an explanation attached to an error, never an error of its own.
 

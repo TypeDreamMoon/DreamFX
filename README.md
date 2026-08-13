@@ -166,7 +166,7 @@ build and on the stock installed engine.
 | **[Language reference](Docs/language/README.md)** | `.dfs` / `.dfe` / `.dfm`, values, curves, events, stages |
 | **[Diagnostics](Docs/diagnostics/README.md)** | all 143 `DFXnnnn` codes with file/line/column, generated from source and drift-checked |
 | **[Editor tools](Docs/tools/editor-integration.md)** | menus, right-click actions, toolbar, VSCode workspace |
-| **[Performance notes](Docs/performance-2026-08-08.md)** | measured build-time work, and what made it fast |
+| **[Changelog](CHANGELOG.md)** | what each release covers, and the known-issue list |
 
 ## Editor and tooling
 

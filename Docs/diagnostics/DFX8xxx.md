@@ -147,7 +147,7 @@ Could not read emitter '%s': %s
 
 This is the gate that makes adoption safe. Adopting means the text becomes the only source of truth for that asset, so adopting with a known gap destroys whatever did not survive the first rebuild -- silently, and with no diff to show for it.
 
-**Fix.** Use **Export .dfs** instead. It writes the same text, does not touch the asset, and lists the gaps in the file header. If the missing feature matters, the [coverage report](../coverage-2026-08-07.md) records which buckets are open and why.
+**Fix.** Use **Export .dfs** instead. It writes the same text, does not touch the asset, and lists the gaps in the file header. To see which buckets are open across your own content, run `dfx.ps1 coverage`.
 
 ## DFX8011
 
@@ -252,11 +252,12 @@ Emitter '%s' carries %d event handler(s) this export cannot represent%s. The reb
 **Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1490`
 <!-- generated:end DFX8015 -->
 
-**Cause.** The emitter carries event handlers (`EventHandlerScriptProps`), and DreamFX cannot represent them: the external edit API has no event surface --- its stack references hard-code the invalid usage id that only the four main stacks match --- so neither the handler's properties (source emitter, event name, spawn behaviour) nor the event stack's modules reach the export. The rebuilt emitter has no handlers at all, receives no events, and an event-SPAWNED emitter therefore renders nothing, permanently.
+**Cause.** The emitter carries event handlers the export has no text form for. Event handlers themselves ARE supported --- they export as `OnEvent(...)` blocks --- so this now fires in two narrower cases only:
 
-This was a silent loss until 2026-08-11, when the Descend/Up ribbons and sparks --- all `LocationEvent` receivers --- came back empty with no gap line saying why. The "events had zero corpus hits" ruling that justified deferring support predated the content packs that use them.
+- the emitter has **more than one** handler (one `OnEvent` block per emitter is representable, because the write side reaches an event stack through a single zero usage id);
+- the export is a **standalone `.dfe`**, which has no sibling emitter for the handler's `Source` to name (the stored `SourceEmitterID` is a handle guid no rebuild could reproduce, so the source travels by emitter NAME).
 
-**Fix.** None at the source --- this is a capability gap, tracked with a full design in `Plan/plan-events.md` (source carried by emitter NAME, since the stored `SourceEmitterID` is a handle guid no rebuild can reproduce; the write side rides the existing stack rails through a zero usage id). Until it lands, treat any mirror of an event-using system as missing those emitters' behaviour; the gap header names each handler's source emitter and event.
+**Fix.** For the multi-handler case, split the receiving emitter so each one carries a single handler. For the standalone case, export the whole system as a `.dfs` instead, where the source emitter exists to be named. Either way the gap header names each handler's source emitter and event, so nothing is lost silently.
 
 ## DFX8016
 
@@ -272,11 +273,11 @@ Emitter '%s' carries %d simulation stage(s) this export cannot represent (custom
 **Raised by** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1537`
 <!-- generated:end DFX8016 -->
 
-**Cause.** The emitter carries a simulation stage the export has no text form for. Since
-plan-stages landed, ordinary stages export as `Stage name(...)` blocks and do not raise this; what
-remains is a stage whose class is not the engine's `UNiagaraSimulationStageGeneric` (a custom C++
-stage), or one whose script object is missing from the asset. The gap header names each one, so
-the loss survives into code review rather than living only in a commandlet log.
+**Cause.** The emitter carries a simulation stage the export has no text form for. Ordinary stages
+export as `Stage name(...)` blocks and do not raise this; what remains is a stage whose class is not
+the engine's `UNiagaraSimulationStageGeneric` (a custom C++ stage), or one whose script object is
+missing from the asset. The gap header names each one, so the loss survives into code review rather
+than living only in a commandlet log.
 
 **Fix.** Nothing to fix in the source file — this is a representation limit. If the stage matters,
 keep authoring that emitter in the Niagara editor; a rebuilt mirror will not run it.

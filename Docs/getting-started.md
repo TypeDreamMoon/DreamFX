@@ -219,14 +219,17 @@ not a gate.
 - **[tools/editor-integration.md](tools/editor-integration.md)** — every menu, every toast, the
   workspace file, VSCode discovery, and how to call the same commands from Python.
 - **[diagnostics/](diagnostics/README.md)** — every `DFXnnnn`.
-- **[coverage-2026-08-07.md](coverage-2026-08-07.md)** — what fraction of this project's existing VFX
-  DreamFX can already represent, and which gaps are worth closing.
-- **[coverage-packs-2026-08-08.md](coverage-packs-2026-08-08.md)** — the same question asked of four
-  third-party content packs (24 systems), which is where the current gap ranking comes from.
-- **[roundtrip-2026-08-08.md](roundtrip-2026-08-08.md)** — the L1/L2/L3 equivalence protocol, and what
-  happened when those 24 systems were exported and rebuilt.
-- **[plan.md](plan.md)** — the design, and the measured engine constraints behind every awkward part
-  of it.
+- **[../CHANGELOG.md](../CHANGELOG.md)** — what each release covers, and the known-issue list.
+
+To ask the coverage question of your own content — what fraction of it DreamFX can already
+represent, and which gaps are worth closing — run it yourself:
+
+```bash
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 coverage
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile-all -Path=/Game/VFX
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 mirror-diff       # L1 text + L2 compile
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 asset-diff        # facts, independent of the exporter
+```
 
 There are four skills for agent-assisted work: `dream-fx-create`, `dream-fx-verify`,
 `dream-fx-diagnose` and `dream-fx-decompile`.

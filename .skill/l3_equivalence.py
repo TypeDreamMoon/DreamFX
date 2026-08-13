@@ -5,7 +5,7 @@ L1 compares export text and L2 compares whether the result compiles. Neither of 
 notices a system that builds cleanly and then simulates differently, which is the failure
 an artist would actually see. This runs both systems and compares what they produce.
 
-Method (plan-v5 R4 step 6). For each pair, spawn a component, then drive it with
+Method. For each pair, spawn a component, then drive it with
 `CaptureNiagaraSimCacheImmediate(bAdvanceSimulation=True, AdvanceDeltaTime=1/30)` a fixed
 number of times and read each emitter's particle count per frame. Advancing by a fixed step
 rather than waiting on the editor's realtime tick is what makes the result reproducible --

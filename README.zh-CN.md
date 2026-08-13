@@ -160,7 +160,7 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 | **[语法参考](Docs/language/README.md)** | `.dfs` / `.dfe` / `.dfm`、值、曲线、事件、stage |
 | **[诊断码](Docs/diagnostics/README.md)** | 143 个 `DFXnnnn` 全带文件/行/列,从源码生成并防漂移 |
 | **[编辑器工具](Docs/tools/editor-integration.md)** | 菜单、右键、工具栏、VSCode workspace |
-| **[性能实测](Docs/performance-2026-08-08.md)** | 构建耗时的测量与结论 |
+| **[更新日志](CHANGELOG.md)** | 每个版本做了什么,以及已知问题清单 |
 
 ## 编辑器与工具链
 

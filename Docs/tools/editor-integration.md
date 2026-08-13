@@ -294,5 +294,6 @@ and the module registers nothing.
 
 - [Getting started](../getting-started.md) — the editor-side workflow in order
 - [Language reference](../language/README.md) — what the exported text means
-- [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8012`
-- [Coverage report](../coverage-2026-08-07.md) — what a decompile can and cannot carry
+- [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8016`, the
+  gap codes that say what a decompile could not carry
+- `dfx.ps1 coverage` — the same question asked of a whole content tree, bucketed by feature

@@ -1,8 +1,8 @@
 # DreamFXLang reference
 
-The language, split by what you are writing. For the design reasoning behind any of it — why the
-stack is a statement list, why the expression whitelist is short, why `#Region` is only a comment —
-see [plan.md](../plan.md) §3. This tree is the reference; plan.md is the argument.
+The language, split by what you are writing. Where a rule exists because the engine forced it —
+why the stack is a statement list, why the expression whitelist is short, why `#Region` is only a
+comment — the page says so where the rule is stated.
 
 | Page | Covers |
 | --- | --- |

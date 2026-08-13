@@ -89,7 +89,7 @@ Asset '%s' does not exist: this source has never been built.
 **Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3619`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3624`
 <!-- generated:end DFX7005 -->
 
-**Cause.** R7 drift. The source did not change and the asset did not change, but a module they both depend on now exposes a different version -- so the asset was built against a different module than the one this build would use. Nothing in the source or the asset says anything about it, which is why the stamp records module versions (plan-v2 W3).
+**Cause.** R7 drift. The source did not change and the asset did not change, but a module they both depend on now exposes a different version -- so the asset was built against a different module than the one this build would use. Nothing in the source or the asset says anything about it, which is why the stamp records module versions.
 
 **Fix.** Rebuild to adopt the new version, or pin the module with `@<version>` to have the mismatch reported at the call site. A warning by default because an engine upgrade hits every source at once and a rebuild resolves it; `-StrictVersions` makes it an error, for a release gate.
 
