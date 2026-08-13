@@ -35,6 +35,11 @@
     ./dfx.ps1 schema GravityForce
 
 .EXAMPLE
+    ./dfx.ps1 index
+    Export every module and dynamic input, with its input signature, to DFX/.dfx-index.json.
+    One boot: this is what an editor integration reads instead of calling `schema` per module.
+
+.EXAMPLE
     ./dfx.ps1 decompile-all -Path '/Game/FX+/Game/Explosions'
     Export every Niagara system under either path into DFX/Decompiled/, in one editor boot.
 
@@ -49,7 +54,7 @@ param(
     # schema — print one module's input signature
     # list   — print every module (or, with -DynamicInputs, every dynamic input) on the search paths
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'asset-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'corpus')]
+    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'asset-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'index', 'corpus')]
     [string]$Command,
 
     # build/verify: path to a .dfs (absolute, or relative to the working directory).
@@ -94,6 +99,14 @@ param(
 
     # list: show dynamic inputs instead of modules.
     [switch]$DynamicInputs,
+
+    # index: list the modules without probing their inputs. Fast, and enough to answer "what exists";
+    # not enough for completion inside a module's argument list.
+    [switch]$NoInputs,
+
+    # index: clear the quarantine and try every module again. For after an engine upgrade, when the
+    # graph that could not be walked may have been fixed.
+    [switch]$Retry,
 
     # verify: treat an R7 module-version mismatch as an error rather than a warning. For a release
     # gate, where assets built against different modules than the text describes must not ship.
@@ -273,6 +286,55 @@ if ($Command -eq 'corpus') {
     }
     Write-Host "dfx: corpus OK ($passed passed)" -ForegroundColor Green
     exit 0
+}
+
+# ---------------------------------------------------------------- index
+#
+# The index walks every module in the library and probes its inputs, and some module graphs make the
+# engine's own traversal recurse without bound -- `/Niagara/Modules/Masks/ConeMask` on stock UE 5.8
+# is one, and `dfx schema` on it has always died the same way. A stack overflow is not something a
+# plugin can catch, so the commandlet records the module it is about to probe and quarantines
+# whatever was still in flight when the next run starts. This loop is the other half: it re-runs
+# until the walk completes, so a handful of bad graphs costs a few extra boots rather than the
+# feature.
+
+if ($Command -eq 'index') {
+    $indexArguments = @($uproject, '-run=DreamFX', '-Index')
+    if ($Out) { $indexArguments += "-Out=$Out" }
+    if ($NoInputs) { $indexArguments += '-NoInputs' }
+    if ($Retry) { $indexArguments += '-Retry' }
+    $indexArguments += @('-unattended', '-nopause', '-nosplash', '-nullrhi')
+
+    $maxAttempts = 12
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        # -Retry clears the quarantine, so it must apply to the FIRST attempt only; a retry on every
+        # attempt would clear the very record that lets the loop make progress.
+        if ($attempt -gt 1) { $indexArguments = @($indexArguments | Where-Object { $_ -ne '-Retry' }) }
+
+        $indexOutput = & $editorCmd @indexArguments 2>&1
+        $indexExit = $LASTEXITCODE
+
+        foreach ($line in $indexOutput) {
+            $text = "$line"
+            if ($text -notmatch 'LogDreamFX') { continue }
+            $stripped = ($text -replace '^\[[^\]]*\]\[\s*\d+\]', '') -replace '^LogInit: Display: ', ''
+            $colour = if ($stripped -match ': Error:') { 'Red' } elseif ($stripped -match ': Warning:') { 'Yellow' } else { 'Gray' }
+            Write-Host $stripped -ForegroundColor $colour
+        }
+
+        if ($indexExit -eq 0) {
+            Write-Host ''
+            Write-Host "dfx: index OK (attempt $attempt of at most $maxAttempts)" -ForegroundColor Green
+            exit 0
+        }
+
+        Write-Host "dfx: index run $attempt ended at exit $indexExit; re-running to quarantine the module that stopped it" -ForegroundColor DarkYellow
+    }
+
+    Write-Host ''
+    Write-Host "dfx: index FAILED -- still not complete after $maxAttempts attempts." -ForegroundColor Red
+    Write-Host '     Each attempt quarantines one module, so this many failures means something else is wrong.' -ForegroundColor DarkGray
+    exit 1
 }
 
 # ---------------------------------------------------------------- argument assembly

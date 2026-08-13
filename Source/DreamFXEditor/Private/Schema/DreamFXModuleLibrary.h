@@ -211,10 +211,26 @@ namespace UE::DreamFX::Editor
 		UNiagaraScript* MaterializeEmbeddedScript(UNiagaraScript* Script, const FString& PackagePath,
 			const FString& AssetName, FString& OutError);
 
+		/** One entry of the available-module listing, with the script already resolved. */
+		struct FModuleListing
+		{
+			FString AssetName;
+			FString PackageName;
+			UNiagaraScript* Script = nullptr;
+		};
+
 		/**
-		 * Every module (or dynamic input) the search paths expose, as "Name -> /Package/Path".
-		 * Drives the commandlet's -List mode, which is how an author discovers what is available
-		 * without opening the content browser.
+		 * Every module (or dynamic input) the search paths expose.
+		 *
+		 * Structured rather than formatted because the index export needs the script itself: it has
+		 * already been loaded to check the usage, and loading it a second time from a re-split string
+		 * would be both slower and a chance to disagree about which asset a name meant.
+		 */
+		void ListAvailableDetailed(bool bDynamicInput, TArray<FModuleListing>& OutEntries);
+
+		/**
+		 * The same listing as "Name -> /Package/Path" text. Drives the commandlet's -List mode, which
+		 * is how an author discovers what is available without opening the content browser.
 		 */
 		void ListAvailable(bool bDynamicInput, TArray<FString>& OutEntries);
 

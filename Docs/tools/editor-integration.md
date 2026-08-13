@@ -297,6 +297,44 @@ Parsed as a bare command-line parameter, so `-NoDreamFXEditor` is the only accep
 A commandlet run reaches the same state by a different route: `IsRunningCommandlet()` returns true
 and the module registers nothing.
 
+## The module index
+
+```powershell
+pwsh -File .skill/dfx.ps1 index
+```
+
+Writes `DFX/.dfx-index.json`: every module and dynamic input the search paths expose, with its
+declared stacks, category, description and **input signature**. The editor extension reads that file
+for completion and hover — it cannot ask the engine, because every `dfx` call boots it and nothing
+that happens while someone is typing may cost tens of seconds.
+
+Two halves with very different costs. The stacks and metadata come from the asset's usage bitmask,
+which is free — the same list the engine's own stack UI filters by. The input signature is *probed*,
+because the asset-level schema misses inline edit conditions and static switches entirely, and a
+completion list with no enum-shaped inputs in it would be worse than none. Measured here: 571 modules,
+2.9s without the probe, 8.1s with it.
+
+> [!WARNING]
+> **Some module graphs cannot be walked.** `/Niagara/Modules/Masks/ConeMask` — stock engine content —
+> makes `UNiagaraGraph::ReferencesStaticVariable` recurse without bound, and the stack overflow ends
+> the process. `dfx schema` on that module has always done this; the index simply walks into it 45
+> modules in. A plugin cannot add a visited-set to engine code and a stack overflow is not worth
+> catching, so the walk is *resumable* instead: the module about to be probed is recorded first, and
+> whatever is still recorded when the next run starts is quarantined. `dfx.ps1` re-runs until the walk
+> completes, so a handful of bad graphs costs a few extra boots rather than the feature. A quarantined
+> module keeps its name, path and stacks; only its inputs are missing, and it says so.
+
+| Flag | |
+| :-- | :-- |
+| `-Out <path>` | Write somewhere other than `DFX/.dfx-index.json` |
+| `-NoInputs` | Skip the probe. Fast, and enough to answer "what exists" |
+| `-Retry` | Clear the quarantine and try every module again — for after an engine upgrade |
+
+The index records the engine path and the enabled plugin list, because those are what invalidate it:
+a different engine is a different module set, and enabling a content plugin adds a whole family.
+Nothing compares them yet — that needs a live editor to compare against — so rebuilding is a command
+rather than something guessed at.
+
 ## See also
 
 - [Getting started](../getting-started.md) — the editor-side workflow in order

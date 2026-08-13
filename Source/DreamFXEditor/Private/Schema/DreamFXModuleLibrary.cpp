@@ -384,7 +384,7 @@ namespace UE::DreamFX::Editor
 		return Copy;
 	}
 
-	void FModuleLibrary::ListAvailable(bool bDynamicInput, TArray<FString>& OutEntries)
+	void FModuleLibrary::ListAvailableDetailed(bool bDynamicInput, TArray<FModuleListing>& OutEntries)
 	{
 		BuildIndex();
 
@@ -402,16 +402,32 @@ namespace UE::DreamFX::Editor
 					AssetName = PackageName.RightChop(SlashIndex + 1);
 				}
 
-				const UNiagaraScript* Script = LoadObject<UNiagaraScript>(
+				UNiagaraScript* Script = LoadObject<UNiagaraScript>(
 					nullptr, *FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName));
 				if (Script != nullptr && Script->GetUsage() == RequiredUsage)
 				{
-					OutEntries.Add(FString::Printf(TEXT("%-44s %s"), *AssetName, *PackageName));
+					OutEntries.Add(FModuleListing{ AssetName, PackageName, Script });
 				}
 			}
 		}
 
-		OutEntries.Sort();
+		OutEntries.Sort([](const FModuleListing& Left, const FModuleListing& Right)
+		{
+			return Left.AssetName == Right.AssetName
+				? Left.PackageName < Right.PackageName
+				: Left.AssetName < Right.AssetName;
+		});
+	}
+
+	void FModuleLibrary::ListAvailable(bool bDynamicInput, TArray<FString>& OutEntries)
+	{
+		TArray<FModuleListing> Listings;
+		ListAvailableDetailed(bDynamicInput, Listings);
+
+		for (const FModuleListing& Listing : Listings)
+		{
+			OutEntries.Add(FString::Printf(TEXT("%-44s %s"), *Listing.AssetName, *Listing.PackageName));
+		}
 	}
 
 	UNiagaraScript* FModuleLibrary::FindModule(const FString& Name, FString& OutError)

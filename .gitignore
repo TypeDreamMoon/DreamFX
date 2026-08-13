@@ -75,6 +75,10 @@ Content/Corpus/
 # Module and dynamic input assets, built from DFX/Modules/*.dfm by the same rule as the samples.
 Content/Modules/
 
+# The module index and its quarantine list: a snapshot of what one engine, with one set of plugins
+# enabled, exposed at one moment. Rebuild with: pwsh -File .skill/dfx.ps1 index
+DFX/.dfx-index.json*
+
 # Mirrors of this plugin's own assets. `decompile-all` walks every Niagara system it can see, which
 # includes the ones DreamFX generated, and a plugin-rooted export mirrors into the plugin's Content.
 # Build products of build products -- doubly not source.
