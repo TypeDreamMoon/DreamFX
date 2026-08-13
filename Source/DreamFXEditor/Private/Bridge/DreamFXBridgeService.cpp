@@ -313,10 +313,28 @@ namespace UE::DreamFX::Editor
 				FString Destination;
 				FString Out;
 				Request->TryGetStringField(TEXT("outputPath"), Out);
-				const int32 Code = FIndexExport::Run(Out, /*bSkipInputs=*/false,
+
+				// Never probes. Measured the hard way: probing walks the module graphs, and
+				// `/Niagara/Modules/Masks/ConeMask` sends UNiagaraGraph::ReferencesStaticVariable
+				// into unbounded recursion -- 81 frames deep and then EXCEPTION_STACK_OVERFLOW,
+				// which is not catchable and takes the whole process with it. Serving that request
+				// over the bridge killed this editor outright, along with whatever was unsaved in it.
+				//
+				// The resume machinery that makes `dfx index` survive this is not applicable here.
+				// It works by recording the module about to be probed, dying, and being *restarted*
+				// by dfx.ps1, which then quarantines it. There is no supervisor to restart an editor,
+				// and a quarantine list from an earlier run is no guarantee either: a new engine or a
+				// new content pack can add a landmine that no list knows about yet.
+				//
+				// So the split is by which process is allowed to die. The CLI's is expendable and
+				// supervised; the author's editor is neither. The cheap half is served here and the
+				// caller is told plainly where the other half lives.
+				const int32 Code = FIndexExport::Run(Out, /*bSkipInputs=*/true,
 					/*bRetryQuarantined=*/false, Destination);
 				return Code == 0
-					? Succeed(FString::Printf(TEXT("Index written to '%s'."), *Destination))
+					? Succeed(FString::Printf(
+						TEXT("Module list written to '%s'. Input signatures were not probed: probing can crash this editor, so it is a `dfx index` job."),
+						*Destination))
 					: Fail(FString::Printf(TEXT("Index export failed (%d)."), Code));
 			}
 

@@ -217,6 +217,12 @@ namespace UE::DreamFX::Editor
 		Writer->WriteValue(TEXT("generatedUtc"), FDateTime::UtcNow().ToIso8601());
 		Writer->WriteValue(TEXT("project"), FApp::GetProjectName());
 
+		// Whether the signatures in this file were probed at all. Without it, an index written
+		// without probing is indistinguishable from one where every module happens to take no
+		// inputs -- the same "absent and empty must not look alike" rule the per-module
+		// `inputsUnavailable` follows, one level up.
+		Writer->WriteValue(TEXT("inputsProbed"), !bSkipInputs);
+
 		// The fingerprint. An index goes stale when the engine changes, when a content plugin is
 		// enabled or disabled, or when the search paths move -- and none of those touch the clock, so
 		// a timestamp alone would keep serving a wrong answer.
