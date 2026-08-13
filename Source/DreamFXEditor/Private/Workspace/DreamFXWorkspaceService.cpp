@@ -185,21 +185,8 @@ namespace UE::DreamFX::Editor
 			FPaths::Combine(FPaths::ProjectDir(), TEXT("DFX/DreamFX.code-workspace")));
 	}
 
-	bool FDreamFXWorkspaceService::WriteWorkspaceFile(FString& OutWorkspaceFilePath, FString& OutError)
+	FString FDreamFXWorkspaceService::BuildWorkspaceJson(const FString& WorkspaceDirectory)
 	{
-		const FString WorkspaceFilePath = GetWorkspaceFilePath();
-		const FString WorkspaceDirectory = FPaths::GetPath(WorkspaceFilePath);
-
-		if (!IFileManager::Get().MakeDirectory(*WorkspaceDirectory, /*Tree=*/true))
-		{
-			OutError = FString::Printf(TEXT("Failed to create DreamFX source directory '%s'."), *WorkspaceDirectory);
-			return false;
-		}
-
-		// MakeDirectory may have just produced the project root that the cached scan missed, and a
-		// plugin can be enabled after the first scan. Both would show up as a missing folder.
-		FDreamFXPaths::InvalidateSourceRoots();
-
 		FString WorkspaceText;
 		const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&WorkspaceText);
 		Writer->WriteObjectStart();
@@ -237,15 +224,45 @@ namespace UE::DreamFX::Editor
 		Writer->WriteArrayEnd();
 		Writer->WriteObjectStart(TEXT("settings"));
 		Writer->WriteObjectStart(TEXT("files.associations"));
-		// The language id is a placeholder: no VSCode extension claims it yet, and an association to
-		// an unknown language is harmless -- VSCode falls back to plain text.
+		// The id the DreamFXLang extension registers. The association is written whether or not the
+		// extension is installed: without it VSCode falls back to plain text, which is harmless.
 		Writer->WriteValue(TEXT("*.dfs"), TEXT("dreamfxlang"));
 		Writer->WriteValue(TEXT("*.dfe"), TEXT("dreamfxlang"));
 		Writer->WriteValue(TEXT("*.dfm"), TEXT("dreamfxlang"));
 		Writer->WriteObjectEnd();
 		Writer->WriteObjectEnd();
+
+		// A recommendation, not a requirement: VSCode shows it as a prompt the first time the
+		// workspace opens and never again if it is dismissed. The association above is what makes the
+		// files readable at all; this is what makes them readable *well*.
+		Writer->WriteObjectStart(TEXT("extensions"));
+		Writer->WriteArrayStart(TEXT("recommendations"));
+		Writer->WriteValue(TEXT("typedreammoon.dreamfxlang-language-support"));
+		Writer->WriteArrayEnd();
+		Writer->WriteObjectEnd();
+
 		Writer->WriteObjectEnd();
 		Writer->Close();
+
+		return WorkspaceText;
+	}
+
+	bool FDreamFXWorkspaceService::WriteWorkspaceFile(FString& OutWorkspaceFilePath, FString& OutError)
+	{
+		const FString WorkspaceFilePath = GetWorkspaceFilePath();
+		const FString WorkspaceDirectory = FPaths::GetPath(WorkspaceFilePath);
+
+		if (!IFileManager::Get().MakeDirectory(*WorkspaceDirectory, /*Tree=*/true))
+		{
+			OutError = FString::Printf(TEXT("Failed to create DreamFX source directory '%s'."), *WorkspaceDirectory);
+			return false;
+		}
+
+		// MakeDirectory may have just produced the project root that the cached scan missed, and a
+		// plugin can be enabled after the first scan. Both would show up as a missing folder.
+		FDreamFXPaths::InvalidateSourceRoots();
+
+		const FString WorkspaceText = BuildWorkspaceJson(WorkspaceDirectory);
 
 		if (!FFileHelper::SaveStringToFile(WorkspaceText, *WorkspaceFilePath,
 			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))

@@ -213,14 +213,21 @@ blocks are lost. Per-user configuration belongs in `DFX/.vscode/`.
   ],
   "settings": {
     "files.associations": { "*.dfs": "dreamfxlang", "*.dfe": "dreamfxlang", "*.dfm": "dreamfxlang" }
+  },
+  "extensions": {
+    "recommendations": ["typedreammoon.dreamfxlang-language-support"]
   }
 }
 ```
 
 The project root is always first and always `"."` — the workspace file lives inside it, and a stable
 folder identity keeps VSCode's per-folder state attached across a rewrite. A plugin root on another
-drive has no relative form on Windows and gets an absolute path. `dreamfxlang` is a placeholder: no
-VSCode extension claims it yet, and an association to an unknown language is harmless.
+drive has no relative form on Windows and gets an absolute path.
+
+`dreamfxlang` is the language id the [DreamFXLang
+extension](https://github.com/TypeDreamMoon/dreamfx-language-support) registers. The association is
+written whether or not the extension is installed — without it VSCode falls back to plain text, which
+is harmless — and the recommendation is a prompt VSCode shows once and never again if dismissed.
 
 | Toast | Condition |
 | :-- | :-- |

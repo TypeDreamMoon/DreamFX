@@ -32,6 +32,15 @@ namespace UE::DreamFX::Editor
 		static FString GetWorkspaceFilePath();
 
 		/**
+		 * The workspace JSON for the current source roots, relative to the directory it will sit in.
+		 *
+		 * Split out from the write so the content can be asserted without a side effect: the writer's
+		 * destination is a fixed path inside the project, and a test that had to write there in order
+		 * to read it back would be leaving a generated file behind on every run.
+		 */
+		static FString BuildWorkspaceJson(const FString& WorkspaceDirectory);
+
+		/**
 		 * Rewrites the workspace file from the current source roots.
 		 *
 		 * Full rewrite, never a merge -- same as DreamShader. Hand-added `launch` or `tasks` blocks in
