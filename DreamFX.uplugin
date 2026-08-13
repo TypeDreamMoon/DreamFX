@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 1,
-	"VersionName": "0.0.1",
+	"Version": 100,
+	"VersionName": "1.0.0",
 	"FriendlyName": "DreamFX",
 	"Description": "Author Unreal Niagara effects with DreamFXLang .dfs/.dfe/.dfm source files that auto-generate standard UNiagaraSystem, UNiagaraEmitter and UNiagaraScript assets.",
 	"Category": "DreamPlugin",
@@ -14,7 +14,7 @@
 	"EnabledByDefault": true,
 	"CanContainContent": true,
 	"IsBetaVersion": false,
-	"IsExperimentalVersion": true,
+	"IsExperimentalVersion": false,
 	"Installed": false,
 	"Modules": [
 		{

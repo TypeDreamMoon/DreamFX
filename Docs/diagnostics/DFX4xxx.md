@@ -561,8 +561,6 @@ Unknown curve tangent mode '%s'. Expected Auto, User, Break or None.
 
 **Fix.** Use `Auto`, `User`, `Break` or `None` --- or leave `Tangent` out entirely, in which case a key with a tangent means `User` and a key without means `Auto`, which is what every source written before the attribute existed meant.
 
-**Fix.** _Not written yet._
-
 ## DFX4091
 
 <!-- generated:begin DFX4091 -->

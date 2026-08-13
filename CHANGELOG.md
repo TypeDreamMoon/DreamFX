@@ -1,0 +1,72 @@
+# Changelog
+
+## 1.0.0 — 2026-08-13
+
+首个正式版本。文本源码(`.dfs` / `.dfe` / `.dfm`)→ 标准 Niagara 资产
+(`UNiagaraSystem` / `UNiagaraEmitter` / `UNiagaraScript`),反方向的完整反编译,
+以及一套把「每个声明都带测量」当作纪律的验证体系。
+
+### 语言与生成
+
+- `.dfs` 全量系统定义:user 参数(含 **DI 参数带 JSON 配置**)、system/emitter 六固定栈、
+  **OnEvent 事件处理器**、**具名 Simulation Stage**(迭代源 / 绑定 / `ExecuteBehavior` /
+  `NumIterations`·`Enabled` 值或参数双形态)、renderer 通用属性赋值与 `Bind`、
+  Settings(含 `bFixedTickDelta`、系统级 `FixedBounds`)。
+- 全部值模式:字面量 / linked / enum / 嵌套 dynamic input / `hlsl { }` /
+  `curve { }`(带 `Interp` 与 **`Tangent=Auto|User|Break|None`**;可读形式表达不了的
+  曲线 DI 自动退回逐字 JSON——便利没有资格丢数据)。
+- 静态开关走 override pin(引擎 stack UI 的同一条路),两个家都覆盖;
+  **链接形态按模块自身 DefaultBinding 解析**——相等即无操作,不等即 DFX5021,
+  调用点没有链接机制,曾经的进程死已封死。
+- `.dfe` 可复用 emitter 拷入;`.dfm` 模块/动态输入生成,**stock 引擎经反射后端同样可用**。
+- `@版本` 真实选中;R7 溯源戳(源 hash + 生成器版本 + 模块版本 GUID)。
+
+### 反编译与镜像
+
+- 任意 NiagaraSystem → `.dfs`,逐字节幂等;表达不了的东西逐条写进文件头缺口注释,绝不静默。
+- `Decompiled/<原目录>` 命名空间:导出即一等源码,存盘即重编,结构上碰不到原资产。
+- 编辑器集成:菜单 / 右键 / 工具栏 / VSCode workspace / Adopt 接管(有丢失就拒绝)。
+
+### 验证体系(四层)
+
+- L1 `mirror-diff` 文本逐行;L2 镜像编译;L3 运行时等价(SimCache 固定步长逐帧粒子数,
+  A-vs-A 自对照裁决可判定性);**资产级事实对比 `asset-diff`**(不经导出器的反射走查,
+  含 `compiled` 事实族,两侧先强制编译)。corpus 55 条同时比「夹具建的资产」与
+  「其导出重建的资产」——对称丢失自 2026-08-12 起不再隐形。
+- CI 四步 lint → build → verify → corpus;`gen-diagnostics.ps1 -Check` 防文档漂移;
+  143 个诊断码全带文件/行/列。
+
+### 双引擎
+
+- MoonEngine(源码 5.8.1)与 stock installed 5.8.1 **同一份源码零 `#if` 分叉**;
+  MoonEngine 触面 3 条全记账。
+- 1.0.0 发布轮在 stock 上根治四个长进程缺陷:UObject 计数 GC 门、收集与活编辑面的
+  时序安全、无默认值 user 参数被引擎静默丢弃的兜底、迭代中创建对象的致命修改;
+  外加宿主项目内容插件对齐要求(见 README「运行环境要求」)。
+
+### 发布验证快照(2026-08-13,commit `4e23c55`)
+
+| 门 | Moon(源码 5.8.1) | stock(installed 5.8.1) |
+| --- | --- | --- |
+| ci(lint→build→verify→corpus) | OK,55 verified / corpus 55 | —(corpus 55/55 单跑) |
+| decompile-all | 45/45 | 24/24 |
+| build -All -Force | 55/0/0 | 30/0/0(连续两跑) |
+| mirror-diff | L1 45/45,L2 45/45 | L1 24/24,L2 24/24 |
+| asset-diff | 6 same / 39 different(全部为已宣告族) | — |
+| L3 运行时等价 | 45 对:7 exact / 0 phased / **0 differ** / 38 undecidable(无种子随机,自对照判) | — |
+| 诊断文档 `-Check` | 绿 | — |
+
+### 已知问题(1.0.0)
+
+1. 嵌套动态输入节点上的**链接**宣言开关(深度>1)未防护——引擎缺陷可达但语料零命中;
+   计划 1.0.x 扩守卫覆盖深度;
+2. emitter 级 `FixedBounds` 未携带(系统级已带);
+3. `bGpuAlwaysRunParticleUpdateScript` 未携带;
+4. DI 配置为原样 JSON 承载(可读语法挂起);裸 `DI<T>` + 链接形态的默认实例残骸计数不稳
+   (判据噪音而非数据丢失);
+5. UE 5.8.1 refPath 导入回归——引擎 bug,已绕过(`NormalizeObjectReferences`),
+   5.8.2 复测后拆除;
+6. L4 画面对比为人工可选步骤(OBS 配方已验证,未脚本化);
+7. 长尾照 README 未做栏(自定义 C++ stage 类、参数驱动迭代次数等,缺口头点名,语料无实例)。
+
+宿主项目内容插件对齐(如 NiagaraFluids)是**环境要求**而非缺陷,见 README「运行环境要求」。

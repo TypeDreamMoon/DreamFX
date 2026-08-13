@@ -1,5 +1,7 @@
 # DreamFX
 
+**1.0.0** · [CHANGELOG](CHANGELOG.md)
+
 用文本源码编写 Niagara 特效，编译生成标准 Niagara 资产。DreamShader 对材质做的事，DreamFX 对 VFX 再做一遍。
 
 **文本是唯一真相，`.uasset` 是构建产物，不手改。**
@@ -26,7 +28,7 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 | 能力 | 说明 |
 | --- | --- |
 | 文本 → Niagara 资产 | `.dfs` 全量重建，包路径与 user 变量名跨重建稳定（plan 4.5 身份契约） |
-| 诊断回映射 | 133 个 `DFXnnnn`，每条带文件、行、列 |
+| 诊断回映射 | 143 个 `DFXnnnn`，每条带文件、行、列，文档由 `gen-diagnostics.ps1` 从源码生成、`-Check` 防漂移 |
 | 全部值模式 | 字面量 / linked / enum / dynamic input（含嵌套链）/ `hlsl { }` / `curve { }` 带切线与切线模式（`Auto`/`User`/`Break`/`None`）。键以外的 DI 开关非默认、或多通道曲线的通道不同形时，自动退回逐字 JSON —— 可读形式是便利，便利没有资格丢数据 |
 | Event handler / Simulation Stage | `OnEvent(...)` 与 `Stage 名(...)` 两族栈全线往返。stage 头带迭代源、绑定网格、`ExecuteBehavior`、`FixedBounds`；`NumIterations` 与 `Enabled` 各自收**值或参数**（值位是数字/布尔即字面量，是名字即绑定） |
 | Renderer | schema 驱动的通用属性赋值（L8），任意 renderer 类型无需专门语法；`Bind` 走 binding 自己的 setter |
@@ -67,12 +69,19 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 Scratch Pad、模块内部图 lowering（档二）、GPU/CPU 条件分支、Scalability 条件逻辑、
 独立实时预览、workspace 面板。
 
-> **2026-08-12 更正**：Event handler 栈与具名 Simulation Stage **已经做了**，此处原本写着「未做」。
-> 那条判断的依据是 2026-08-07 的覆盖率实测「全项目 20 个 NS 资产用到它们的是 0 个」——
-> 而那个 0 是**读盲的假数**：普查走的是 stack 形状的读，它结构上看不见 event handler
-> 与 simulation stage（两者都不住在六个固定栈里）。真实数字是全库 27 个 stage。
-> 两族现已全线往返关账，见 [Reports/roundtrip-2026-08-12-stages.md](Reports/roundtrip-2026-08-12-stages.md)
-> 与 [Reports/stages-census-2026-08-12.md](Reports/stages-census-2026-08-12.md)。
+（Event handler 与具名 Simulation Stage 曾因覆盖率普查的读盲被误列于此——真实数字是全库
+27 个 stage——两族已于 2026-08-12 全线往返关账，见能力表与
+[Reports/roundtrip-2026-08-12-stages.md](Reports/roundtrip-2026-08-12-stages.md)。）
+
+## 运行环境要求
+
+- **双引擎**：MoonEngine（源码构建 5.8.1）与 stock installed 5.8.1 同一份源码零 `#if` 分叉;
+  `.dfm` 生成在 stock 走反射后端（启动自检,形状不符降级并点名）。
+- **宿主项目必须启用与创作项目相同的内容插件**（如 NiagaraFluids）：插件未挂载时探针没有
+  基线,引用其模块的资产会以缺口/编译错的形式显形（绝不静默,但也绝不可用）。
+- 依赖引擎的 **Niagara 外部编辑 API**（`UNiagaraExternalEditUtilities`,引擎侧标记
+  EXPERIMENTAL）：API 若在后续引擎版本漂移,`-Check` 与启动自检会显形,详见 R7 版本记录。
+- 写包命令（`build` / `corpus` / `mirror-diff` / `decompile-all`）**必须关编辑器**（见 CI 节）。
 
 ## CI
 
