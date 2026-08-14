@@ -30,6 +30,7 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformMemory.h"
 #include "JsonObjectConverter.h"
+#include "Misc/EngineVersionComparison.h"
 #include "Misc/PackageName.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -4331,8 +4332,15 @@ namespace UE::DreamFX::Editor
 			// Emitter source mode is the one the engine itself sets a stage's EnabledBinding up
 			// with (UNiagaraSimulationStageGeneric::PostInitProperties); a stage is per emitter,
 			// not per particle. ToBase() because the FVersionedNiagaraEmitter overload is deprecated.
+#if UE_VERSION_OLDER_THAN(5, 8, 0)
+			// Before 5.8 the versioned overload IS the API rather than the deprecated one, and there is
+			// no ToBase to call. Same three arguments, one fewer hop.
+			Stage->EnabledBinding.SetValue(FName(*Spec.EnabledBinding), Instance,
+				ENiagaraRendererSourceDataMode::Emitter);
+#else
 			Stage->EnabledBinding.SetValue(FName(*Spec.EnabledBinding), Instance.ToBase(),
 				ENiagaraRendererSourceDataMode::Emitter);
+#endif
 		}
 
 		// The end of the time slice: the stage moves to the engine's own id convention (its merge
@@ -4553,7 +4561,15 @@ namespace UE::DreamFX::Editor
 		//
 		// So this one function is editor-only, unlike every other call in this file. Headless builds
 		// fall back to compile events, which carry the errors that actually matter for a CI gate.
+#if !DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT
+		// And on an engine without the API at all, the compatibility layer does not reproduce it: the
+		// second, non-data-only view model it would need is the most expensive object in that layer,
+		// for a read every caller already treats as optional. Answering no here is what keeps that an
+		// honest "unavailable" rather than a quietly empty issue list.
+		return false;
+#else
 		return !IsRunningCommandlet() && FSlateApplication::IsInitialized();
+#endif
 	}
 
 	bool FNiagaraAdapter::GetStackIssues(UNiagaraSystem* System, TArray<FStackIssueInfo>& OutIssues, TArray<FString>& OutErrors)
@@ -4832,7 +4848,14 @@ namespace UE::DreamFX::Editor
 					Curves.Add(Curve);
 				}
 			},
+#if UE_VERSION_OLDER_THAN(5, 8, 0)
+			// The flags enum is 5.8's spelling of this argument; before it the same parameter is the
+			// plain bool it has always defaulted to. Passed explicitly either way so the intent is on
+			// the page rather than in a default.
+			/*bIncludeNestedObjects=*/true);
+#else
 			EGetObjectsFlags::IncludeNestedObjects);
+#endif
 
 		const int32 Refreshed = Curves.Num();
 		for (UNiagaraDataInterfaceCurveBase* Curve : Curves)

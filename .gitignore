@@ -83,3 +83,7 @@ DFX/.dfx-index.json*
 # includes the ones DreamFX generated, and a plugin-rooted export mirrors into the plugin's Content.
 # Build products of build products -- doubly not source.
 Content/Decompiled/
+
+# Written by `RunUAT BuildPlugin` into the plugin it is packaging, every run. It describes that one
+# packaging job, not this plugin, so it appears as an untracked file after every engine-matrix build.
+Config/FilterPlugin.ini

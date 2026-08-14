@@ -99,6 +99,17 @@ public class DreamFXEditor : ModuleRules
 	};
 
 	/// <summary>
+	/// The header that carries Niagara's whole external-edit API.
+	///
+	/// Epic introduced it in 5.8. Measured across every engine on this machine, 5.3 through 5.7 do not
+	/// mention `ExternalEdit` anywhere in the Niagara plugin -- the API is not renamed or moved there,
+	/// it does not exist. Of the 93 engine headers DreamFX includes, this is the only one missing on
+	/// 5.6 and 5.7, which is why one probe is enough to describe the whole gap.
+	/// </summary>
+	private const string ExternalEditHeader =
+		"Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h";
+
+	/// <summary>
 	/// NiagaraEditor's private include directory, relative to the engine root.
 	///
 	/// UNiagaraNodeParameterMapGet lives there, and a module's inputs have to come through one: a
@@ -161,6 +172,25 @@ public class DreamFXEditor : ModuleRules
 		// systems -- and a few seconds either way for the single-asset rebuild that is the normal edit.
 		bool bHasFastEdit = ProbeFastEditSupport();
 		PublicDefinitions.Add("DREAMFX_HAS_NIAGARA_FAST_EDIT=" + (bHasFastEdit ? "1" : "0"));
+
+		// Engines older than 5.8 have no external-edit API at all. The adapter is written against it and
+		// nothing else in DreamFX is, so rather than a second adapter there is a compatibility layer that
+		// re-implements the API's surface on the same view models the engine's own implementation uses --
+		// FNiagaraSystemViewModel, UNiagaraStackModuleItem, UNiagaraStackFunctionInput -- every one of
+		// which carries NIAGARAEDITOR_API on 5.6 and 5.7. The adapter includes whichever exists.
+		//
+		// Compat/ only reaches the include path on an engine that needs it, so on 5.8 and MoonEngine the
+		// header cannot be included even by accident and the shipped path is bit-for-bit what it was.
+		bool bHasExternalEdit = File.Exists(
+			Path.Combine(EngineDirectory, ExternalEditHeader.Replace('/', Path.DirectorySeparatorChar)));
+		PublicDefinitions.Add("DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT=" + (bHasExternalEdit ? "1" : "0"));
+
+		if (!bHasExternalEdit)
+		{
+			Logger.LogInformation(
+				"DreamFX: this engine has no external-edit API; building the compatibility layer instead.");
+			PrivateIncludePaths.Add(ModuleDirectory + "/Private/Compat");
+		}
 
 		if (bHasCustomHlslWrite)
 		{
