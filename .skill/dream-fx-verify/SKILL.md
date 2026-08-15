@@ -10,6 +10,26 @@ one exit code. This is the harness the other DreamFX skills call.
 
 Paths below are relative to the plugin root, `Plugins/DreamFX/`.
 
+## Prefer the `dream` MCP server when it is connected
+
+If the `dream` MCP server is available, call `dream_build` / `dream_verify` instead of the script
+below, and `dream_schema` instead of `dfx.ps1 schema`.
+
+It reaches a **running editor** through the bridge, which this script never does. Measured on this
+project: a single-file verify is 537 ms through the bridge against roughly 12 s of engine boot here,
+and a failing build reports the identical diagnostic either way. More importantly it removes the
+double-write — with an editor open there is only ever one process writing packages, so the footgun
+this page warns about below cannot happen. When no editor is running it runs this same script, and
+when the editor is *hung* it refuses both, which is the one state where neither path is safe.
+
+`dream_schema` reads the cached index off disk, so it answers in milliseconds and works with the
+editor open — the gap that made people guess input names rather than look them up.
+
+Fall back to the script when the server is not connected, and for everything the server deliberately
+does not wrap: `decompile`, `rename`, `corpus`, `mirror-diff`, `asset-diff`, `index`, `coverage`,
+`graph`. Those are low-frequency, long-running or destructive enough to want a human reading the
+output.
+
 ## Run it
 
 ```bash
