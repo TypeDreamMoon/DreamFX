@@ -146,6 +146,28 @@ Body = {
 `Particles.Color.rgb` resolves to `Particles.Color` with a swizzle: the longest dotted prefix that is a
 known or declared attribute wins.
 
+### Calling a data-interface input
+
+An input declared `DI<X> Name;` is a pin on the custom node, and its functions are called the way
+Niagara custom HLSL calls them: `Name.Function(args)`. Declare the `out` arguments as **plain,
+uninitialised locals**:
+
+```cpp
+Inputs = { DI<DreamWind> Wind; }
+Body = {
+    float3 WindVelocity;
+    float  Gust;
+    Wind.SampleWind(Particles.Position, WindVelocity, Gust);
+    Particles.Velocity = WindVelocity;
+}
+```
+
+`float Gust = 1.0;` before the call fails the CPU VM compile with `internal compiler error: out/inout
+parameters must be lvalues in call to 'SampleWind_Module_Wind'` (DFX6006): the VM's HLSL front end,
+hlslcc, constant-folds the initialised local into the argument list before it checks the out
+parameter, and a constant is not an lvalue. GPU sims accept both spellings; write the uninitialised
+form so one body compiles on both targets.
+
 ### Modules take statements; dynamic inputs take one expression
 
 A module's body is emitted verbatim — locals, branches, as many statements as you like. **That is the

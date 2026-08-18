@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### 文档
+
+- `.dfm` Body 里调用 `DI<X>` 输入的函数(`Wind.SampleWind(Particles.Position, V, G)`)时,`out` 实参必须是
+  **未初始化的局部变量**:`float G = 1.0;` 会让 CPU VM 编译报
+  `out/inout parameters must be lvalues`(DFX6006)——hlslcc 先把带初值的局部常量折叠进实参再查 out
+  形参。GPU 两种写法都过;按未初始化写,一份 Body 两端通。见 `Docs/language/dfm.md`。
+  首个外部插件 DI(DreamWind 的 `UNiagaraDataInterfaceDreamWind`)经 `DI<DreamWind>` 反射解析、
+  模块输入接线、`.dfs` 里 `User.Wind` 传参全线打通,无需 DreamFX 改动。
+
 ## 1.0.0 — 2026-08-13
 
 首个正式版本。文本源码(`.dfs` / `.dfe` / `.dfm`)→ 标准 Niagara 资产
