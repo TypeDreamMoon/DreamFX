@@ -214,10 +214,50 @@ namespace
 		return nullptr;
 	}
 
-	/** The inputs a module or a dynamic input exposes, in walk order, not descending into chains. */
+	/**
+	 * The inputs a module or a dynamic input exposes, flattened, in walk order.
+	 *
+	 * Descends INTO a function input's own children, and that is the whole point: a module's inputs are
+	 * a *hierarchy*, and an input a static switch reveals is a child of the switch rather than a sibling
+	 * of it (NiagaraStackFunctionInput.cpp, the HierarchyScriptParameter block -- one
+	 * UNiagaraStackFunctionInput per hierarchy child whose variable the current configuration uses).
+	 * `InitializeParticle`'s `Lifetime` hangs off `LifetimeMode`, `UniformSpriteSize` off
+	 * `SpriteSizeMode`. A walk that stopped at the first input found the thirteen top-level entries and
+	 * none of the conditional ones, so writing the switch appeared to do nothing and every argument it
+	 * reveals was reported as a typo.
+	 *
+	 * Stops at a Dynamic-mode input, whose children are the dynamic input chain: those are addressed by
+	 * pushing a name onto InputNameStack and belong to GetDynamicInputChain, not to this module's flat
+	 * namespace. Same two rules as the engine's ForEachFunctionInput with
+	 * { bRecurseIntoInputs = true, bRecurseIntoChainChildren = false }, which is what every 5.8 topology,
+	 * value and resolve endpoint walks with.
+	 */
 	void CollectInputs(UNiagaraStackEntry* Entry, TArray<UNiagaraStackFunctionInput*>& Out)
 	{
-		CollectDescendants<UNiagaraStackFunctionInput>(Entry, Out, /*bStopAtT=*/true);
+		if (Entry == nullptr)
+		{
+			return;
+		}
+
+		TArray<UNiagaraStackEntry*> Children;
+		Entry->GetUnfilteredChildren(Children);
+		for (UNiagaraStackEntry* Child : Children)
+		{
+			if (UNiagaraStackFunctionInput* Input = Cast<UNiagaraStackFunctionInput>(Child))
+			{
+				Out.Add(Input);
+				if (Input->GetValueMode() != UNiagaraStackFunctionInput::EValueMode::Dynamic)
+				{
+					CollectInputs(Input, Out);
+				}
+			}
+			else
+			{
+				// A category, a value collection, or the hierarchy root a dynamic input hangs its chain
+				// from -- containers the flat namespace reads through.
+				CollectInputs(Child, Out);
+			}
+		}
 	}
 
 	UNiagaraStackFunctionInput* FindInputByName(UNiagaraStackEntry* SearchRoot, FName InputName)
@@ -477,13 +517,24 @@ namespace
 		Out.bIsStaticSwitch = Input.IsStaticParameter();
 		Out.bIsDynamic = Input.GetValueMode() == UNiagaraStackFunctionInput::EValueMode::Dynamic;
 
-		// The engine folds three gates into these two flags: the runtime hidden flag (static switches and
-		// conditional logic), VisibleCondition, and EditCondition. GetShouldShowInStack is the stack's
-		// own answer to the first two -- it is what decides whether the row is drawn at all -- and
-		// GetIsEnabled carries the third. Visible-but-not-editable is exactly the EditCondition case,
-		// which is why editable is an AND rather than a copy.
-		Out.bIsVisible = Input.GetShouldShowInStack();
-		Out.bIsEditable = Out.bIsVisible && Input.GetIsEnabled();
+		// The three gating axes, composed exactly as GetStackInputTopology composes them: the runtime
+		// hidden flag (static switch and conditional logic), VisibleCondition, and EditCondition. Hidden
+		// or VisibleCondition-false is neither visible nor editable; EditCondition-false is visible but
+		// not editable, which is why editable is an AND rather than a copy.
+		//
+		// Not GetShouldShowInStack and GetIsEnabled, which were the earlier reading of the same three
+		// gates and are neither: on 5.6 and 5.7 the first answers only the stack's show-only-modified
+		// filter and the second the owning node's enabled state, so every input read back visible and
+		// editable. That was harmless while the walk stopped at the top level -- nothing hides a
+		// top-level input -- and stops being harmless the moment conditional children are collected,
+		// because a hierarchy child of an unselected branch is present and hidden. The decompiler is the
+		// reader that would have been fooled: it skips !bVisible || !bEditable, and would otherwise have
+		// written out inputs the engine considers gated off.
+		const bool bHidden = Input.GetIsHidden();
+		const bool bVisibleConditionPasses = Input.GetHasVisibleCondition() ? Input.GetVisibleConditionEnabled() : true;
+		const bool bEditConditionPasses = Input.GetHasEditCondition() ? Input.GetEditConditionEnabled() : true;
+		Out.bIsVisible = !bHidden && bVisibleConditionPasses;
+		Out.bIsEditable = Out.bIsVisible && bEditConditionPasses;
 	}
 
 	void FillModuleTopology(UNiagaraStackModuleItem& Module, FDFXExt_ModuleTopology& Out)
@@ -1097,8 +1148,12 @@ void FDreamFXExternalEditUtilities::GetDynamicInputChain(const FDFXExt_StackItem
 	{
 		To.Name = From.GetInputParameterHandle().GetName();
 		To.Type = From.GetInputType();
-		To.bIsVisible = From.GetShouldShowInStack();
-		To.bIsEditable = To.bIsVisible && From.GetIsEnabled();
+		// Same composition as FillInputTopology; see the note there.
+		const bool bHidden = From.GetIsHidden();
+		const bool bVisibleConditionPasses = From.GetHasVisibleCondition() ? From.GetVisibleConditionEnabled() : true;
+		const bool bEditConditionPasses = From.GetHasEditCondition() ? From.GetEditConditionEnabled() : true;
+		To.bIsVisible = !bHidden && bVisibleConditionPasses;
+		To.bIsEditable = To.bIsVisible && bEditConditionPasses;
 		To.bIsStaticSwitch = From.IsStaticParameter();
 		FillInputValue(From, To.Value);
 	};

@@ -4,6 +4,18 @@
 
 ### 修复
 
+- **5.6 / 5.7:静态开关暴露的条件输入现在看得见了**([#1](https://github.com/TypeDreamMoon/DreamFX/issues/1))。没有外部编辑 API 的引擎走 `Compat/` 那一层,
+  而它枚举模块输入时在第一个 `UNiagaraStackFunctionInput` 就停手。模块输入是一棵**层级**:开关揭示的输入是
+  该开关的**子节点**,不是它的兄弟——`InitializeParticle` 的 `Lifetime` 挂在 `LifetimeMode` 下,
+  `UniformSpriteSize` 挂在 `SpriteSizeMode` 下。于是探测只看得到 13 个顶层输入,写开关像是没生效,
+  它揭示的每个实参都被当成拼写错误(DFX3003)。改成引擎自己那两条规则:进入输入的子节点,
+  在 Dynamic 输入处停下(那是动态输入链,归 `GetDynamicInputChain`)。写入路径同一个解析器,
+  所以条件输入现在也能寻址。5.8 与 MoonEngine 用引擎自带 API,从来不走这条路,不受影响。
+- **5.6 / 5.7:输入的可见 / 可编辑改用引擎的三条门。** `GetIsHidden` + VisibleCondition + EditCondition,
+  与 `GetStackInputTopology` 逐字一致。原先的 `GetShouldShowInStack` / `GetIsEnabled` 在这两个引擎上
+  分别只回答「只显示已修改」过滤器和宿主节点的启用状态,一律报 true——顶层输入没有东西会隐藏它们,
+  所以此前无害;一旦开始收集条件子节点就不再无害,未被选中的分支也是存在且隐藏的子节点。
+  反编译器按 `!bVisible || !bEditable` 跳过输入,是会被骗到的那个读者。
 - **保存失败不再让编辑器崩溃。** 四处 `UPackage::SavePackage`(adapter 落盘、模块生成、模块库、
   Phase0 commandlet)都用了 `FSavePackageArgs` 的默认 `Error = GError`——GError 上的任何一条消息都是
   fatal,于是「另一个程序正在使用此文件」(两个编辑器的源码监视器同时重建同一个 `.dfs`、只读文件、
