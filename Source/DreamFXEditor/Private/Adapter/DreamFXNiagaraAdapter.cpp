@@ -1422,6 +1422,10 @@ namespace UE::DreamFX::Editor
 
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		// FSavePackageArgs::Error defaults to GError, which turns a failed save (a sharing violation when
+		// another editor writes the same asset, a read-only file...) into a fatal error that kills the
+		// editor. Route it through GWarn so the failure comes back as a build error instead.
+		SaveArgs.Error = GWarn;
 
 		if (!UPackage::SavePackage(Package, System, *FileName, SaveArgs))
 		{

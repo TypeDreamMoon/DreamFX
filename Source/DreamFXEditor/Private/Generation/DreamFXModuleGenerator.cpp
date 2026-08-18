@@ -1384,6 +1384,7 @@ namespace UE::DreamFX::Editor
 
 			FSavePackageArgs SaveArgs;
 			SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+			SaveArgs.Error = GWarn; // default GError makes a failed save fatal
 
 			if (!UPackage::SavePackage(Package, Script, *FileName, SaveArgs))
 			{

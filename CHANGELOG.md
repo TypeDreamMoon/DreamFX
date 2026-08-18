@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### 修复
+
+- **保存失败不再让编辑器崩溃。** 四处 `UPackage::SavePackage`(adapter 落盘、模块生成、模块库、
+  Phase0 commandlet)都用了 `FSavePackageArgs` 的默认 `Error = GError`——GError 上的任何一条消息都是
+  fatal,于是「另一个程序正在使用此文件」(两个编辑器的源码监视器同时重建同一个 `.dfs`、只读文件、
+  杀软占用)直接把编辑器杀掉,`SavePackage failed for ...` 那条错误路径从来到不了。改为
+  `SaveArgs.Error = GWarn`,失败回到构建错误。
+- DFX7102 不再把 `SpawnParticlesInGrid` 当作按速率生成:它和 `SpawnBurst` 一样是每循环一次的
+  burst(X·Y·Z),上限由循环决定。列表只留 `SpawnRate` / `SpawnPerUnit` / `SpawnPerFrame`。
+
 ### 文档
 
 - `.dfm` Body 里调用 `DI<X>` 输入的函数(`Wind.SampleWind(Particles.Position, V, G)`)时,`out` 实参必须是

@@ -248,7 +248,7 @@ User parameter '%s' is declared more than once.
 A Module or DynamicInput must declare Settings.Usage -- it decides which stacks the module can be placed in.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:176`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:178`
 <!-- generated:end DFX3030 -->
 
 **Cause.** `Usage` decides which stacks a module may be placed in. Without it the module exists and is unreachable from every stack.
@@ -266,7 +266,7 @@ A Module or DynamicInput must declare Settings.Usage -- it decides which stacks 
 A DynamicInput must declare Settings.Output -- its return type cannot be inferred from the body.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:184`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:186`
 <!-- generated:end DFX3031 -->
 
 **Cause.** A dynamic input's return type cannot be inferred from its body.
@@ -284,7 +284,7 @@ A DynamicInput must declare Settings.Output -- its return type cannot be inferre
 A DynamicInput's Usage must be DynamicInput, not '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:190`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:192`
 <!-- generated:end DFX3032 -->
 
 **Cause.** A `DynamicInput` document declaring a stack usage makes two statements about what it is that disagree.
@@ -302,7 +302,7 @@ A DynamicInput's Usage must be DynamicInput, not '%s'.
 Input '%s' is declared more than once.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:201`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:203`
 <!-- generated:end DFX3033 -->
 
 **Cause.** Two inputs share a name and would collide on the same `Module.` parameter.
@@ -320,7 +320,7 @@ Input '%s' is declared more than once.
 Input '%s' is marked [StaticSwitch] but is a %s. A static switch must be a bool, an int or an enum.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:216`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:218`
 <!-- generated:end DFX3034 -->
 
 **Cause.** R5: a static switch is resolved at compile time, so it has to be something a switch can branch on.
@@ -338,7 +338,7 @@ Input '%s' is marked [StaticSwitch] but is a %s. A static switch must be a bool,
 Input '%s' is a [StaticSwitch], so its default must be a compile-time constant.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:222`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:224`
 <!-- generated:end DFX3035 -->
 
 **Cause.** R5 from the other side: a switch resolved at compile time cannot take a runtime value.
@@ -356,7 +356,7 @@ Input '%s' is a [StaticSwitch], so its default must be a compile-time constant.
 The Body block is empty.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:231`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:233`
 <!-- generated:end DFX3036 -->
 
 **Cause.** An empty body generates a module that occupies a stack slot and does nothing.
@@ -374,7 +374,7 @@ The Body block is empty.
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:932`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1014`
 <!-- generated:end DFX3037 -->
 
 **Cause.** A dynamic input's body is not a single expression. The Niagara translator wraps it as `Output = (Type)( <body> );`, so statements before the return produce invalid HLSL rather than an error naming the real problem.
@@ -392,7 +392,7 @@ The Body block is empty.
 '%s' is not a stack a module can be placed in. Use one of: %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:814`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:896`
 <!-- generated:end DFX3038 -->
 
 **Cause.** `Usage` names one of the six stacks (L1) and nothing else.
@@ -410,7 +410,7 @@ The Body block is empty.
 A DynamicInput cannot return a data interface; its Output must be a value type.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:855`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:937`
 <!-- generated:end DFX3039 -->
 
 **Cause.** A dynamic input feeds a value into an input slot; a data interface is not a value.
@@ -500,7 +500,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 The default for input '%s' has to be a literal or an enum entry. A module input default is stored on the asset, so it cannot reference anything outside the module.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:885`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:967`
 <!-- generated:end DFX3044 -->
 
 **Cause.** A module input's default is stored on the asset, so it cannot reference anything outside the module.
@@ -518,7 +518,7 @@ The default for input '%s' has to be a literal or an enum entry. A module input 
 '%s' is not a type a particle attribute can have.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:417`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:499`
 <!-- generated:end DFX3045 -->
 
 **Cause.** A particle attribute was declared in a `.dfm` body with a type that is not a Niagara value type.
@@ -536,7 +536,7 @@ The default for input '%s' has to be a literal or an enum entry. A module input 
 '%s' is not a particle attribute DreamFX knows the type of. Write the type at its first use in the body -- `float %s = ...;` -- the way a .dfs declares a new attribute.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:517`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:599`
 <!-- generated:end DFX3046 -->
 
 **Cause.** A `.dfm` body touches a `Particles.*` attribute that is neither a common Niagara attribute nor declared in the body. The pin wired for it needs a type, and guessing would wire one of the wrong width.
@@ -554,7 +554,7 @@ The default for input '%s' has to be a literal or an enum entry. A module input 
 A DynamicInput computes a value; it cannot write '%s'. Move the write into a Module.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:921`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1003`
 <!-- generated:end DFX3047 -->
 
 **Cause.** A dynamic input computes a value in an input slot; it has no place in the stack to write from.

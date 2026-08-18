@@ -323,6 +323,7 @@ int32 UDreamFXPhase0Commandlet::Main(const FString& Params)
 
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		SaveArgs.Error = GWarn; // default GError makes a failed save fatal
 
 		const bool bSaved = UPackage::SavePackage(Package, System, *FileName, SaveArgs);
 		Report(TEXT("P7 SavePackage"), bSaved, false, bSaved ? FileName : TEXT("save returned false"));

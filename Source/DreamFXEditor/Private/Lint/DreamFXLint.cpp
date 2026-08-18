@@ -93,9 +93,11 @@ namespace UE::DreamFX::Editor
 		/** Finds the first spawn module whose output is a rate rather than a fixed count. */
 		const FStatement* FindUnboundedSpawnStatement(const FEmitter& Emitter)
 		{
+			// Rate spawners only. SpawnParticlesInGrid is a burst (X*Y*Z once per loop) like SpawnBurst and is
+			// bounded the same way, so it is not on the list.
 			static const TCHAR* const RateModules[] =
 			{
-				TEXT("SpawnRate"), TEXT("SpawnPerUnit"), TEXT("SpawnPerFrame"), TEXT("SpawnParticlesInGrid"),
+				TEXT("SpawnRate"), TEXT("SpawnPerUnit"), TEXT("SpawnPerFrame"),
 			};
 
 			for (const FStack& Stack : Emitter.Stacks)

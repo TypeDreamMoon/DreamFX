@@ -89,7 +89,7 @@ No Material was set, so the engine default was applied: %s. Write 'Material = \"
 SavePackage failed for '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1302`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1391`
 <!-- generated:end DFX5030 -->
 
 **Cause.** Writing the package failed -- read-only file, source control lock, or a path the process cannot write.
@@ -268,7 +268,7 @@ Data interface parameter '%s' takes its configuration as a quoted JSON object, t
 '%s' is a %s with no generated asset at '%s', and %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:717`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:799`
 <!-- generated:end DFX5100 -->
 
 **Cause.** No previously generated asset was found, and this build has no graph backend to make one. That is rarer than it used to be: an engine that does not export the five declarations still gets the reflection backend, so reaching this means its startup self-check failed and the message names which check it was. See [dfm.md](../language/dfm.md) for the three outcomes.
@@ -286,7 +286,7 @@ Data interface parameter '%s' takes its configuration as a quoted JSON object, t
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:599`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:681`
 <!-- generated:end DFX5101 -->
 
 **Cause.** The `Root="..."` on a `.dfm` does not name a mounted content root.
@@ -304,7 +304,7 @@ Data interface parameter '%s' takes its configuration as a quoted JSON object, t
 Input '%s' is marked [StaticSwitch]. Tier-one generation (plan 3.3) lowers the whole Body to a single custom HLSL node, which has no branch for a switch to select, so it is written as an ordinary input instead. The body reads it the same way; only the compile-time folding is lost.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:946`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1028`
 <!-- generated:end DFX5102 -->
 
 **Cause.** Tier-one generation (plan 3.3) puts the whole body in one custom HLSL node, which has no branch for a switch to select, so a `[StaticSwitch]` input becomes an ordinary one. Said out loud because silently downgrading a declared compile-time switch to a runtime value is the kind of difference that surfaces later as a performance question nobody can source.
@@ -322,7 +322,7 @@ Input '%s' is marked [StaticSwitch]. Tier-one generation (plan 3.3) lowers the w
 Package '%s' exists on disk but could not be loaded.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:629`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:711`
 <!-- generated:end DFX5103 -->
 
 **Cause.** The package exists on disk but would not load. Usually a partially written file or one held by another process.
@@ -340,7 +340,7 @@ Package '%s' exists on disk but could not be loaded.
 Package '%s' exists but holds no Niagara script named '%s'. Refusing to overwrite it.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:638`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:720`
 <!-- generated:end DFX5104 -->
 
 **Cause.** The target package exists and holds something other than the expected script. DreamFX refuses to overwrite it rather than replacing an unrelated asset.
@@ -358,7 +358,7 @@ Package '%s' exists but holds no Niagara script named '%s'. Refusing to overwrit
 Could not create package '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:994`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1076`
 <!-- generated:end DFX5105 -->
 
 **Cause.** The package could not be created -- usually an unmounted root or an invalid name.
@@ -376,7 +376,7 @@ Could not create package '%s'.
 Could not wire the module graph. The Niagara schema rejected a parameter map connection.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1084`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1109`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1118`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1132`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1209`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1218`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1235`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1247`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1166`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1191`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1200`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1214`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1291`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1300`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1317`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1329`
 <!-- generated:end DFX5106 -->
 
 **Cause.** The Niagara schema rejected a connection while building the module graph. A type mismatch between an input's declared type and the pin it feeds is the usual cause.
@@ -394,7 +394,7 @@ Could not wire the module graph. The Niagara schema rejected a parameter map con
 '%s' no longer matches the module asset at '%s', and this build cannot regenerate it. Rebuild it where a graph backend runs and commit the updated asset; %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:734`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:816`
 <!-- generated:end DFX5107 -->
 
 **Cause.** The `.dfm` source no longer matches its committed asset, and this build has no graph backend to regenerate it. Distinct from DFX5100 because the remedy differs: there is an asset, it is simply out of date.
