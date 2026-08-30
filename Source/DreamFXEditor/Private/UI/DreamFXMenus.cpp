@@ -3,6 +3,7 @@
 #include "DreamFXAssetCommands.h"
 
 #include "ContentBrowserMenuContexts.h"
+#include "Misc/MessageDialog.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraSystem.h"
 #include "Styling/AppStyle.h"
@@ -237,10 +238,23 @@ namespace UE::DreamFX::Editor
 		 * The combo opens the shared menu "DreamTools.OpenInVSCode"; each plugin adds its own
 		 * section there under its own owner.
 		 */
+		/**
+		 * A whole-tree rebuild behind a confirmation: it sits one menu row under the workspace
+		 * openers, and a mis-click costs minutes. Every rebuild entry in the Dream menu asks first.
+		 */
+		bool ConfirmRebuildAllDreamFX()
+		{
+			return FMessageDialog::Open(EAppMsgType::YesNo,
+				LOCTEXT("RebuildAllConfirm",
+					"Rebuild every DreamFX .dfs, .dfe and .dfm source file?\n\n"
+					"This rebuilds all generated Niagara assets and can take several minutes on a large tree."))
+				== EAppReturnType::Yes;
+		}
+
 		void EnsureDreamToolsCombo()
 		{
 			UToolMenus* ToolMenus = UToolMenus::Get();
-			const FName SharedMenuName(TEXT("DreamTools.OpenInVSCode"));
+			const FName SharedMenuName(TEXT("DreamTools.Actions"));
 
 			if (!ToolMenus->IsMenuRegistered(SharedMenuName))
 			{
@@ -265,13 +279,12 @@ namespace UE::DreamFX::Editor
 				FUIAction(),
 				FNewToolMenuChoice(FOnGetContent::CreateLambda([]
 				{
-					return UToolMenus::Get()->GenerateWidget(TEXT("DreamTools.OpenInVSCode"), FToolMenuContext());
+					return UToolMenus::Get()->GenerateWidget(TEXT("DreamTools.Actions"), FToolMenuContext());
 				})),
 				LOCTEXT("DreamToolsComboLabel", "Dream"),
 				LOCTEXT("DreamToolsComboTooltip",
-					"Open a Dream-family source workspace (DreamShader / DreamFX / DreamUI) in VSCode; Notepad stands in when VSCode is unavailable."),
-				Icon(TEXT("Icons.OpenInExternalEditor")),
-				/*bInSimpleComboBox*/ true));
+					"Dream-family language tools: open a source workspace in VSCode, or rebuild a whole source tree (DreamShader / DreamFX / DreamUI)."),
+				Icon(TEXT("Icons.OpenInExternalEditor"))));
 		}
 
 		void RegisterMenusInternal()
@@ -291,9 +304,15 @@ namespace UE::DreamFX::Editor
 				Section.AddMenuEntry(
 					TEXT("DreamFX.RebuildAll"),
 					LOCTEXT("RebuildAllLabel", "Rebuild DFX"),
-					LOCTEXT("RebuildAllTooltip", "Rebuild every DreamFX .dfs, .dfe and .dfm source file, as if each had just been saved."),
+					LOCTEXT("RebuildAllTooltip", "Rebuild every DreamFX .dfs, .dfe and .dfm source file, as if each had just been saved. Asks first."),
 					Icon(TEXT("Icons.Refresh")),
-					FUIAction(FExecuteAction::CreateStatic(&FDreamFXCommands::RebuildAll)));
+					FUIAction(FExecuteAction::CreateLambda([]
+					{
+						if (ConfirmRebuildAllDreamFX())
+						{
+							FDreamFXCommands::RebuildAll();
+						}
+					})));
 				Section.AddMenuEntry(
 					TEXT("DreamFX.VerifyAll"),
 					LOCTEXT("VerifyAllLabel", "Verify DFX"),
@@ -309,21 +328,10 @@ namespace UE::DreamFX::Editor
 			}
 
 			// --- Level Editor toolbar ---------------------------------------------------------
-			if (UToolMenu* ToolbarMenu = UToolMenus::Get()->ExtendMenu(
-				TEXT("LevelEditor.LevelEditorToolBar.AssetsToolBar")))
-			{
-				FToolMenuSection& Section = ToolbarMenu->FindOrAddSection(TEXT("DreamFX"));
-				Section.AddEntry(FToolMenuEntry::InitToolBarButton(
-					TEXT("DreamFX.RebuildAllToolbar"),
-					FUIAction(FExecuteAction::CreateStatic(&FDreamFXCommands::RebuildAll)),
-					LOCTEXT("RebuildAllToolbarLabel", "DFX"),
-					LOCTEXT("RebuildAllToolbarTooltip", "Rebuild every DreamFX source file."),
-					Icon(TEXT("Icons.Refresh"))));
-			}
-
-			// The open-in-VSCode door moved into the Dream-family combo: three plugins, one button.
+			// Both toolbar buttons moved into the Dream-family combo: three plugins, one button, and
+			// the whole-tree rebuild now asks before it runs.
 			EnsureDreamToolsCombo();
-			if (UToolMenu* SharedMenu = UToolMenus::Get()->ExtendMenu(TEXT("DreamTools.OpenInVSCode")))
+			if (UToolMenu* SharedMenu = UToolMenus::Get()->ExtendMenu(TEXT("DreamTools.Actions")))
 			{
 				FToolMenuSection& SharedSection = SharedMenu->FindOrAddSection(TEXT("DreamFX"),
 					LOCTEXT("DreamFXSharedSectionLabel", "DreamFX"));
@@ -333,6 +341,18 @@ namespace UE::DreamFX::Editor
 					LOCTEXT("OpenWorkspaceToolbarTooltip", "Open the DreamFX source workspace in VSCode, or Notepad if VSCode is unavailable."),
 					Icon(TEXT("Icons.OpenInExternalEditor")),
 					FUIAction(FExecuteAction::CreateStatic(&FDreamFXCommands::OpenWorkspace)));
+				SharedSection.AddMenuEntry(
+					TEXT("DreamFX.RebuildAllShared"),
+					LOCTEXT("RebuildAllSharedLabel", "Rebuild DFX"),
+					LOCTEXT("RebuildAllSharedTooltip", "Rebuild every DreamFX .dfs, .dfe and .dfm source file, as if each had just been saved. Asks first."),
+					Icon(TEXT("Icons.Refresh")),
+					FUIAction(FExecuteAction::CreateLambda([]
+					{
+						if (ConfirmRebuildAllDreamFX())
+						{
+							FDreamFXCommands::RebuildAll();
+						}
+					})));
 			}
 
 			// --- Content Browser right-click --------------------------------------------------
