@@ -43,6 +43,18 @@ namespace UE::DreamFX
 
 			bool ParseSettingsBlock(TArray<FPropertyEntry>& OutProperties);
 			bool ParseParameterBlock(TArray<FParameterDecl>& OutParameters);
+			/**
+			 * The statement loop shared by `Properties = {}` / `Inputs = {}` and the
+			 * Group("Name") { ... } scopes they may contain (DreamShader-parity parameter groups).
+			 * Parameters inside a scope inherit the composed group name and an auto-incrementing
+			 * SortPriority (step 10, one counter across the whole block); an explicit Group or
+			 * SortPriority attribute on the parameter itself wins and does not consume an auto slot.
+			 */
+			bool ParseParameterScope(TArray<FParameterDecl>& OutParameters, const FString& InheritedGroup, int32& InOutNextAutoSort);
+			/** Parses `Group("Name") { ... }` after its Group head token was consumed. */
+			bool ParseGroupScope(TArray<FParameterDecl>& OutParameters, const FString& InheritedGroup, int32& InOutNextAutoSort);
+			/** Folds the inherited group and auto-sort into plain attributes on one parameter. */
+			void StampParameterGroup(FParameterDecl& Parameter, const FString& InheritedGroup, int32& InOutNextAutoSort);
 			bool ParseStackBlock(FStack& OutStack);
 			bool ParseEventHandlerArguments(FEventHandlerSpec& OutSpec);
 			bool ParseSimulationStageArguments(FSimulationStageSpec& OutSpec);
@@ -723,8 +735,39 @@ namespace UE::DreamFX
 				return false;
 			}
 
+			// DreamShader parity: the auto-sort counter is shared across the whole block, so groups
+			// number their members in one continuous 10, 20, 30 ... sequence regardless of nesting.
+			int32 NextAutoSort = 10;
+			return ParseParameterScope(OutParameters, FString(), NextAutoSort);
+		}
+
+		bool FParserImpl::ParseParameterScope(TArray<FParameterDecl>& OutParameters, const FString& InheritedGroup, int32& InOutNextAutoSort)
+		{
 			while (!Lexer.Peek().IsEnd() && !Lexer.Peek().IsSymbol(TEXT("}")))
 			{
+				// Group("Name") { ... } -- the only form that may open a brace inside a parameter
+				// block. Case-insensitive on the keyword, matching DreamShader's TryMatchGroupHead.
+				if (Lexer.Peek().Kind == ETokenKind::Identifier
+					&& Lexer.Peek().Text.Equals(TEXT("Group"), ESearchCase::IgnoreCase)
+					&& Lexer.Peek(1).IsSymbol(TEXT("(")))
+				{
+					if (!ParseGroupScope(OutParameters, InheritedGroup, InOutNextAutoSort))
+					{
+						return false;
+					}
+					continue;
+				}
+
+				// A bare '{' here is almost certainly a mistyped group scope; name the one legal
+				// form instead of letting it fail later as "expected a name".
+				if (Lexer.Peek().IsSymbol(TEXT("{")))
+				{
+					ErrorAtCurrent(TEXT("DFX2029"),
+						TEXT("Unexpected '{' in a parameter block. Only Group(\"Name\") { ... } may open a brace here."));
+					SkipBalancedBlock();
+					continue;
+				}
+
 				FParameterDecl Parameter;
 				Parameter.Location = Lexer.Peek().Location;
 
@@ -753,10 +796,88 @@ namespace UE::DreamFX
 					continue;
 				}
 				Lexer.TryConsumeSymbol(TEXT(";"));
+
+				StampParameterGroup(Parameter, InheritedGroup, InOutNextAutoSort);
 				OutParameters.Add(MoveTemp(Parameter));
 			}
 
 			return Expect(TEXT("}"));
+		}
+
+		bool FParserImpl::ParseGroupScope(TArray<FParameterDecl>& OutParameters, const FString& InheritedGroup, int32& InOutNextAutoSort)
+		{
+			const FSourceLocation HeadLocation = Lexer.Peek().Location;
+			Lexer.Next(); // Group
+
+			if (!Expect(TEXT("(")))
+			{
+				return false;
+			}
+
+			const FToken& NameToken = Lexer.Peek();
+			if (NameToken.Kind != ETokenKind::String)
+			{
+				Diagnostics.Error(TEXT("DFX2027"), NameToken.Location,
+					TEXT("Group(...) takes a quoted name: Group(\"Name\") { ... }."));
+				return false;
+			}
+			FString GroupName = Lexer.Next().Text;
+
+			if (GroupName.TrimStartAndEnd().IsEmpty())
+			{
+				Diagnostics.Error(TEXT("DFX2028"), HeadLocation,
+					TEXT("Group(...) requires a non-empty name."));
+				return false;
+			}
+
+			if (!Expect(TEXT(")")) || !Expect(TEXT("{")))
+			{
+				return false;
+			}
+
+			// Nested Group("Outer") { Group("Inner") { ... } } composes into "Outer|Inner", matching
+			// Unreal's native '|' sub-category syntax, which is what DreamShader does too.
+			const FString ComposedGroup = InheritedGroup.IsEmpty()
+				? GroupName
+				: InheritedGroup + TEXT("|") + GroupName;
+
+			if (!ParseParameterScope(OutParameters, ComposedGroup, InOutNextAutoSort))
+			{
+				return false;
+			}
+
+			// A trailing separator after the closing brace is tolerated, as in DreamShader.
+			Lexer.TryConsumeSymbol(TEXT(";"));
+			return true;
+		}
+
+		void FParserImpl::StampParameterGroup(FParameterDecl& Parameter, const FString& InheritedGroup, int32& InOutNextAutoSort)
+		{
+			if (InheritedGroup.IsEmpty())
+			{
+				// Top-level (ungrouped) parameters keep today's behaviour: no group, no auto-sort.
+				return;
+			}
+
+			if (!Parameter.HasAttribute(TEXT("Group")))
+			{
+				FAttribute Attribute;
+				Attribute.Key = TEXT("Group");
+				Attribute.Value = FValue::MakeString(InheritedGroup, Parameter.Location);
+				Attribute.Location = Parameter.Location;
+				Parameter.Attributes.Add(MoveTemp(Attribute));
+			}
+
+			// An explicit SortPriority wins and does not consume an auto slot.
+			if (!Parameter.HasAttribute(TEXT("SortPriority")))
+			{
+				FAttribute Attribute;
+				Attribute.Key = TEXT("SortPriority");
+				Attribute.Value = FValue::MakeNumber(InOutNextAutoSort, true, Parameter.Location);
+				Attribute.Location = Parameter.Location;
+				Parameter.Attributes.Add(MoveTemp(Attribute));
+				InOutNextAutoSort += 10;
+			}
 		}
 
 		bool FParserImpl::ParseStatement(FStack& OutStack, TArray<FString>& RegionStack)
