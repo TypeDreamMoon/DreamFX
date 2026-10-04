@@ -241,6 +241,8 @@ Data interface parameter '%s' takes its configuration as a quoted JSON object, t
 
 ## DFX5099
 
+> **Retired.** [Group] and [SortPriority] now reach the asset: the adapter rebuilds the system's user parameter hierarchy (`UNiagaraSystemEditorData::UserParameterHierarchy`) from the plan, so the details panel groups and orders parameters the way the source lays them out. UE 5.8's per-variable `CategoryName` / `EditorSortPriority` metadata is deprecated engine-side; the hierarchy is what the parameters panel actually reads. Hand-made arrangement inside the editor does not survive a rebuild — the plan is the whole truth about organization.
+
 <!-- generated:begin DFX5099 -->
 **Severity** info
 
@@ -250,7 +252,7 @@ Data interface parameter '%s' takes its configuration as a quoted JSON object, t
 [Group] and [SortPriority] are kept in source only: the external edit API's user variable struct has no metadata fields to write them to.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1815`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp`
 <!-- generated:end DFX5099 -->
 
 **Cause.** `[Group]` and `[SortPriority]` have nowhere to go: the external edit API's user variable struct carries name, type and description and no other metadata.
@@ -400,4 +402,20 @@ Could not wire the module graph. The Niagara schema rejected a parameter map con
 **Cause.** The `.dfm` source no longer matches its committed asset, and this build has no graph backend to regenerate it. Distinct from DFX5100 because the remedy differs: there is an asset, it is simply out of date.
 
 **Fix.** Rebuild the module where a backend runs and commit the updated asset. The trailing half of the message names the check that failed, which is what to fix if you expected this engine to be able to generate.
+
+## DFX5108
+
+**Severity** error
+
+**Message**
+
+```
+User parameter '%s' has no script variable to organize.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Adapter/DreamFXNiagaraAdapter.cpp`
+
+**Cause.** While rebuilding the user parameter hierarchy (where [Group=..] / [SortPriority=..] land), a planned user variable had no matching script variable in the asset — the add loop above it either failed silently or the plan and the asset disagree.
+
+**Fix.** Fix the error the build reports above this one; the organization pass runs after every user variable exists, so a clean add loop never lands here.
 

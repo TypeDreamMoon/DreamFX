@@ -136,6 +136,9 @@ public class DreamFXEditor : ModuleRules
 				"ContentBrowser",
 				"Core",
 				"CoreUObject",
+				// The user parameter hierarchy (UHierarchyRoot / UHierarchyCategory) the details panel
+				// reads to group user parameters -- where [Group=..] / [SortPriority=..] now land.
+				"DataHierarchyEditor",
 				"DeveloperSettings",
 				"DirectoryWatcher",
 				"DreamFX",

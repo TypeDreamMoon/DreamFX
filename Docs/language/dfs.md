@@ -77,9 +77,12 @@ slot; loose top-level parameters carry neither. The keyword is case-insensitive.
 Three diagnostics guard the form: DFX2027 (the name must be a quoted string), DFX2028 (it must be
 non-empty), and DFX2029 (no other form may open a brace inside a parameter block).
 
-`Description` reaches the asset. `Group` and `SortPriority` do not — the external edit API's user
-variable struct has no metadata fields for them, which the build says once as DFX5099. They stay in
-the source as documentation.
+`Description` reaches the asset, and so do `Group` and `SortPriority`: the adapter rebuilds the
+system's user parameter hierarchy (`UNiagaraSystemEditorData::UserParameterHierarchy`) from the
+plan, so the details panel groups and orders parameters the way the source lays them out. UE 5.8's
+per-variable `CategoryName` / `EditorSortPriority` metadata is deprecated engine-side — the
+hierarchy is what the parameters panel actually reads. The plan is the whole truth about
+organization: hand-made arrangement inside the editor does not survive a rebuild.
 
 Data interface parameters carry their configuration, as the quoted JSON blob the exporter writes:
 

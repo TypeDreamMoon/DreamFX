@@ -239,6 +239,10 @@ namespace UE::DreamFX::Editor
 			FInputValue DefaultValue;
 			/** A `DI<T>` parameter's declared configuration, verbatim. Empty for every other type. */
 			FString DataInterfaceJson;
+			/** Composed group path ("Outer|Inner"), from [Group=..] or a Group("Name") { ... } scope. Empty = top level. */
+			FString GroupPath;
+			/** Explicit [SortPriority=..]; INDEX_NONE = none written, plan order decides. */
+			int32 SortPriority = INDEX_NONE;
 			FSourceLocation Location;
 		};
 
@@ -1721,7 +1725,6 @@ namespace UE::DreamFX::Editor
 			// `User.Foo` needs its declared type to be resolvable.
 			TMap<FName, FNiagaraTypeDefinition> UserVariableTypes;
 			TSet<FName> DeclaredUserNames;
-			bool bWarnedAboutMetadata = false;
 
 			for (const FParameterDecl& Declaration : Document.Parameters)
 			{
@@ -1806,15 +1809,24 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
-				// Group / SortPriority have nowhere to go: FNiagaraExt_UserVariable carries only Name,
-				// Type, DefaultValue and Description. Documented as the 2.5 fallback -- they stay in
-				// text so the source keeps its intent, but they do not reach the asset.
-				if (!bWarnedAboutMetadata
-					&& (Declaration.HasAttribute(TEXT("Group")) || Declaration.HasAttribute(TEXT("SortPriority"))))
+				// Group / SortPriority reach the asset as organization: the adapter rebuilds the
+				// system's user parameter hierarchy from the plan, so the details panel groups and
+				// orders parameters the way the source lays them out. The per-variable metadata
+				// fields (CategoryName / EditorSortPriority) are deprecated engine-side in 5.8;
+				// the hierarchy is what the parameters panel actually reads.
+				if (const FAttribute* GroupAttribute = Declaration.FindAttribute(TEXT("Group")))
 				{
-					Diagnostics.Info(TEXT("DFX5099"), Declaration.Location,
-						TEXT("[Group] and [SortPriority] are kept in source only: the external edit API's user variable struct has no metadata fields to write them to."));
-					bWarnedAboutMetadata = true;
+					if (GroupAttribute->Value.IsValid())
+					{
+						Planned.GroupPath = GroupAttribute->Value->Text;
+					}
+				}
+				if (const FAttribute* SortAttribute = Declaration.FindAttribute(TEXT("SortPriority")))
+				{
+					if (SortAttribute->Value.IsValid() && SortAttribute->Value->Kind == EValueKind::Number)
+					{
+						Planned.SortPriority = static_cast<int32>(SortAttribute->Value->Number);
+					}
 				}
 
 				UserVariableTypes.Add(QualifiedName, Type);
@@ -2781,6 +2793,10 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
+			// Group / SortPriority are applied in FinalizeBuild, after the compile and every
+			// parameter sync have settled: the hierarchy rebuild is the last word on organization,
+			// and anything the compile's user-parameter sync does to it cannot outlive the build.
+
 			if (!Plan.SystemPropertiesJson.IsEmpty())
 			{
 				Errors.Reset();
@@ -3423,6 +3439,30 @@ namespace UE::DreamFX::Editor
 					Diagnostics.Error(TEXT("DFX6008"), Pending.HeaderLocation,
 						FString::Printf(TEXT("'%s' finished its compile with stale scripts: %s. The compiled VM was not rebuilt from the graphs this build wrote, so the asset would simulate something other than what the source says. This is a DreamFX pipeline defect -- report it with this source file."),
 							*Pending.Plan.FullAssetPath, *FString::Join(StaleScripts, TEXT(", "))));
+					return false;
+				}
+			}
+
+			// Group / SortPriority land here, after the compile and every user-parameter sync have
+			// settled: the hierarchy rebuild is the last word on organization, and nothing further
+			// in the build can reshuffle it. (Writing it earlier in ApplyPlan does not survive the
+			// compile's own sync, which reorders the user parameter hierarchy.)
+			{
+				TArray<FNiagaraAdapter::FUserVariablePlacement> Placements;
+				Placements.Reserve(Pending.Plan.UserVariables.Num());
+				for (const FPlannedUserVariable& Variable : Pending.Plan.UserVariables)
+				{
+					FNiagaraAdapter::FUserVariablePlacement& Placement = Placements.AddDefaulted_GetRef();
+					Placement.Name = Variable.Name;
+					Placement.Type = Variable.Type;
+					Placement.GroupPath = Variable.GroupPath;
+					Placement.SortPriority = Variable.SortPriority;
+				}
+
+				Errors.Reset();
+				if (!FNiagaraAdapter::SetUserVariableOrganization(System, Placements, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5108"), Pending.HeaderLocation, Diagnostics);
 					return false;
 				}
 			}
