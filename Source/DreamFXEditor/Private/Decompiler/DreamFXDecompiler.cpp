@@ -2487,8 +2487,9 @@ namespace UE::DreamFX::Editor
 				// Sorted, because the order the API reports user variables in is not stable across a
 				// rebuild: exporting a system, rebuilding from the export and exporting again produced
 				// the same parameters in a different order, which breaks the idempotence the round-trip
-				// contract rests on. Nothing is lost by sorting -- Group and SortPriority never reach
-				// the asset (DFX5099), so declaration order carries no meaning to recover.
+				// contract rests on. Nothing is lost by sorting -- the user parameter hierarchy does
+				// carry organization now, but recovering groups from it is future work, not something
+				// the flat declaration order can express.
 				UserVariables.Sort([](const FUserVariableInfo& Left, const FUserVariableInfo& Right)
 				{
 					return Left.Name.LexicalLess(Right.Name);

@@ -5,8 +5,11 @@
 #include "EdGraphSchema_Niagara.h"
 #include "ViewModels/Stack/NiagaraParameterHandle.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
+#include "DataHierarchyViewModelBase.h"
 #include "NiagaraCommon.h"
 #include "NiagaraEditorUtilities.h"
+#include "NiagaraSystemEditorData.h"
+#include "ViewModels/HierarchyEditor/NiagaraUserParametersHierarchyViewModel.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraDataInterfaceCurveBase.h"
 #include "NiagaraEmitter.h"
@@ -1924,6 +1927,143 @@ namespace UE::DreamFX::Editor
 			FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
 			System->PostEditChangeProperty(PropertyChangedEvent);
 		}
+		return true;
+	}
+
+	bool FNiagaraAdapter::SetUserVariableOrganization(UNiagaraSystem* System,
+		const TArray<FUserVariablePlacement>& Placements, TArray<FString>& OutErrors)
+	{
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot organize user variables on a null system."));
+			return false;
+		}
+
+		// Resolve every placement to its script variable before mutating anything, so one
+		// dangling name fails the whole call and leaves the previous arrangement untouched.
+		struct FResolvedPlacement
+		{
+			UNiagaraScriptVariable* Variable = nullptr;
+			FString GroupPath;
+			int32 SortPriority = 0;
+			int32 PlanIndex = 0;
+			int32 GroupOrdinal = 0;
+		};
+		TArray<FResolvedPlacement> Resolved;
+		Resolved.Reserve(Placements.Num());
+
+		for (int32 Index = 0; Index < Placements.Num(); ++Index)
+		{
+			const FUserVariablePlacement& Placement = Placements[Index];
+			const FNiagaraVariable Variable(Placement.Type, Placement.Name);
+			UNiagaraScriptVariable* ScriptVariable =
+				FNiagaraEditorUtilities::UserParameters::GetScriptVariableForUserParameter(Variable, *System);
+			if (ScriptVariable == nullptr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("User parameter '%s' has no script variable to organize."),
+					*Placement.Name.ToString()));
+				return false;
+			}
+			Resolved.Add({ScriptVariable, Placement.GroupPath, Placement.SortPriority, Index});
+		}
+
+		// Two-level order, kept separate on purpose: groups come in plan first-appearance order,
+		// and members come after their group's own members, ordered by SortPriority with plan
+		// order breaking ties. Sorting group and member order in one composite key lets a member's
+		// SortPriority compete with another group's placement, which scrambles the tree.
+		TMap<FString, int32> GroupOrdinals;
+		for (FResolvedPlacement& Placement : Resolved)
+		{
+			Placement.GroupOrdinal = GroupOrdinals.FindOrAdd(Placement.GroupPath, GroupOrdinals.Num());
+		}
+		Resolved.StableSort([](const FResolvedPlacement& Left, const FResolvedPlacement& Right)
+		{
+			if (Left.GroupOrdinal != Right.GroupOrdinal)
+			{
+				return Left.GroupOrdinal < Right.GroupOrdinal;
+			}
+			return Left.SortPriority < Right.SortPriority;
+		});
+
+		UNiagaraSystemEditorData* EditorData = Cast<UNiagaraSystemEditorData>(System->GetEditorData());
+		if (EditorData == nullptr)
+		{
+			OutErrors.Add(TEXT("The system has no editor data to hold a user parameter hierarchy."));
+			return false;
+		}
+
+		UHierarchyRoot* Root = EditorData->UserParameterHierarchy;
+		if (Root == nullptr)
+		{
+			Root = NewObject<UHierarchyRoot>(EditorData, TEXT("UserParameterHierarchy"));
+			EditorData->UserParameterHierarchy = Root;
+		}
+
+		EditorData->Modify();
+		Root->Modify();
+		// The plan is the whole truth about organization, so the tree rebuilds from scratch:
+		// hand-made arrangement in the editor does not survive a rebuild, exactly like every
+		// other property the source owns.
+		Root->EmptyAllData();
+
+		// UNiagaraHierarchyUserParameter carries no exported API in stock 5.8 -- its Initialize
+		// and StaticClass are module-private -- so the leaf node is built through reflection:
+		// look the class up, new it against the root, write its one UPROPERTY reference, and set
+		// the guid identity the panel maps back to the variable. Exactly what the engine's own
+		// Initialize does.
+		UClass* UserParameterItemType = FindFirstObjectSafe<UClass>(TEXT("NiagaraHierarchyUserParameter"));
+		const FObjectProperty* ReferenceProperty = UserParameterItemType
+			? CastField<FObjectProperty>(UserParameterItemType->FindPropertyByName(TEXT("UserParameterScriptVariable")))
+			: nullptr;
+		if (UserParameterItemType == nullptr || ReferenceProperty == nullptr)
+		{
+			OutErrors.Add(TEXT("The engine exposes no UNiagaraHierarchyUserParameter class or its UserParameterScriptVariable property; user parameter groups cannot be written."));
+			return false;
+		}
+
+		auto MakeParameterItem = [&Root, UserParameterItemType, ReferenceProperty](
+			UNiagaraScriptVariable* ScriptVariable) -> UHierarchyElement*
+		{
+			UHierarchyItem* Item = NewObject<UHierarchyItem>(Root, UserParameterItemType, NAME_None);
+			// Container form: Item is the owning object, not the property's memory address --
+			// the plain SetObjectPropertyValue would overwrite the object header.
+			ReferenceProperty->SetObjectPropertyValue_InContainer(Item, ScriptVariable);
+			Item->SetIdentity(FHierarchyElementIdentity({ScriptVariable->Metadata.GetVariableGuid()}, {}));
+			return Item;
+		};
+
+		auto FindOrCreateCategory = [&Root](UHierarchyElement* Parent, const FString& Segment) -> UHierarchyElement*
+		{
+			const FHierarchyElementIdentity Identity(TArray<FGuid>(), {FName(*Segment)});
+			if (UHierarchyElement* Existing = Parent->FindChildWithIdentity(Identity))
+			{
+				return Existing;
+			}
+			UHierarchyCategory* Category = NewObject<UHierarchyCategory>(Root);
+			Category->SetCategoryName(FName(*Segment));
+			Category->SetIdentity(Identity);
+			Parent->GetChildrenMutable().Add(Category);
+			return Category;
+		};
+
+		for (const FResolvedPlacement& Placement : Resolved)
+		{
+			UHierarchyElement* Parent = Root;
+			if (!Placement.GroupPath.IsEmpty())
+			{
+				// Nested groups compose with '|', so a single Group("A|B") attribute and a
+				// Group("A") { Group("B") { ... } } nesting land in the same tree shape.
+				TArray<FString> Segments;
+				Placement.GroupPath.ParseIntoArray(Segments, TEXT("|"));
+				for (FString& Segment : Segments)
+				{
+					Parent = FindOrCreateCategory(Parent, Segment);
+				}
+			}
+
+			Parent->GetChildrenMutable().Add(MakeParameterItem(Placement.Variable));
+		}
+
 		return true;
 	}
 

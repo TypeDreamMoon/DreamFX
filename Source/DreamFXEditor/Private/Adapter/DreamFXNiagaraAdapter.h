@@ -650,6 +650,34 @@ namespace UE::DreamFX::Editor
 		static bool RemoveUserVariable(UNiagaraSystem* System, FName Name, const FNiagaraTypeDefinition& Type,
 			TArray<FString>& OutErrors);
 
+		/** One parameter's placement in the details panel, as the source laid it out. */
+		struct FUserVariablePlacement
+		{
+			FName Name;
+			FNiagaraTypeDefinition Type;
+			/** Composed group path ("Outer|Inner"), the same form the parser folds into [Group=..]. Empty = top level. */
+			FString GroupPath;
+			/** Effective order within the group; plan order already resolved explicit vs auto-stamped values. */
+			int32 SortPriority = 0;
+		};
+
+		/**
+		 * Rebuilds the system's user parameter hierarchy from the plan, so the details panel groups
+		 * and orders user parameters the way the source lays them out.
+		 *
+		 * This is where [Group=..] / [SortPriority=..] reach the asset in UE 5.8: the per-variable
+		 * CategoryName / EditorSortPriority metadata is deprecated engine-side, and the parameters
+		 * panel reads UNiagaraSystemEditorData::UserParameterHierarchy -- a DataHierarchyEditor tree
+		 * whose categories are groups and whose leaves reference the user variables by guid.
+		 *
+		 * The plan is the whole truth about organization, so the tree is rebuilt from scratch on
+		 * every call: hand-made arrangement in the editor does not survive a rebuild, exactly like
+		 * every other property the source owns. Call after the AddUserVariable loop, which is what
+		 * creates the variables this references.
+		 */
+		static bool SetUserVariableOrganization(UNiagaraSystem* System,
+			const TArray<FUserVariablePlacement>& Placements, TArray<FString>& OutErrors);
+
 		/**
 		 * Applies a user data-interface parameter's declared configuration to the system's own
 		 * instance of it. Call after AddUserVariable, which is what creates that instance.
