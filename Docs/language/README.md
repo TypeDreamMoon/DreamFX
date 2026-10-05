@@ -28,6 +28,8 @@ path relative to that root's content directory.
 
 Blocks are `Name = { ... }`, statements end in `;`, and `//` and `/* */` are comments.
 Attributes hang off a declaration in brackets: `[ Group="Burst"; SortPriority=10 ]`.
+Inside `Properties` / `Inputs`, `Group("Name") { ... }` scopes stamp those two attributes onto
+every parameter they contain — see [dfs.md](dfs.md).
 
 ## What is deliberately not here
 

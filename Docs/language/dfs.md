@@ -52,6 +52,31 @@ Properties = {
 Each becomes `User.<Name>`, settable from blueprint with `SetNiagaraVariable*`. The name is a stable
 key across rebuilds (plan 4.5), so renaming one breaks every blueprint that referenced it.
 
+Parameters can also be organized with `Group("Name") { ... }` scopes, matching DreamShader:
+
+```cpp
+Properties = {
+    Group("Burst") {
+        int   SparkCount = 24;
+        float SparkSpeed = 450.0;
+    }
+    Group("Look") {
+        Color TintA = (1.0, 0.72, 0.25, 1.0);
+    }
+    float Loose = 1.0;
+}
+```
+
+Every parameter inside a scope inherits the group name, and a `SortPriority` is stamped by
+declaration order — step 10, one counter shared across the whole block, so groups and nesting
+number their members in one continuous sequence. Nesting composes with `|`, Unreal's sub-category
+syntax: `Group("Outer") { Group("Inner") { … } }` names its members `Outer|Inner`. An explicit
+`[ Group=… ]` or `[ SortPriority=… ]` on the parameter itself wins and does not consume an auto
+slot; loose top-level parameters carry neither. The keyword is case-insensitive.
+
+Three diagnostics guard the form: DFX2027 (the name must be a quoted string), DFX2028 (it must be
+non-empty), and DFX2029 (no other form may open a brace inside a parameter block).
+
 `Description` reaches the asset. `Group` and `SortPriority` do not — the external edit API's user
 variable struct has no metadata fields for them, which the build says once as DFX5099. They stay in
 the source as documentation.
