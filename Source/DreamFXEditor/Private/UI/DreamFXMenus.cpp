@@ -5,6 +5,7 @@
 #include "ContentBrowserMenuContexts.h"
 #include "Misc/MessageDialog.h"
 #include "NiagaraEmitter.h"
+#include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "Styling/AppStyle.h"
 #include "ToolMenus.h"
@@ -166,6 +167,83 @@ namespace UE::DreamFX::Editor
 				Icon(TEXT("Icons.Settings")));
 		}
 
+		/**
+		 * The DreamFX submenu for one standalone script -- the asset kind .dfm builds.
+		 *
+		 * Only the Source state exists: a .dfm-generated script is always generated (there is no
+		 * script decompiler yet), so an unstamped script offers nothing. The three entries are the
+		 * same UObject-based commands the system menu uses; the stamp recorded by the module
+		 * generator is what OpenSource/Rebuild/Verify resolve against.
+		 */
+		void PopulateScriptMenu(UToolMenu* Menu, TWeakObjectPtr<UNiagaraScript> WeakScript)
+		{
+			UNiagaraScript* Script = WeakScript.Get();
+			if (Script == nullptr || !FDreamFXCommands::HasProvenance(Script))
+			{
+				return;
+			}
+
+			FToolMenuSection& Section = Menu->FindOrAddSection(
+				TEXT("DreamFX.SourceActions"), LOCTEXT("ScriptSourceSection", "Source"));
+
+			Section.AddMenuEntry(
+				TEXT("DreamFX.ScriptOpenSource"),
+				LOCTEXT("ScriptOpenSourceLabel", "Open Source"),
+				LOCTEXT("ScriptOpenSourceTooltip", "Open the .dfm this script was generated from, in VSCode."),
+				Icon(TEXT("Icons.OpenInExternalEditor")),
+				FUIAction(FExecuteAction::CreateLambda([WeakScript]()
+				{
+					FDreamFXCommands::OpenSource(WeakScript.Get());
+				})));
+
+			Section.AddMenuEntry(
+				TEXT("DreamFX.ScriptRebuildFromSource"),
+				LOCTEXT("ScriptRebuildFromSourceLabel", "Rebuild from Source"),
+				LOCTEXT("ScriptRebuildFromSourceTooltip", "Rebuild this script from its .dfm, as if the file had just been saved."),
+				Icon(TEXT("Icons.Refresh")),
+				FUIAction(FExecuteAction::CreateLambda([WeakScript]()
+				{
+					FDreamFXCommands::RebuildFromSource(WeakScript.Get());
+				})));
+
+			Section.AddMenuEntry(
+				TEXT("DreamFX.ScriptVerifyAsset"),
+				LOCTEXT("ScriptVerifyAssetLabel", "Verify"),
+				LOCTEXT("ScriptVerifyAssetTooltip", "Check this script against its .dfm without writing anything."),
+				Icon(TEXT("Icons.Adjust")),
+				FUIAction(FExecuteAction::CreateLambda([WeakScript]()
+				{
+					FDreamFXCommands::VerifyAsset(WeakScript.Get());
+				})));
+		}
+
+		/** Content Browser right-click for standalone scripts (.dfm-built modules and dynamic inputs). */
+		void PopulateScriptAssetMenu(FToolMenuSection& InSection)
+		{
+			const UContentBrowserAssetContextMenuContext* Context =
+				UContentBrowserAssetContextMenuContext::FindContextWithAssets(InSection);
+			if (Context == nullptr || Context->SelectedAssets.Num() != 1)
+			{
+				return;
+			}
+
+			// Unlike a system's, a script's submenu has only the Source state, so a script DreamFX did not
+			// generate -- every stock module and dynamic input -- would get an entry that opens onto nothing.
+			UNiagaraScript* Script = Cast<UNiagaraScript>(Context->SelectedAssets[0].GetAsset());
+			if (Script == nullptr || !FDreamFXCommands::HasProvenance(Script))
+			{
+				return;
+			}
+
+			InSection.AddSubMenu(
+				TEXT("DreamFX.ScriptActions"),
+				LOCTEXT("ScriptActionsLabel", "DreamFX"),
+				LOCTEXT("ScriptActionsTooltip", "DreamFX actions for this Niagara Script. Requires exactly one selected asset."),
+				FNewToolMenuDelegate::CreateStatic(&PopulateScriptMenu, TWeakObjectPtr<UNiagaraScript>(Script)),
+				false,
+				Icon(TEXT("Icons.Settings")));
+		}
+
 		/** Content Browser right-click. Single selection only, same limit DreamShader ships. */
 		void PopulateSystemAssetMenu(FToolMenuSection& InSection)
 		{
@@ -226,6 +304,45 @@ namespace UE::DreamFX::Editor
 					&PopulateSystemMenu, TWeakObjectPtr<UNiagaraSystem>(System))),
 				LOCTEXT("SystemToolbarLabel", "DreamFX"),
 				LOCTEXT("SystemToolbarTooltip", "DreamFX actions for this Niagara System."),
+				Icon(TEXT("Icons.Settings"))));
+		}
+
+		/**
+		 * Niagara script editor toolbar (`AssetEditor.NiagaraScriptEditor.ToolBar`) -- the editor
+		 * that opens for a standalone UNiagaraScript, exactly the asset kind .dfm builds.
+		 * Same combo-button shape as the system editor toolbar, and only on a script DreamFX generated:
+		 * the menu behind it has nothing for any other, and that editor opens for every stock module.
+		 */
+		void PopulateScriptEditorToolbar(FToolMenuSection& InSection)
+		{
+			const UAssetEditorToolkitMenuContext* Context = InSection.FindContext<UAssetEditorToolkitMenuContext>();
+			if (Context == nullptr)
+			{
+				return;
+			}
+
+			UNiagaraScript* Script = nullptr;
+			for (UObject* Object : Context->GetEditingObjects())
+			{
+				if (UNiagaraScript* Candidate = Cast<UNiagaraScript>(Object))
+				{
+					Script = Candidate;
+					break;
+				}
+			}
+
+			if (Script == nullptr || !FDreamFXCommands::HasProvenance(Script))
+			{
+				return;
+			}
+
+			InSection.AddEntry(FToolMenuEntry::InitComboButton(
+				TEXT("DreamFX.ScriptToolbarMenu"),
+				FUIAction(),
+				FNewToolMenuChoice(FNewToolMenuDelegate::CreateStatic(
+					&PopulateScriptMenu, TWeakObjectPtr<UNiagaraScript>(Script))),
+				LOCTEXT("ScriptToolbarLabel", "DreamFX"),
+				LOCTEXT("ScriptToolbarTooltip", "DreamFX actions for this Niagara Script."),
 				Icon(TEXT("Icons.Settings"))));
 		}
 
@@ -374,6 +491,15 @@ namespace UE::DreamFX::Editor
 					FNewToolMenuSectionDelegate::CreateStatic(&PopulateEmitterAssetMenu));
 			}
 
+			if (UToolMenu* ScriptAssetMenu = UE::ContentBrowser::ExtendToolMenu_AssetContextMenu(
+				UNiagaraScript::StaticClass()))
+			{
+				FToolMenuSection& Section = ScriptAssetMenu->FindOrAddSection(TEXT("GetAssetActions"));
+				Section.AddDynamicEntry(
+					TEXT("DreamFX.ScriptAssetActions"),
+					FNewToolMenuSectionDelegate::CreateStatic(&PopulateScriptAssetMenu));
+			}
+
 			// --- Niagara system editor toolbar ------------------------------------------------
 			if (UToolMenu* SystemEditorToolbar = UToolMenus::Get()->ExtendMenu(TEXT("AssetEditor.Niagara.ToolBar")))
 			{
@@ -381,6 +507,16 @@ namespace UE::DreamFX::Editor
 				Section.AddDynamicEntry(
 					TEXT("DreamFX.SystemEditorToolbarActions"),
 					FNewToolMenuSectionDelegate::CreateStatic(&PopulateSystemEditorToolbar));
+			}
+
+			// --- Niagara script editor toolbar ------------------------------------------------
+			// The standalone UNiagaraScript editor: the asset kind .dfm builds.
+			if (UToolMenu* ScriptEditorToolbar = UToolMenus::Get()->ExtendMenu(TEXT("AssetEditor.NiagaraScriptEditor.ToolBar")))
+			{
+				FToolMenuSection& Section = ScriptEditorToolbar->FindOrAddSection(TEXT("DreamFX"));
+				Section.AddDynamicEntry(
+					TEXT("DreamFX.ScriptEditorToolbarActions"),
+					FNewToolMenuSectionDelegate::CreateStatic(&PopulateScriptEditorToolbar));
 			}
 		}
 	}

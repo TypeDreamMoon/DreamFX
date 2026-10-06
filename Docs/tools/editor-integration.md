@@ -3,7 +3,7 @@
 > [DreamFX](../../README.md) » **Editor integration**
 
 Every place DreamFX attaches itself to the Unreal editor UI: the Tools menu, the Level Editor
-toolbar, the Content Browser asset context menus, and the Niagara system editor toolbar.
+toolbar, the Content Browser asset context menus, and the Niagara system and script editor toolbars.
 
 | | |
 | :-- | :-- |
@@ -47,6 +47,7 @@ Added into the stock `GetAssetActions` section of the per-class asset context me
 | :-- | :-- | :-- |
 | `UNiagaraSystem` | `DreamFX.SystemAssetActions` | submenu **DreamFX** — [System submenu](#system-submenu) |
 | `UNiagaraEmitter` | `DreamFX.EmitterAssetActions` | submenu **DreamFX** — [Emitter submenu](#emitter-submenu) |
+| `UNiagaraScript` | `DreamFX.ScriptAssetActions` | submenu **DreamFX** — [Script submenu](#script-submenu), on a script DreamFX generated only |
 
 ### System submenu
 
@@ -67,7 +68,7 @@ titled *Decompiler*:
 | Entry | Label | Icon | Effect |
 | :-- | :-- | :-- | :-- |
 | `DreamFX.OpenSource` | **Open Source** | `Icons.OpenInExternalEditor` | Opens the `.dfs` named in the stamp |
-| `DreamFX.RebuildFromSource` | **Rebuild from Source** | `Icons.Refresh` | Queues that one file |
+| `DreamFX.RebuildFromSource` | **Rebuild from Source** | `Icons.Refresh` | Queues that one file and builds it at once — [below](#rebuild-from-source) |
 | `DreamFX.VerifyAsset` | **Verify** | `Icons.Adjust` | Checks this asset against its source |
 
 ### Emitter submenu
@@ -83,6 +84,15 @@ The host system is what makes this honest rather than a guess: every reader in t
 edit API addresses through an owning system, so what comes back is exactly what the emitter
 contributes when a system uses it.
 
+### Script submenu
+
+`DreamFX.ScriptActions` — label **DreamFX**, icon `Icons.Settings`. For standalone `UNiagaraScript`
+assets — the asset kind `.dfm` builds. Only the Source state exists, because there is no script
+decompiler: the submenu appears only when the asset carries a provenance stamp, so a stock module or
+a hand-made script gets no DreamFX entry at all, and it offers the system menu's three Source
+commands — **Open Source**, **Rebuild from Source**, **Verify** — against the `.dfm` recorded in the
+stamp.
+
 ## Niagara system editor toolbar
 
 `DreamFX.SystemEditorToolbarActions`, a dynamic entry in section `DreamFX` of
@@ -95,6 +105,14 @@ two-state [System submenu](#system-submenu).
 > `FNiagaraStatelessEmitterTemplateToolkit` all return the toolkit name `"Niagara"`. So the entry
 > first looks for a `UNiagaraSystem` among the objects being edited and adds nothing when there is
 > none — opening a Sim Cache shows no DreamFX button.
+
+## Niagara script editor toolbar
+
+`DreamFX.ScriptEditorToolbarActions`, a dynamic entry in section `DreamFX` of
+`AssetEditor.NiagaraScriptEditor.ToolBar` — the editor a standalone `UNiagaraScript` opens in. Adds
+a combo button labelled **DreamFX** whose content is the [Script submenu](#script-submenu), and only
+when the script carries a provenance stamp: the same editor opens every stock module and dynamic
+input, and none of them has anything in that menu.
 
 ## Command semantics
 
@@ -115,6 +133,19 @@ Decompiled exports are included, like any other source. See [Export vs Adopt](#e
 
 The **Open in VSCode** link jumps to the first error's file, line and column. The diagnostic has
 carried a position all along; before this it only reached the log.
+
+### Rebuild from Source
+
+Queues the source named in the asset's stamp into the same watcher queue a save uses, and drains the
+queue at once instead of after the debounce. So it is the same forced rebuild as a save, with the same
+toasts as *Rebuild DFX*, and it cannot succeed where saving the file would fail.
+
+A standalone script (`.dfm`) whose editor is open gets one more step. The Niagara script editor edits
+a copy of the asset and copies it back on *Apply*, so a rebuild under it would not show, and the next
+*Apply* would overwrite it. The editor is closed first — its own prompt decides what happens to edits
+not yet applied — and reopened after the build, whether the build worked or not. *Cancel* on that
+prompt keeps the editor and skips the rebuild, with a toast saying so. A script whose editor is not
+open is rebuilt without opening one. System editors work on the asset itself and are left open.
 
 ### The bulk batch
 

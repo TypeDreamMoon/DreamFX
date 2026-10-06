@@ -16,8 +16,11 @@
 #include "Misc/FileHelper.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
+#include "Editor.h"
 #include "NiagaraEmitter.h"
+#include "NiagaraScript.h"
 #include "NiagaraSystem.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "Widgets/Notifications/SNotificationList.h"
 
 #define LOCTEXT_NAMESPACE "DreamFXAssetCommands"
@@ -700,8 +703,41 @@ namespace UE::DreamFX::Editor
 			return;
 		}
 
+		// A standalone script's editor edits a copy (FNiagaraScriptToolkit duplicates the asset and copies
+		// the duplicate back on Apply), so a rebuild under an open editor does not show there, and the next
+		// Apply stomps it. Close the editor first -- its own prompt decides what happens to unapplied edits,
+		// and the rebuild is then the last write -- and reopen it afterwards. Cancel on that prompt keeps the
+		// editor open and abandons the rebuild. System editors are live views over the asset and need none
+		// of this.
+		UAssetEditorSubsystem* Editors = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
+		bool bReopenEditor = false;
+
+		if (Editors != nullptr && Asset->IsA<UNiagaraScript>()
+			&& Editors->FindEditorForAsset(Asset, /*bFocusIfOpen=*/false) != nullptr)
+		{
+			Editors->CloseAllEditorsForAsset(Asset);
+			if (Editors->FindEditorForAsset(Asset, /*bFocusIfOpen=*/false) != nullptr)
+			{
+				Notify(FText::Format(LOCTEXT("RebuildNeedsClose", "'{0}' is still open, so it was not rebuilt. Close its editor, then rebuild again."),
+					FText::FromString(Asset->GetName())), /*bSuccess=*/false);
+				return;
+			}
+			bReopenEditor = true;
+		}
+
+		// Through the watcher's queue, exactly like a save -- the menu must not be able to succeed where a save
+		// fails -- which already forces the rebuild and reports it with the first error one click away.
+		// Flushing builds it now instead of after the debounce, so the editor reopens on the result.
+		const TWeakObjectPtr<UObject> WeakAsset(Asset);
 		FSourceWatcher::QueueFile(Stamp.SourceFullPath, /*bAnnounceSuccess=*/true);
-		UE_LOG(LogDreamFX, Display, TEXT("Queued '%s' for rebuild."), *Stamp.SourceFullPath);
+		FSourceWatcher::FlushPending();
+
+		// Reopened whether or not the build worked: a failed build leaves the asset as it was, and the author
+		// asked for a rebuild, not for the editor to go away.
+		if (bReopenEditor && WeakAsset.IsValid())
+		{
+			Editors->OpenEditorForAsset(WeakAsset.Get());
+		}
 	}
 
 	void FDreamFXCommands::VerifyAsset(UObject* Asset)
