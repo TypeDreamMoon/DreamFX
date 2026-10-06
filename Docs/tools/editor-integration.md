@@ -3,7 +3,7 @@
 > [DreamFX](../../README.md) » **Editor integration**
 
 Every place DreamFX attaches itself to the Unreal editor UI: the Tools menu, the Level Editor
-toolbar, the Content Browser asset context menus, and the Niagara system editor toolbar.
+toolbar, the Content Browser asset context menus, and the Niagara system and script editor toolbars.
 
 | | |
 | :-- | :-- |
@@ -47,7 +47,7 @@ Added into the stock `GetAssetActions` section of the per-class asset context me
 | :-- | :-- | :-- |
 | `UNiagaraSystem` | `DreamFX.SystemAssetActions` | submenu **DreamFX** — [System submenu](#system-submenu) |
 | `UNiagaraEmitter` | `DreamFX.EmitterAssetActions` | submenu **DreamFX** — [Emitter submenu](#emitter-submenu) |
-| `UNiagaraScript` | `DreamFX.ScriptAssetActions` | submenu **DreamFX** — [Script submenu](#script-submenu) |
+| `UNiagaraScript` | `DreamFX.ScriptAssetActions` | submenu **DreamFX** — [Script submenu](#script-submenu), on a script DreamFX generated only |
 
 ### System submenu
 
@@ -84,6 +84,15 @@ The host system is what makes this honest rather than a guess: every reader in t
 edit API addresses through an owning system, so what comes back is exactly what the emitter
 contributes when a system uses it.
 
+### Script submenu
+
+`DreamFX.ScriptActions` — label **DreamFX**, icon `Icons.Settings`. For standalone `UNiagaraScript`
+assets — the asset kind `.dfm` builds. Only the Source state exists, because there is no script
+decompiler: the submenu appears only when the asset carries a provenance stamp, so a stock module or
+a hand-made script gets no DreamFX entry at all, and it offers the system menu's three Source
+commands — **Open Source**, **Rebuild from Source**, **Verify** — against the `.dfm` recorded in the
+stamp.
+
 ## Niagara system editor toolbar
 
 `DreamFX.SystemEditorToolbarActions`, a dynamic entry in section `DreamFX` of
@@ -97,13 +106,13 @@ two-state [System submenu](#system-submenu).
 > first looks for a `UNiagaraSystem` among the objects being edited and adds nothing when there is
 > none — opening a Sim Cache shows no DreamFX button.
 
-### Script submenu
+## Niagara script editor toolbar
 
-`DreamFX.ScriptActions` — label **DreamFX**, icon `Icons.Settings`. For standalone `UNiagaraScript`
-assets — the asset kind `.dfm` builds. Only the Source state exists: a script asset is always
-generated (there is no script decompiler), so the submenu appears only when the asset carries a
-provenance stamp, and offers the system menu's three Source commands — **Open Source**,
-**Rebuild from Source**, **Verify** — against the `.dfm` recorded in the stamp.
+`DreamFX.ScriptEditorToolbarActions`, a dynamic entry in section `DreamFX` of
+`AssetEditor.NiagaraScriptEditor.ToolBar` — the editor a standalone `UNiagaraScript` opens in. Adds
+a combo button labelled **DreamFX** whose content is the [Script submenu](#script-submenu), and only
+when the script carries a provenance stamp: the same editor opens every stock module and dynamic
+input, and none of them has anything in that menu.
 
 ## Command semantics
 

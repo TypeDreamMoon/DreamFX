@@ -227,8 +227,10 @@ namespace UE::DreamFX::Editor
 				return;
 			}
 
+			// Unlike a system's, a script's submenu has only the Source state, so a script DreamFX did not
+			// generate -- every stock module and dynamic input -- would get an entry that opens onto nothing.
 			UNiagaraScript* Script = Cast<UNiagaraScript>(Context->SelectedAssets[0].GetAsset());
-			if (Script == nullptr)
+			if (Script == nullptr || !FDreamFXCommands::HasProvenance(Script))
 			{
 				return;
 			}
@@ -308,8 +310,8 @@ namespace UE::DreamFX::Editor
 		/**
 		 * Niagara script editor toolbar (`AssetEditor.NiagaraScriptEditor.ToolBar`) -- the editor
 		 * that opens for a standalone UNiagaraScript, exactly the asset kind .dfm builds.
-		 * Same combo-button shape as the system editor toolbar; PopulateScriptMenu handles the
-		 * provenance gating (unstamped scripts get no entries).
+		 * Same combo-button shape as the system editor toolbar, and only on a script DreamFX generated:
+		 * the menu behind it has nothing for any other, and that editor opens for every stock module.
 		 */
 		void PopulateScriptEditorToolbar(FToolMenuSection& InSection)
 		{
@@ -329,7 +331,7 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
-			if (Script == nullptr)
+			if (Script == nullptr || !FDreamFXCommands::HasProvenance(Script))
 			{
 				return;
 			}
