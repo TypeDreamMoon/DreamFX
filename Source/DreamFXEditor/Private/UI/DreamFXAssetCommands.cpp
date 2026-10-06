@@ -702,12 +702,14 @@ namespace UE::DreamFX::Editor
 			return;
 		}
 
-		// Close the editor BEFORE regenerating, not after: a script editor holds an editing copy
-		// whose Apply stomps the asset (FNiagaraScriptToolkit edits a copy and copies it back on
-		// apply). Closing first means the regeneration below is always the final write -- whatever
-		// the user answers in the close prompt cannot survive it. Cancel leaves the editor open,
-		// which is detected and aborts the rebuild instead of failing silently.
-		if (GEditor)
+		// Script editors hold an editing copy whose Apply stomps the regenerated asset
+		// (FNiagaraScriptToolkit edits a copy and copies it back on apply) -- so the editor is
+		// closed BEFORE regenerating; the regeneration is then always the final write. Cancel on
+		// the close prompt leaves the editor open and aborts the rebuild instead of failing
+		// silently. System editors are live views over the asset and need none of this.
+		const bool bScriptAsset = Asset->IsA<UNiagaraScript>();
+
+		if (bScriptAsset && GEditor)
 		{
 			if (UAssetEditorSubsystem* Editors = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
 			{
@@ -733,7 +735,7 @@ namespace UE::DreamFX::Editor
 
 		if (Result.bSucceeded)
 		{
-			if (GEditor)
+			if (bScriptAsset && GEditor)
 			{
 				if (UAssetEditorSubsystem* Editors = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
 				{
