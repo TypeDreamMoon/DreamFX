@@ -68,7 +68,7 @@ titled *Decompiler*:
 | Entry | Label | Icon | Effect |
 | :-- | :-- | :-- | :-- |
 | `DreamFX.OpenSource` | **Open Source** | `Icons.OpenInExternalEditor` | Opens the `.dfs` named in the stamp |
-| `DreamFX.RebuildFromSource` | **Rebuild from Source** | `Icons.Refresh` | Queues that one file |
+| `DreamFX.RebuildFromSource` | **Rebuild from Source** | `Icons.Refresh` | Queues that one file and builds it at once — [below](#rebuild-from-source) |
 | `DreamFX.VerifyAsset` | **Verify** | `Icons.Adjust` | Checks this asset against its source |
 
 ### Emitter submenu
@@ -124,6 +124,19 @@ Decompiled exports are included, like any other source. See [Export vs Adopt](#e
 
 The **Open in VSCode** link jumps to the first error's file, line and column. The diagnostic has
 carried a position all along; before this it only reached the log.
+
+### Rebuild from Source
+
+Queues the source named in the asset's stamp into the same watcher queue a save uses, and drains the
+queue at once instead of after the debounce. So it is the same forced rebuild as a save, with the same
+toasts as *Rebuild DFX*, and it cannot succeed where saving the file would fail.
+
+A standalone script (`.dfm`) whose editor is open gets one more step. The Niagara script editor edits
+a copy of the asset and copies it back on *Apply*, so a rebuild under it would not show, and the next
+*Apply* would overwrite it. The editor is closed first — its own prompt decides what happens to edits
+not yet applied — and reopened after the build, whether the build worked or not. *Cancel* on that
+prompt keeps the editor and skips the rebuild, with a toast saying so. A script whose editor is not
+open is rebuilt without opening one. System editors work on the asset itself and are left open.
 
 ### The bulk batch
 
