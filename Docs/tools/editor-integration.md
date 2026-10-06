@@ -47,6 +47,7 @@ Added into the stock `GetAssetActions` section of the per-class asset context me
 | :-- | :-- | :-- |
 | `UNiagaraSystem` | `DreamFX.SystemAssetActions` | submenu **DreamFX** — [System submenu](#system-submenu) |
 | `UNiagaraEmitter` | `DreamFX.EmitterAssetActions` | submenu **DreamFX** — [Emitter submenu](#emitter-submenu) |
+| `UNiagaraScript` | `DreamFX.ScriptAssetActions` | submenu **DreamFX** — [Script submenu](#script-submenu) |
 
 ### System submenu
 
@@ -95,6 +96,14 @@ two-state [System submenu](#system-submenu).
 > `FNiagaraStatelessEmitterTemplateToolkit` all return the toolkit name `"Niagara"`. So the entry
 > first looks for a `UNiagaraSystem` among the objects being edited and adds nothing when there is
 > none — opening a Sim Cache shows no DreamFX button.
+
+### Script submenu
+
+`DreamFX.ScriptActions` — label **DreamFX**, icon `Icons.Settings`. For standalone `UNiagaraScript`
+assets — the asset kind `.dfm` builds. Only the Source state exists: a script asset is always
+generated (there is no script decompiler), so the submenu appears only when the asset carries a
+provenance stamp, and offers the system menu's three Source commands — **Open Source**,
+**Rebuild from Source**, **Verify** — against the `.dfm` recorded in the stamp.
 
 ## Command semantics
 
