@@ -700,8 +700,26 @@ namespace UE::DreamFX::Editor
 			return;
 		}
 
-		FSourceWatcher::QueueFile(Stamp.SourceFullPath, /*bAnnounceSuccess=*/true);
-		UE_LOG(LogDreamFX, Display, TEXT("Queued '%s' for rebuild."), *Stamp.SourceFullPath);
+		// A true rebuild, not the watcher's save-loop: the save path skips an unchanged source
+		// (provenance-hash up-to-date check), which would silently leave a hand-corrupted asset
+		// broken -- exactly the case this button exists to undo. Force it.
+		FGenerateOptions Options;
+		Options.bForce = true;
+
+		FDiagnosticSink Diagnostics;
+		const FGenerateResult Result = FGenerator::GenerateFromFile(Stamp.SourceFullPath, Options, Diagnostics);
+		LogDiagnostics(Diagnostics);
+
+		if (Result.bSucceeded)
+		{
+			Notify(FText::Format(LOCTEXT("RebuildAssetOk", "'{0}' rebuilt from {1}."),
+				FText::FromString(Asset->GetName()),
+				FText::FromString(FPaths::GetCleanFilename(Stamp.SourceFullPath))), /*bSuccess=*/true);
+			return;
+		}
+
+		Notify(FText::Format(LOCTEXT("RebuildAssetFailed", "'{0}' rebuild failed. See the Output Log."),
+			FText::FromString(Asset->GetName())), /*bSuccess=*/false);
 	}
 
 	void FDreamFXCommands::VerifyAsset(UObject* Asset)
