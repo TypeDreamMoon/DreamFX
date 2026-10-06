@@ -306,6 +306,45 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
+		 * Niagara script editor toolbar (`AssetEditor.NiagaraScriptEditor.ToolBar`) -- the editor
+		 * that opens for a standalone UNiagaraScript, exactly the asset kind .dfm builds.
+		 * Same combo-button shape as the system editor toolbar; PopulateScriptMenu handles the
+		 * provenance gating (unstamped scripts get no entries).
+		 */
+		void PopulateScriptEditorToolbar(FToolMenuSection& InSection)
+		{
+			const UAssetEditorToolkitMenuContext* Context = InSection.FindContext<UAssetEditorToolkitMenuContext>();
+			if (Context == nullptr)
+			{
+				return;
+			}
+
+			UNiagaraScript* Script = nullptr;
+			for (UObject* Object : Context->GetEditingObjects())
+			{
+				if (UNiagaraScript* Candidate = Cast<UNiagaraScript>(Object))
+				{
+					Script = Candidate;
+					break;
+				}
+			}
+
+			if (Script == nullptr)
+			{
+				return;
+			}
+
+			InSection.AddEntry(FToolMenuEntry::InitComboButton(
+				TEXT("DreamFX.ScriptToolbarMenu"),
+				FUIAction(),
+				FNewToolMenuChoice(FNewToolMenuDelegate::CreateStatic(
+					&PopulateScriptMenu, TWeakObjectPtr<UNiagaraScript>(Script))),
+				LOCTEXT("ScriptToolbarLabel", "DreamFX"),
+				LOCTEXT("ScriptToolbarTooltip", "DreamFX actions for this Niagara Script."),
+				Icon(TEXT("Icons.Settings"))));
+		}
+
+		/**
 		 * The Dream-family combo button, shared with DreamShader and DreamGUI. Each of the three
 		 * plugins keeps its own copy of this function (shapes shared, packages not): every one
 		 * tries to add the combo, a FindEntry check makes that idempotent, and the entry belongs
@@ -466,6 +505,16 @@ namespace UE::DreamFX::Editor
 				Section.AddDynamicEntry(
 					TEXT("DreamFX.SystemEditorToolbarActions"),
 					FNewToolMenuSectionDelegate::CreateStatic(&PopulateSystemEditorToolbar));
+			}
+
+			// --- Niagara script editor toolbar ------------------------------------------------
+			// The standalone UNiagaraScript editor: the asset kind .dfm builds.
+			if (UToolMenu* ScriptEditorToolbar = UToolMenus::Get()->ExtendMenu(TEXT("AssetEditor.NiagaraScriptEditor.ToolBar")))
+			{
+				FToolMenuSection& Section = ScriptEditorToolbar->FindOrAddSection(TEXT("DreamFX"));
+				Section.AddDynamicEntry(
+					TEXT("DreamFX.ScriptEditorToolbarActions"),
+					FNewToolMenuSectionDelegate::CreateStatic(&PopulateScriptEditorToolbar));
 			}
 		}
 	}
