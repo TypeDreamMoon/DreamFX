@@ -702,6 +702,25 @@ namespace UE::DreamFX::Editor
 			return;
 		}
 
+		// Close the editor BEFORE regenerating, not after: a script editor holds an editing copy
+		// whose Apply stomps the asset (FNiagaraScriptToolkit edits a copy and copies it back on
+		// apply). Closing first means the regeneration below is always the final write -- whatever
+		// the user answers in the close prompt cannot survive it. Cancel leaves the editor open,
+		// which is detected and aborts the rebuild instead of failing silently.
+		if (GEditor)
+		{
+			if (UAssetEditorSubsystem* Editors = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+			{
+				Editors->CloseAllEditorsForAsset(Asset);
+				if (Editors->FindEditorForAsset(Asset, /*bMatchEditorId=*/false) != nullptr)
+				{
+					Notify(FText::Format(LOCTEXT("RebuildNeedsClose", "'{0}' is still open -- close it without applying, then retry the rebuild."),
+						FText::FromString(Asset->GetName())), /*bSuccess=*/false);
+					return;
+				}
+			}
+		}
+
 		// A true rebuild, not the watcher's save-loop: the save path skips an unchanged source
 		// (provenance-hash up-to-date check), which would silently leave a hand-corrupted asset
 		// broken -- exactly the case this button exists to undo. Force it.
@@ -714,15 +733,10 @@ namespace UE::DreamFX::Editor
 
 		if (Result.bSucceeded)
 		{
-			// Refresh open editors for the asset: a script editor holds a stale in-memory copy whose
-			// Apply stomps the regenerated asset back (observed as a rebuilt effect reverting to the
-			// hand-corrupted one). Close + reopen = the editor shows the regenerated nodes, no
-			// restart required. Closing discards unapplied edits, which is what this button means.
 			if (GEditor)
 			{
 				if (UAssetEditorSubsystem* Editors = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
 				{
-					Editors->CloseAllEditorsForAsset(Asset);
 					Editors->OpenEditorForAsset(Asset);
 				}
 			}
