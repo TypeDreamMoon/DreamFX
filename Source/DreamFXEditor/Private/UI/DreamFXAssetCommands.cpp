@@ -16,8 +16,10 @@
 #include "Misc/FileHelper.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
+#include "Editor.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraSystem.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "Widgets/Notifications/SNotificationList.h"
 
 #define LOCTEXT_NAMESPACE "DreamFXAssetCommands"
@@ -712,6 +714,19 @@ namespace UE::DreamFX::Editor
 
 		if (Result.bSucceeded)
 		{
+			// Refresh open editors for the asset: a script editor holds a stale in-memory copy whose
+			// Apply stomps the regenerated asset back (observed as a rebuilt effect reverting to the
+			// hand-corrupted one). Close + reopen = the editor shows the regenerated nodes, no
+			// restart required. Closing discards unapplied edits, which is what this button means.
+			if (GEditor)
+			{
+				if (UAssetEditorSubsystem* Editors = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+				{
+					Editors->CloseAllEditorsForAsset(Asset);
+					Editors->OpenEditorForAsset(Asset);
+				}
+			}
+
 			Notify(FText::Format(LOCTEXT("RebuildAssetOk", "'{0}' rebuilt from {1}."),
 				FText::FromString(Asset->GetName()),
 				FText::FromString(FPaths::GetCleanFilename(Stamp.SourceFullPath))), /*bSuccess=*/true);
