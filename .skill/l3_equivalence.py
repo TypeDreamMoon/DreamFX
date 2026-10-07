@@ -161,7 +161,9 @@ def _counts_per_frame(system_path):
                 cache, unreal.NiagaraSimCacheCreateParameters(), component,
                 advance_simulation=True, advance_delta_time=DELTA)
             if captured is None or captured.get_num_frames() == 0:
-                continue
+                # Missing captures are not zero-particle frames. A partial series
+                # also cannot be aligned reliably with the other system's frames.
+                return None
             for emitter in captured.get_emitter_names():
                 name = str(emitter)
                 entry = series.setdefault(name, {"n": []})
@@ -352,9 +354,12 @@ def l3_side_c(index):
     """
     original, _ = L3_PAIRS[index]
     captured = L3_PENDING.pop(index, {})
-    control = _compare(captured.get("a1"), _counts_per_frame(original))
+    repeated = _counts_per_frame(original)
+    control = _compare(captured.get("a1"), repeated)
 
-    if control != "exact":
+    if captured.get("a1") is None or captured.get("b") is None or repeated is None:
+        verdict = "asset would not capture"
+    elif control != "exact":
         # Values are undecidable, but an attribute being absent is structural and survives
         # randomness -- so it is still judged, and only then does the pair become undecidable.
         absence = _absence_mismatch(captured.get("a1"), captured.get("b"))
