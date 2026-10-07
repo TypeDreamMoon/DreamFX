@@ -4,15 +4,16 @@
 
 namespace UE::DreamFX::Editor
 {
-	/** Direct .dfe dependencies, resolved by the same rules used when generating a system. */
+	/** .dfe and System parent dependencies, including transitive source-parent chains. */
 	class FSourceDependencyIndex
 	{
 	public:
 		void Refresh(const TArray<FString>& SourceFiles);
 		void FindDependents(const TArray<FString>& ChangedFiles, TSet<FString>& OutSources) const;
-		void Reset() { DependenciesBySource.Reset(); }
+		void Reset() { DependenciesBySource.Reset(); TrackedSources.Reset(); }
 
 	private:
 		TMap<FString, TArray<FString>> DependenciesBySource;
+		TSet<FString> TrackedSources;
 	};
 }

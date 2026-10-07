@@ -3,6 +3,7 @@
 #include "Adapter/DreamFXNiagaraAdapter.h"
 #include "DreamFXExpressions.h"
 #include "DreamFXEmitterMerge.h"
+#include "DreamFXSystemInheritance.h"
 #include "DreamFXModule.h"
 #include "DreamFXParser.h"
 #include "DreamFXProvenance.h"
@@ -17,7 +18,9 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
+#include "NiagaraCommon.h"
 #include "NiagaraMeshRendererProperties.h"
+#include "NiagaraEmitter.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "Serialization/JsonSerializer.h"
@@ -226,11 +229,14 @@ namespace UE::DreamFX::Editor
 		struct FPlannedEmitter
 		{
 			FName Name;
+			UNiagaraEmitter* Parent = nullptr;
+			FGuid ParentVersion;
 			TArray<FPlannedStack> Stacks;
 			TArray<FPlannedEventHandler> EventHandlers;
 			TArray<FPlannedSimulationStage> SimulationStages;
 			TArray<FPlannedRenderer> Renderers;
 			TArray<FPlannedParameterDefault> ParameterDefaults;
+			TArray<FParameterDefault> InheritedParameterDefaults;
 			FString PropertiesJson;
 			FSourceLocation Location;
 		};
@@ -556,6 +562,7 @@ namespace UE::DreamFX::Editor
 			// graphs, renderers and other state outside Settings' ownership.
 			for (const FSettingMapping& Mapping : Mappings)
 			{
+				if (!Defaults.IsValid()) { break; } // Native children retain omitted parent settings.
 				TArray<FString> Segments;
 				FString(Mapping.PropertyName).ParseIntoArray(Segments, TEXT("."));
 				TSharedPtr<FJsonObject> Object = Defaults;
@@ -587,6 +594,9 @@ namespace UE::DreamFX::Editor
 
 			for (const FPropertyEntry& Setting : Settings)
 			{
+				const FString PreviousFile = Diagnostics.GetFile();
+				if (!Setting.SourceFile.IsEmpty()) { Diagnostics.SetFile(Setting.SourceFile); }
+				ON_SCOPE_EXIT { Diagnostics.SetFile(PreviousFile); };
 				if (IsGeneratorOnlySetting(Setting.Name))
 				{
 					continue;
@@ -1764,6 +1774,9 @@ namespace UE::DreamFX::Editor
 
 			for (const FParameterDecl& Declaration : Document.Parameters)
 			{
+				const FString PreviousFile = Diagnostics.GetFile();
+				if (!Declaration.SourceFile.IsEmpty()) { Diagnostics.SetFile(Declaration.SourceFile); }
+				ON_SCOPE_EXIT { Diagnostics.SetFile(PreviousFile); };
 				FNiagaraTypeDefinition Type;
 				bool bIsDataInterface = false;
 				if (!FValueLowering::ResolveDeclaredType(Declaration, Diagnostics, Type, bIsDataInterface))
@@ -1902,16 +1915,15 @@ namespace UE::DreamFX::Editor
 				}
 				EmitterNames.Add(EmitterName);
 
-				// `from "..."` is copy, not inheritance (R3). The referenced .dfe supplies a base and
-				// the inline block overrides it; nothing links the two afterwards, which is why the
-				// decompiler always emits self-contained emitters.
+				// `from` merges source declarations; `inherits` keeps a native Niagara parent link.
 				FEmitter Merged;
 				const FEmitter* Source = &Emitter;
 				if (!Emitter.FromPath.IsEmpty())
 				{
 					FString ReferencedFile;
 					FString ReferenceError;
-					if (!FDreamFXPaths::ResolveSourceReference(Emitter.FromPath, Document.SourceFilePath,
+					const FString& FromSource = Emitter.FromSourceFile.IsEmpty() ? Document.SourceFilePath : Emitter.FromSourceFile;
+					if (!FDreamFXPaths::ResolveSourceReference(Emitter.FromPath, FromSource,
 						TEXT(".dfe"), ReferencedFile, ReferenceError))
 					{
 						Diagnostics.Error(TEXT("DFX3040"), Emitter.FromLocation, ReferenceError);
@@ -1950,9 +1962,10 @@ namespace UE::DreamFX::Editor
 						continue;
 					}
 					Source = &Merged;
-					// Use the authored reference as identity and the resolved file's content as value.
-					// Absolute lookup results would make a portable source stale on another checkout.
-					FString DependencyPath = Emitter.FromPath;
+					// Include the defining directory: two inherited emitters can spell the same relative
+					// reference but resolve to different files. Keep the key relative for portable sources.
+					FString DependencyPath = ReferencedFile;
+					FPaths::MakePathRelativeTo(DependencyPath, *FPaths::ConvertRelativePathToFull(Document.SourceFilePath));
 					FPaths::NormalizeFilename(DependencyPath);
 					SourceDependencies.Add(DependencyPath, Referenced.SourceHash);
 
@@ -1969,9 +1982,78 @@ namespace UE::DreamFX::Editor
 				FPlannedEmitter Planned;
 				Planned.Name = EmitterName;
 				Planned.Location = Emitter.Location;
+				if (!Source->NativeParentPath.IsEmpty())
+				{
+					FString ParentPath;
+					if (!FDreamFXPaths::ResolveAssetPath(Source->NativeParentPath, Document.Root, ParentPath, Error))
+					{
+						Diagnostics.Error(TEXT("DFX3055"), Source->NativeParentLocation, Error);
+						bOk = false; continue;
+					}
+					Planned.Parent = LoadObject<UNiagaraEmitter>(nullptr, *ParentPath);
+					if (!Planned.Parent || !Planned.Parent->IsAsset() || !Planned.Parent->bIsInheritable)
+					{
+						Diagnostics.Error(TEXT("DFX3055"), Source->NativeParentLocation,
+							TEXT("'inherits' requires a Niagara emitter asset with inheritance enabled: ") + ParentPath);
+						bOk = false; continue;
+					}
+					Planned.ParentVersion = Planned.Parent->GetExposedVersion().VersionGuid;
+					if (!Source->NativeParentVersion.IsEmpty()) { FGuid::Parse(Source->NativeParentVersion, Planned.ParentVersion); }
+					FVersionedNiagaraEmitter Current(Planned.Parent, Planned.ParentVersion);
+					TSet<UNiagaraEmitter*> Visited;
+					while (Current.Emitter)
+					{
+						const FVersionedNiagaraEmitterData* Data = Current.GetEmitterData();
+						if (!Data || !Current.Emitter->FindVersionData(Current.Version) || Visited.Contains(Current.Emitter))
+						{
+							Diagnostics.Error(TEXT("DFX3056"), Source->NativeParentLocation,
+								FString::Printf(TEXT("Native parent has an unavailable version or a cyclic parent chain: %s."), *ParentPath));
+							bOk = false; break;
+						}
+						Visited.Add(Current.Emitter);
+						if (!Data->IsSynchronizedWithParent())
+						{
+							Diagnostics.Error(TEXT("DFX3056"), Source->NativeParentLocation,
+								TEXT("Native parent has unmerged ancestor changes. Merge and save the parent in Niagara before rebuilding this system: ")
+								+ Current.Emitter->GetPathName());
+							bOk = false; break;
+						}
+						SourceDependencies.Add(Current.Emitter->GetPathName() + TEXT("@") + Current.Version.ToString(),
+							Current.Emitter->GetChangeId().ToString());
+						Current = Data->GetParent();
+					}
+					// Native duplication/renaming can discard graph metadata that is not referenced
+					// by the parent's stacks yet. Capture the selected asset version before that step:
+					// a child can introduce the first read of one of these inherited defaults.
+					if (Planned.Parent->FindVersionData(Planned.ParentVersion))
+					{
+						TArray<FString> DefaultErrors;
+						if (!FNiagaraAdapter::GetParameterDefaults(Planned.Parent, Planned.ParentVersion,
+							Planned.InheritedParameterDefaults, DefaultErrors, /*bIncludeFail=*/true))
+						{
+							Diagnostics.Error(TEXT("DFX5027"), Emitter.Location,
+								FString::Printf(TEXT("Could not read native parent defaults: %s."), *FString::Join(DefaultErrors, TEXT(" | "))));
+							bOk = false;
+						}
+						// Match the alias change performed when the native instance takes its child name.
+						// Generic Emitter/Particles names remain generic; unique parent names and
+						// Engine.<parent> bindings must follow the renamed instance.
+						const FNiagaraAliasContext AliasContext = FNiagaraAliasContext(ENiagaraScriptUsage::EmitterUpdateScript)
+							.ChangeEmitterName(Planned.Parent->GetUniqueEmitterName(), Planned.Name.ToString());
+						for (FParameterDefault& Default : Planned.InheritedParameterDefaults)
+						{
+							Default.Variable = FNiagaraUtilities::ResolveAliases(Default.Variable, AliasContext);
+							if (!Default.Binding.IsNone())
+							{
+								Default.Binding = FNiagaraUtilities::ResolveAliases(
+									FNiagaraVariable(Default.Variable.GetType(), Default.Binding), AliasContext).GetName();
+							}
+						}
+					}
+				}
 
 				if (!PlanSettings(Source->Settings, EmitterSettings, Document.Root, TEXT("emitter"),
-					Diagnostics, Planned.PropertiesJson, EmitterDefaults))
+					Diagnostics, Planned.PropertiesJson, Planned.Parent ? TSharedPtr<FJsonObject>() : EmitterDefaults))
 				{
 					bOk = false;
 				}
@@ -1987,6 +2069,9 @@ namespace UE::DreamFX::Editor
 				// nowhere to hang. A literal, an enum or a link to another parameter is all it can be.
 				for (const FStatement& Statement : Source->Defaults)
 				{
+					const FString PreviousFile = Diagnostics.GetFile();
+					if (!Statement.SourceFile.IsEmpty()) { Diagnostics.SetFile(Statement.SourceFile); }
+					ON_SCOPE_EXIT { Diagnostics.SetFile(PreviousFile); };
 					if (!FValueLowering::IsNamespacedName(Statement.Name))
 					{
 						Diagnostics.Error(TEXT("DFX4025"), Statement.Location,
@@ -2021,6 +2106,15 @@ namespace UE::DreamFX::Editor
 					FPlannedParameterDefault Default;
 					Default.Variable = FNiagaraVariableBase(TargetType, FName(*Statement.Name));
 					Default.Location = Statement.Location;
+					const FParameterDefault* InheritedDefault = Planned.InheritedParameterDefaults.FindByPredicate(
+						[&Default](const FParameterDefault& Candidate) { return Candidate.Variable.GetName() == Default.Variable.GetName(); });
+					if (InheritedDefault != nullptr && InheritedDefault->Variable.GetType() != TargetType)
+					{
+						Diagnostics.Error(TEXT("DFX5027"), Statement.Location, FString::Printf(
+							TEXT("An explicit default must preserve the native parent's parameter type: %s"), *Statement.Name));
+						bOk = false;
+						continue;
+					}
 
 					TArray<FPlannedInput> Writes;
 					if (!Statement.Value.IsValid()
@@ -2112,6 +2206,9 @@ namespace UE::DreamFX::Editor
 
 				for (const FRenderer& Renderer : Source->Renderers)
 				{
+					const FString PreviousFile = Diagnostics.GetFile();
+					if (!Renderer.SourceFile.IsEmpty()) { Diagnostics.SetFile(Renderer.SourceFile); }
+					ON_SCOPE_EXIT { Diagnostics.SetFile(PreviousFile); };
 					FPlannedRenderer PlannedRenderer;
 					if (!PlanRenderer(Renderer, Document.Root, Diagnostics, PlannedRenderer))
 					{
@@ -2583,7 +2680,7 @@ namespace UE::DreamFX::Editor
 				}
 			};
 
-			for (const FPlannedStack& Stack : Emitter.Stacks)
+			auto NoteStack = [&Note](const FPlannedStack& Stack)
 			{
 				for (const FPlannedModule& Module : Stack.Modules)
 				{
@@ -2600,7 +2697,10 @@ namespace UE::DreamFX::Editor
 						}
 					}
 				}
-			}
+			};
+			for (const FPlannedStack& Stack : Emitter.Stacks) { NoteStack(Stack); }
+			for (const FPlannedEventHandler& Handler : Emitter.EventHandlers) { NoteStack(Handler.Stack); }
+			for (const FPlannedSimulationStage& Stage : Emitter.SimulationStages) { NoteStack(Stage.Stack); }
 		}
 
 		/**
@@ -2635,30 +2735,33 @@ namespace UE::DreamFX::Editor
 		 * declaration wins and no implied entry is written for it.
 		 */
 		bool ApplyParameterDefaults(const FStackAddress& EmitterAddress, const FPlannedEmitter& Emitter,
-			FDiagnosticSink& Diagnostics)
+			const TArray<FParameterDefault>* InheritedDefaults, FDiagnosticSink& Diagnostics)
 		{
 			// Declared and implied go in separate batches because they fail differently: a `Defaults`
 			// entry the source wrote is an instruction, and an entry inferred from a link is a fallback
 			// nobody asked for. One batch would have to pick one of those two failure modes for both.
 			TArray<FParameterDefault> Declared;
 			TSet<FNiagaraVariableBase> DeclaredNames;
+			if (InheritedDefaults != nullptr) { Declared = *InheritedDefaults; }
 
 			for (const FPlannedParameterDefault& Default : Emitter.ParameterDefaults)
 			{
-				DeclaredNames.Add(Default.Variable);
-
-				FParameterDefault& Applied = Declared.AddDefaulted_GetRef();
+				FParameterDefault* Existing = Declared.FindByPredicate([&Default](const FParameterDefault& Candidate)
+					{ return Candidate.Variable.GetName() == Default.Variable.GetName(); });
+				FParameterDefault& Applied = Existing != nullptr ? *Existing : Declared.AddDefaulted_GetRef();
 				Applied.Variable = Default.Variable;
 				Applied.Mode = Default.Mode;
 				Applied.Binding = Default.Binding;
 				Applied.Value = Default.Value;
 			}
+			for (const FParameterDefault& Default : Declared) { DeclaredNames.Add(Default.Variable); }
 
 			TArray<FString> Errors;
 			if (!Declared.IsEmpty()
 				&& !FNiagaraAdapter::SetParameterDefaults(EmitterAddress, Declared, Errors))
 			{
-				ReportAdapterErrors(Errors, TEXT("DFX5027"), Emitter.ParameterDefaults[0].Location, Diagnostics);
+				ReportAdapterErrors(Errors, TEXT("DFX5027"), Emitter.ParameterDefaults.IsEmpty()
+					? Emitter.Location : Emitter.ParameterDefaults[0].Location, Diagnostics);
 				return false;
 			}
 
@@ -2866,6 +2969,20 @@ namespace UE::DreamFX::Editor
 			{
 				if (DeclaredEmitters.Contains(Existing))
 				{
+					const FPlannedEmitter* Planned = Plan.Emitters.FindByPredicate(
+						[Existing](const FPlannedEmitter& Candidate) { return Candidate.Name == Existing; });
+					if (Planned->Parent) { continue; } // Restored from the parent baseline below.
+					FString OldParent;
+					FGuid OldVersion;
+					Errors.Reset();
+					if (!FNiagaraAdapter::GetEmitterParent(SystemAddress.WithEmitter(Existing), OldParent, OldVersion, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5010"), Planned->Location, Diagnostics); return false;
+					}
+					if (!OldParent.IsEmpty() && !FNiagaraAdapter::ResetEmitterFromParent(System, Existing, nullptr, FGuid(), Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5015"), Planned->Location, Diagnostics); return false;
+					}
 					if (!ClearEmitter(SystemAddress.WithEmitter(Existing), Diagnostics, FSourceLocation()))
 					{
 						return false;
@@ -2933,7 +3050,15 @@ namespace UE::DreamFX::Editor
 
 			for (const FPlannedEmitter& Emitter : Plan.Emitters)
 			{
-				if (!ExistingEmitters.Contains(Emitter.Name))
+				if (Emitter.Parent)
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::ResetEmitterFromParent(System, Emitter.Name, Emitter.Parent, Emitter.ParentVersion, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5015"), Emitter.Location, Diagnostics); return false;
+					}
+				}
+				else if (!ExistingEmitters.Contains(Emitter.Name))
 				{
 					Errors.Reset();
 					if (!FNiagaraAdapter::AddEmitter(System, Emitter.Name, Errors))
@@ -2964,6 +3089,7 @@ namespace UE::DreamFX::Editor
 				// fresh. Emptying here and letting the rebuild repopulate is what makes an in-place
 				// build produce the same asset as a build to a new path. Not fatal: an emitter with
 				// residue is the state every build before this one produced.
+				if (!Emitter.Parent)
 				{
 					Errors.Reset();
 					if (!FNiagaraAdapter::CleanUpStaleParameters(EmitterAddress, Errors))
@@ -2975,24 +3101,29 @@ namespace UE::DreamFX::Editor
 
 				for (const FPlannedStack& Stack : Emitter.Stacks)
 				{
+					if (Emitter.Parent && !ClearStack(EmitterAddress, Stack.ScriptName, Diagnostics, Stack.Location)) { return false; }
 					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs))
 					{
 						return false;
 					}
 				}
 
-				// Parameter defaults go on *after* the stacks, and the order is the whole point.
-				//
-				// Writing `Input = Particles.Foo` ends in FNiagaraStackGraphUtilities::
-				// SetLinkedParameterValueForFunctionInput, whose DesiredDefaultMode argument defaults to
-				// FailIfPreviouslyNotSet and which assigns it unconditionally over whatever the parameter
-				// already had. So every link write in the stacks silently stomps a default written before
-				// them, and an emitter with two links to one parameter stomps it twice.
-				if (!ApplyParameterDefaults(EmitterAddress, Emitter, Diagnostics))
+				if (Emitter.Parent && !Emitter.Renderers.IsEmpty())
 				{
-					return false;
+					FEmitterInfo Info;
+					Errors.Reset();
+					if (!FNiagaraAdapter::GetEmitterInfo(EmitterAddress, Info, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5010"), Emitter.Location, Diagnostics); return false;
+					}
+					for (int32 Index = Info.Renderers.Num() - 1; Index >= 0; --Index)
+					{
+						if (!FNiagaraAdapter::RemoveRenderer(EmitterAddress.WithRenderer(Info.Renderers[Index].Index), Errors))
+						{
+							ReportAdapterErrors(Errors, TEXT("DFX5012"), Emitter.Location, Diagnostics); return false;
+						}
+					}
 				}
-
 				for (const FPlannedRenderer& Renderer : Emitter.Renderers)
 				{
 					Errors.Reset();
@@ -3067,6 +3198,7 @@ namespace UE::DreamFX::Editor
 
 				if (Emitter.EventHandlers.Num() == 0)
 				{
+					if (Emitter.Parent) { continue; }
 					bool bRemoved = false;
 					Errors.Reset();
 					if (!FNiagaraAdapter::RemoveZeroIdEventHandler(EmitterAddress, bRemoved, Errors))
@@ -3205,6 +3337,7 @@ namespace UE::DreamFX::Editor
 				}
 
 				TArray<FName> DeclaredNames;
+				if (Emitter.Parent && Emitter.SimulationStages.IsEmpty()) { continue; }
 				for (const FPlannedSimulationStage& Stage : Emitter.SimulationStages)
 				{
 					DeclaredNames.Add(FName(*Stage.Spec.Name));
@@ -3222,6 +3355,19 @@ namespace UE::DreamFX::Editor
 			if (!ResolveSelfReferences(DeferredSelfRefs))
 			{
 				return false;
+			}
+
+			// Every link write sets its graph parameter's default mode, including writes in event
+			// handlers and simulation stages. Restore native defaults and apply explicit overrides
+			// only after ALL stacks have finished; an inferred fallback must not replace a binding
+			// inherited from the parent.
+			for (const FPlannedEmitter& Emitter : Plan.Emitters)
+			{
+				if (!ApplyParameterDefaults(SystemAddress.WithEmitter(Emitter.Name), Emitter,
+					&Emitter.InheritedParameterDefaults, Diagnostics))
+				{
+					return false;
+				}
 			}
 
 			// Again, now that the stacks and renderers have run: writing a link to `User.X` exposes X
@@ -3574,10 +3720,13 @@ namespace UE::DreamFX::Editor
 		return Generate(Document, Options, Diagnostics);
 	}
 
-	FGenerateResult FGenerator::Generate(const FDocument& Document, const FGenerateOptions& Options,
+	FGenerateResult FGenerator::Generate(const FDocument& InputDocument, const FGenerateOptions& Options,
 		FDiagnosticSink& Diagnostics)
 	{
 		FGenerateResult Result;
+		FDocument Flattened;
+		if (!ResolveSystemInheritance(InputDocument, Flattened, Diagnostics)) { return Result; }
+		const FDocument& Document = Flattened;
 		Diagnostics.SetFile(Document.SourceFilePath);
 
 		if (!GuardDecompiledNamespace(Document, Diagnostics))
@@ -3768,18 +3917,10 @@ namespace UE::DreamFX::Editor
 		// scripts' status and finishes while the shader is still compiling. The gate would pass on a
 		// system whose shader had not been built, let alone succeeded.
 		bool bHasGpuEmitter = false;
-		for (const FEmitter& Emitter : Document.Emitters)
+		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
 		{
-			for (const FPropertyEntry& Setting : Emitter.Settings)
-			{
-				if (Setting.Name.Equals(TEXT("SimTarget"), ESearchCase::IgnoreCase)
-					&& Setting.Value.IsValid()
-					&& Setting.Value->Text.Equals(TEXT("GPU"), ESearchCase::IgnoreCase))
-				{
-					bHasGpuEmitter = true;
-					break;
-				}
-			}
+			const FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+			bHasGpuEmitter |= Data && Data->SimTarget == ENiagaraSimTarget::GPUComputeSim;
 		}
 
 		FPendingBuild Pending;

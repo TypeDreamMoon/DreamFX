@@ -158,6 +158,7 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 | :-- | :-- |
 | **[快速上手](Docs/getting-started.md)** | 从零到跑起来,不开编辑器 |
 | **[语法参考](Docs/language/README.md)** | `.dfs` / `.dfe` / `.dfm`、值、曲线、事件、stage |
+| **继承** | [系统源码 `Parent`](Docs/language/system-inheritance.md) 与 [原生发射器 `inherits`](Docs/language/native-emitter-inheritance.md) |
 | **[诊断码](Docs/diagnostics/README.md)** | 143 个 `DFXnnnn` 全带文件/行/列,从源码生成并防漂移 |
 | **[编辑器工具](Docs/tools/editor-integration.md)** | 菜单、右键、工具栏、VSCode workspace |
 | **[更新日志](CHANGELOG.md)** | 每个版本做了什么,以及已知问题清单 |
@@ -187,5 +188,6 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 - **写包命令必须关编辑器**(`build` / `corpus` / `mirror-diff` / `decompile-all`)——
   两个进程存同一批包,谁后存谁赢,而且两边都不吭声。
 - 未覆盖(设计使然或尚未做):Scratch Pad、模块内部图 lowering、GPU/CPU 条件分支、
-  Scalability 条件逻辑、真·emitter 继承(`from` 是拷贝)。降级全部有诊断,绝不静默——
+  Scalability 条件逻辑。发射器 `from` 是源码拷贝,原生资产继承使用 `inherits`,系统源码继承使用 `Parent`。
+  降级全部有诊断,绝不静默——
   1.0.0 已知问题清单见 [CHANGELOG](CHANGELOG.md)。

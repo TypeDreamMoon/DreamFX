@@ -1687,6 +1687,27 @@ namespace UE::DreamFX
 				}
 				OutEmitter.FromPath = Lexer.Next().Text;
 			}
+			else if (Lexer.Peek().IsIdentifier(TEXT("inherits")))
+			{
+				OutEmitter.NativeParentLocation = Lexer.Next().Location;
+				if (Lexer.Peek().Kind != ETokenKind::String || Lexer.Peek().Text.IsEmpty())
+				{
+					ErrorAtCurrent(TEXT("DFX2015"), TEXT("'inherits' needs a quoted Niagara emitter asset path."));
+					return false;
+				}
+				OutEmitter.NativeParentPath = Lexer.Next().Text;
+				if (Lexer.Peek().IsIdentifier(TEXT("version")))
+				{
+					Lexer.Next();
+					FGuid Version;
+					if (Lexer.Peek().Kind != ETokenKind::String || !FGuid::Parse(Lexer.Peek().Text, Version) || !Version.IsValid())
+					{
+						ErrorAtCurrent(TEXT("DFX2015"), TEXT("Parent 'version' needs a quoted version GUID."));
+						return false;
+					}
+					OutEmitter.NativeParentVersion = Lexer.Next().Text;
+				}
+			}
 
 			return ParseEmitterBody(OutEmitter, /*bAllowRenderers=*/true);
 		}
@@ -1863,6 +1884,7 @@ namespace UE::DreamFX
 			}
 
 			bool bSeenName = false;
+			bool bSeenParent = false;
 			do
 			{
 				FString Key;
@@ -1890,10 +1912,21 @@ namespace UE::DreamFX
 				{
 					OutDocument.Root = Value;
 				}
+				else if (Key == TEXT("Parent"))
+				{
+					if (OutDocument.Kind != EDocumentKind::System || bSeenParent || Value.TrimStartAndEnd().IsEmpty())
+					{
+						Diagnostics.Error(TEXT("DFX2019"), KeyLocation,
+							TEXT("Parent is allowed once on a System header and must name a non-empty .dfs source path."));
+					}
+					OutDocument.ParentPath = Value;
+					OutDocument.ParentLocation = KeyLocation;
+					bSeenParent = true;
+				}
 				else
 				{
 					Diagnostics.Error(TEXT("DFX2019"), KeyLocation,
-						FString::Printf(TEXT("Unknown header argument '%s'. Expected Name or Root."), *Key));
+						FString::Printf(TEXT("Unknown header argument '%s'. Expected Name, Root, or Parent (System only)."), *Key));
 				}
 			}
 			while (Lexer.TryConsumeSymbol(TEXT(",")));
@@ -2008,21 +2041,41 @@ namespace UE::DreamFX
 		FParserImpl Impl(SourceText, Diagnostics);
 		const bool bParsed = Impl.ParseDocument(OutDocument);
 
-		// Stamped here rather than threaded through every ParseStackBlock call: the parser has no
-		// business knowing about paths, and a merged emitter needs this to report the right file.
+		// Origin survives .dfe merges and .dfs inheritance, including child overrides mixed with
+		// parent declarations. It is also the base directory for an inherited emitter's `from`.
+		auto StampProperties = [&OutDocument](TArray<FPropertyEntry>& Properties)
+		{
+			for (FPropertyEntry& Property : Properties) { Property.SourceFile = OutDocument.SourceFilePath; }
+		};
 		auto StampStacks = [&OutDocument](TArray<FStack>& Stacks)
 		{
 			for (FStack& Stack : Stacks)
 			{
 				Stack.SourceFile = OutDocument.SourceFilePath;
+				for (FStatement& Statement : Stack.Statements) { Statement.SourceFile = OutDocument.SourceFilePath; }
+			}
+		};
+		auto StampEmitter = [&](FEmitter& Emitter)
+		{
+			Emitter.FromSourceFile = OutDocument.SourceFilePath;
+			StampProperties(Emitter.Settings);
+			StampStacks(Emitter.Stacks);
+			for (FStatement& Default : Emitter.Defaults) { Default.SourceFile = OutDocument.SourceFilePath; }
+			for (FRenderer& Renderer : Emitter.Renderers)
+			{
+				Renderer.SourceFile = OutDocument.SourceFilePath;
+				StampProperties(Renderer.Properties);
+				StampProperties(Renderer.MaterialParameters);
 			}
 		};
 
+		StampProperties(OutDocument.Settings);
+		for (FParameterDecl& Parameter : OutDocument.Parameters) { Parameter.SourceFile = OutDocument.SourceFilePath; }
 		StampStacks(OutDocument.Stacks);
-		StampStacks(OutDocument.EmitterDefinition.Stacks);
+		StampEmitter(OutDocument.EmitterDefinition);
 		for (FEmitter& Emitter : OutDocument.Emitters)
 		{
-			StampStacks(Emitter.Stacks);
+			StampEmitter(Emitter);
 		}
 
 		return bParsed && !Diagnostics.HasErrors();

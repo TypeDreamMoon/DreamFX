@@ -14,7 +14,7 @@
 Unknown document type '%s'. Expected System, Emitter, Module or DynamicInput.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1941`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1974`
 <!-- generated:end DFX2000 -->
 
 **Cause.** The first word of the file is not one of the four document kinds.
@@ -158,7 +158,7 @@ Expected a version after '@'.
 Module '%s' was given a positional argument. Module inputs must be written as 'Name = Value'.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:998`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1016`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:998`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1027`
 <!-- generated:end DFX2008 -->
 
 **Cause.** A module call was given a bare value. Niagara addresses module inputs by name, and the order they appear in the stack UI is not the order they are declared in.
@@ -248,7 +248,7 @@ Module '%s' was given a positional argument. Module inputs must be written as 'N
 A Module or DynamicInput must declare a 'Body = { }' block.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1851`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1872`
 <!-- generated:end DFX2018 -->
 
 **Cause.** A `.dfm` with no `Body` declares inputs and generates a module that does nothing.
@@ -266,7 +266,7 @@ A Module or DynamicInput must declare a 'Body = { }' block.
 Header argument '%s' must be a quoted string.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1878`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1895`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1903`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1900`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1919`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1928`, `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1936`
 <!-- generated:end DFX2019 -->
 
 **Cause.** Header arguments (`Name=`, `Root=`) are quoted strings.
@@ -302,7 +302,7 @@ Unknown curve key attribute '%s'. Expected Interp, Tangent, Arrive or Leave.
 File declares '%s' but its extension is '%s'. Rename the file to '%s' or change the declaration.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1955`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1988`
 <!-- generated:end DFX2021 -->
 
 **Cause.** The declared document kind and the file extension disagree.
@@ -320,7 +320,7 @@ File declares '%s' but its extension is '%s'. Rename the file to '%s' or change 
 Unexpected '%s' after the end of the document. A DreamFX file declares exactly one top-level object.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1984`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:2017`
 <!-- generated:end DFX2022 -->
 
 **Cause.** Content followed the closing brace of the top-level object. Usually a duplicated block or one brace too few somewhere above.

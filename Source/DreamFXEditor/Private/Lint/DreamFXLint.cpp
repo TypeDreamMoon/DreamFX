@@ -1,5 +1,8 @@
 #include "DreamFXLint.h"
 
+#include "Generation/DreamFXSystemInheritance.h"
+#include "Misc/ScopeExit.h"
+
 namespace UE::DreamFX::Editor
 {
 	namespace
@@ -122,6 +125,8 @@ namespace UE::DreamFX::Editor
 
 		void LintEmitter(const FEmitter& Emitter, FDiagnosticSink& Diagnostics)
 		{
+			const FString PreviousFile = Diagnostics.GetFile();
+			ON_SCOPE_EXIT { Diagnostics.SetFile(PreviousFile); };
 			// A GPU emitter cannot compute its own bounds: the particle data never leaves the GPU, so
 			// there is nothing to read back. Without fixed bounds it gets a default box and vanishes
 			// at the wrong camera angle -- a bug that only shows up in a specific shot.
@@ -129,6 +134,7 @@ namespace UE::DreamFX::Editor
 				&& FindSetting(Emitter.Settings, TEXT("FixedBounds")) == nullptr)
 			{
 				const FPropertyEntry* SimTarget = FindSetting(Emitter.Settings, TEXT("SimTarget"));
+				Diagnostics.SetFile(SimTarget && !SimTarget->SourceFile.IsEmpty() ? SimTarget->SourceFile : PreviousFile);
 				Diagnostics.Warning(TEXT("DFX7101"), SimTarget ? SimTarget->Location : Emitter.Location,
 					FString::Printf(TEXT("Emitter '%s' simulates on the GPU but declares no FixedBounds. GPU emitters cannot compute their own bounds, so it will use a default box and may be culled unexpectedly."),
 						*Emitter.Name));
@@ -141,6 +147,7 @@ namespace UE::DreamFX::Editor
 				if (!SettingEquals(Emitter.Settings, TEXT("AllocationMode"), TEXT("Fixed"))
 					&& !SettingEquals(Emitter.Settings, TEXT("AllocationMode"), TEXT("FixedCount")))
 				{
+					Diagnostics.SetFile(Spawn->SourceFile.IsEmpty() ? PreviousFile : Spawn->SourceFile);
 					Diagnostics.Warning(TEXT("DFX7102"), Spawn->Location,
 						FString::Printf(TEXT("Emitter '%s' spawns by rate ('%s') with no upper bound. Set AllocationMode = Fixed and PreAllocationCount to cap the particle count."),
 							*Emitter.Name, *Spawn->Name));
@@ -153,6 +160,7 @@ namespace UE::DreamFX::Editor
 			{
 				if (!SettingEquals(Emitter.Settings, TEXT("Determinism"), TEXT("true")))
 				{
+					Diagnostics.SetFile(Random->SourceFile.IsEmpty() ? PreviousFile : Random->SourceFile);
 					Diagnostics.Warning(TEXT("DFX7103"), Random->Location,
 						FString::Printf(TEXT("Emitter '%s' uses randomness ('%s') but does not set Determinism = true, so it will look different on every play. Add Determinism and RandomSeed to its Settings if reproducibility matters."),
 							*Emitter.Name, *Random->Name));
@@ -255,6 +263,12 @@ namespace UE::DreamFX::Editor
 	void FLint::Run(const FDocument& Document, FDiagnosticSink& Diagnostics)
 	{
 		Diagnostics.SetFile(Document.SourceFilePath);
+		if (Document.Kind == EDocumentKind::System && !Document.ParentPath.IsEmpty())
+		{
+			FDocument Flattened;
+			if (ResolveSystemInheritance(Document, Flattened, Diagnostics)) { Run(Flattened, Diagnostics); }
+			return;
+		}
 
 		switch (Document.Kind)
 		{

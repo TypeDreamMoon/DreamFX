@@ -164,6 +164,7 @@ build and on the stock installed engine.
 | :-- | :-- |
 | **[Getting started](Docs/getting-started.md)** | nothing → running effect, no editor required |
 | **[Language reference](Docs/language/README.md)** | `.dfs` / `.dfe` / `.dfm`, values, curves, events, stages |
+| **Inheritance** | [System source `Parent`](Docs/language/system-inheritance.md) and [native emitter `inherits`](Docs/language/native-emitter-inheritance.md) |
 | **[Diagnostics](Docs/diagnostics/README.md)** | all 143 `DFXnnnn` codes with file/line/column, generated from source and drift-checked |
 | **[Editor tools](Docs/tools/editor-integration.md)** | menus, right-click actions, toolbar, VSCode workspace |
 | **[Changelog](CHANGELOG.md)** | what each release covers, and the known-issue list |
@@ -195,5 +196,6 @@ debug and migrate effects headlessly.
 - **Close the editor for package-writing commands** (`build`, `corpus`, `mirror-diff`,
   `decompile-all`) — two processes saving the same packages race silently.
 - Not covered (by design or not yet): Scratch Pad, module-internal graph lowering, GPU/CPU branch
-  conditions, Scalability conditions, true emitter inheritance (`from` is a copy). Degradations are
+  conditions, Scalability conditions. Emitter `from` copies source; native asset inheritance uses
+  `inherits`, and system source inheritance uses `Parent`. Degradations are
   diagnosed, not silent — see [CHANGELOG](CHANGELOG.md) for the 1.0.0 known-issues list.

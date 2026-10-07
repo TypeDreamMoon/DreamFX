@@ -612,9 +612,13 @@ namespace UE::DreamFX::Editor
 		static bool RenameModule(const FStackAddress& ModuleAddress, const FString& NewName,
 			TArray<FString>& OutErrors);
 
-		/** The emitter's graph-level parameter defaults; empty when every parameter uses Fail. */
+		/** Graph-level defaults. Export omits Fail; inheritance snapshots must include it. */
 		static bool GetParameterDefaults(const FStackAddress& EmitterAddress,
-			TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors);
+			TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors, bool bIncludeFail = false);
+
+		/** Reads an asset version directly, before native duplication can discard unused metadata. */
+		static bool GetParameterDefaults(const UNiagaraEmitter* Emitter, const FGuid& Version,
+			TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors, bool bIncludeFail = false);
 
 		/** Applies one parameter default, creating the graph parameter if it is not there yet. */
 		static bool SetParameterDefault(const FStackAddress& EmitterAddress,
@@ -703,6 +707,10 @@ namespace UE::DreamFX::Editor
 		 * a default stack would mean the text no longer describes the asset.
 		 */
 		static bool AddEmitter(UNiagaraSystem* System, FName EmitterName, TArray<FString>& OutErrors);
+
+		/** Recreate an emitter from a native parent (or blank), keeping an existing handle GUID. */
+		static bool ResetEmitterFromParent(UNiagaraSystem* System, FName EmitterName,
+			UNiagaraEmitter* Parent, const FGuid& ParentVersion, TArray<FString>& OutErrors);
 
 		/**
 		 * Adds a copy of an existing emitter asset.
@@ -995,7 +1003,9 @@ namespace UE::DreamFX::Editor
 		 * survives the original/mirror boundary and this resolves it against the live system. The
 		 * source must therefore already exist -- callers add handlers after every AddEmitter.
 		 *
-		 * Calling it again replaces the existing zero-id handler (engine RemoveEventHandlerByUsageId
+		 * A native child replaces its entire inherited event group, including graph nodes used only
+		 * by that group. Its parent association and graph dependencies shared with other stacks stay.
+		 * Otherwise calling it again replaces the existing zero-id handler (engine RemoveEventHandlerByUsageId
 		 * plus reuse of the graph output node), which is what a rebuild-in-place wants.
 		 *
 		 * Takes the language-level spec: an unset optional keeps the engine default, an empty Mode

@@ -2,6 +2,9 @@
 
 Produces one `UNiagaraSystem`.
 
+Add `Parent="../Base.dfs"` to inherit another system's source. See
+[system source inheritance](system-inheritance.md) for merge, path, and rebuild rules.
+
 ```cpp
 System(Name="Effects/NS_Spark", Root="Game")
 {
