@@ -3484,7 +3484,16 @@ namespace UE::DreamFX::Editor
 				FNiagaraAdapter::RequestCompileAsync(System, /*bForce=*/true);
 				FCompileStateInfo SecondState;
 				Errors.Reset();
-				FNiagaraAdapter::WaitAndCollect(System, Pending.bHasGpuEmitter, SecondState, Errors);
+				const bool bRecompiled = FNiagaraAdapter::WaitAndCollect(System, Pending.bHasGpuEmitter, SecondState, Errors);
+				ReportAdapterErrors(Errors, TEXT("DFX6000"), Pending.HeaderLocation, Diagnostics);
+				ReportNiagaraDiagnostics(System, SecondState, Pending.Plan, Pending.ModuleLocations, Diagnostics);
+				if (!bRecompiled)
+				{
+					Diagnostics.Error(TEXT("DFX6005"), Pending.HeaderLocation,
+						FString::Printf(TEXT("Niagara recompilation of '%s' did not succeed after resolving renderer bindings (status %s)."),
+							*Pending.Plan.FullAssetPath, *SecondState.StatusName));
+					return false;
+				}
 
 				StaleScripts.Reset();
 				if (!FNiagaraAdapter::VerifyCompiledStateCurrent(System, StaleScripts))

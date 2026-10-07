@@ -843,7 +843,7 @@ namespace UE::DreamFX::Editor
 		 * Deliberately NOT PollForCompilationComplete: that forwards to QueryCompileComplete, which
 		 * returns false both while a compile is in flight and once it has finished (empty
 		 * ActiveCompilations), so it cannot distinguish success from "still running". The blocking
-		 * wait plus the reported status is the only sound gate.
+		 * wait, outstanding-work checks and current executable data form the completion gate.
 		 */
 		/**
 		 * @param bIncludingGpuShaders  also block until the compute shaders are built.
@@ -911,8 +911,8 @@ namespace UE::DreamFX::Editor
 
 		/**
 		 * Asks every compilable script whether its stored VM was compiled from the graphs as they
-		 * stand now, using the engine's own synchronization test. Returns false and names the stale
-		 * scripts when any is out of date.
+		 * stand now, using the engine's own synchronization test. Also requires a valid compiled id
+		 * and CPU bytecode for CPU scripts. Returns false and names any missing or stale executable.
 		 *
 		 * The belt to InvalidateCachedCompileIds' braces: that call makes the final compile see the
 		 * truth, this one proves the truth was seen. It exists so the next idempotence hole in some

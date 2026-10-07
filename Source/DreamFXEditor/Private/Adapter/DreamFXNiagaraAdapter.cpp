@@ -3237,12 +3237,16 @@ namespace UE::DreamFX::Editor
 	{
 		if (System == nullptr)
 		{
-			return true;
+			OutStaleScripts.Add(TEXT("No system to verify"));
+			return false;
 		}
 
 		TArray<TTuple<FString, UNiagaraScript*>> Scripts;
+		TSet<UNiagaraScript*> RequiresCpuByteCode;
 		Scripts.Emplace(TEXT("SystemSpawn"), System->GetSystemSpawnScript());
 		Scripts.Emplace(TEXT("SystemUpdate"), System->GetSystemUpdateScript());
+		RequiresCpuByteCode.Add(System->GetSystemSpawnScript());
+		RequiresCpuByteCode.Add(System->GetSystemUpdateScript());
 		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
 		{
 			// A disabled emitter's scripts are legitimately left however they were.
@@ -3260,6 +3264,10 @@ namespace UE::DreamFX::Editor
 			for (UNiagaraScript* Script : EmitterScripts)
 			{
 				Scripts.Emplace(Handle.GetName().ToString(), Script);
+				if (Data->SimTarget == ENiagaraSimTarget::CPUSim)
+				{
+					RequiresCpuByteCode.Add(Script);
+				}
 			}
 		}
 
@@ -3269,7 +3277,14 @@ namespace UE::DreamFX::Editor
 			// AreScriptAndSourceSynchronized recomputes the compile id from the live graphs and
 			// compares it to the id the stored VM was compiled under -- the same judgement a compile
 			// request makes, asked after the fact.
-			if (Script != nullptr && !Script->AreScriptAndSourceSynchronized())
+			if (Script == nullptr)
+			{
+				OutStaleScripts.Add(Entry.Get<0>() + TEXT("/missing script"));
+				continue;
+			}
+			const bool bHasExecutable = Script->GetVMExecutableDataCompilationId().IsValid()
+				&& (!RequiresCpuByteCode.Contains(Script) || Script->GetVMExecutableData().HasByteCode());
+			if (!bHasExecutable || !Script->AreScriptAndSourceSynchronized())
 			{
 				OutStaleScripts.Add(FString::Printf(TEXT("%s/%s"), *Entry.Get<0>(), *Script->GetName()));
 			}
@@ -4793,6 +4808,7 @@ namespace UE::DreamFX::Editor
 		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("CompileAndWait"));
+		OutState = FCompileStateInfo();
 		if (System == nullptr)
 		{
 			OutErrors.Add(TEXT("Cannot compile a null system."));
@@ -4802,8 +4818,19 @@ namespace UE::DreamFX::Editor
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete begin '%s'"), *System->GetName());
 		System->WaitForCompilationComplete(bIncludingGpuShaders, /*bShowProgress=*/false);
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete end '%s'"), *System->GetName());
+		if (System->HasActiveCompilations() || System->NeedsRequestCompile())
+		{
+			OutState.StatusName = TEXT("CompilationPending");
+			OutState.bIsStale = true;
+			OutErrors.Add(TEXT("Niagara returned from its compile wait with work still active or queued. The new VM has not been installed; the build cannot be saved as successful."));
+			return false;
+		}
 
-		RefreshRendererBindings(System);
+		// Check before refreshing bindings: that refresh can legitimately dirty the system scripts,
+		// and FinalizeBuild performs one more compile in that case. A stale VM at this point is not
+		// that convergence case: no successful result was installed for the graph we just waited on.
+		TArray<FString> StaleScripts;
+		const bool bExecutableCurrent = VerifyCompiledStateCurrent(System, StaleScripts);
 
 		FNiagaraExternalEditContext Context(System);
 		FNiagaraExt_SystemCompileState State;
@@ -4815,7 +4842,7 @@ namespace UE::DreamFX::Editor
 			: FString::FromInt(static_cast<int32>(State.AggregateStatus));
 		OutState.bHasErrors = State.bHasErrors;
 		OutState.bHasWarnings = State.bHasWarnings;
-		OutState.bIsStale = State.bIsStale;
+		OutState.bIsStale = State.bIsStale || !bExecutableCurrent;
 
 		for (const FNiagaraExt_ScriptCompileInfo& Script : State.Scripts)
 		{
@@ -4837,8 +4864,19 @@ namespace UE::DreamFX::Editor
 			State.AggregateStatus == ENiagaraExt_ScriptCompileStatus::UpToDateWithWarnings ||
 			State.AggregateStatus == ENiagaraExt_ScriptCompileStatus::ComputeUpToDateWithWarnings;
 
-		Drain(Context, OutErrors);
-		return bStatusOk && !State.bHasErrors;
+		if (!bExecutableCurrent)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Niagara VM data is missing or does not match its source after compilation: %s."),
+				*FString::Join(StaleScripts, TEXT(", "))));
+		}
+		const bool bContextOk = Drain(Context, OutErrors);
+		const bool bSucceeded = bContextOk && bStatusOk && !State.bHasErrors
+			&& !State.bIsCompiling && !State.bIsStale && bExecutableCurrent;
+		if (bSucceeded)
+		{
+			RefreshRendererBindings(System);
+		}
+		return bSucceeded;
 	}
 
 	bool FNiagaraAdapter::CompileAndWait(UNiagaraSystem* System, bool bIncludingGpuShaders,
