@@ -1,5 +1,7 @@
 #include "DreamFXProvenance.h"
 
+#include "DreamFXTypes.h"
+
 #include "UObject/MetaData.h"
 #include "UObject/Object.h"
 #include "UObject/Package.h"
@@ -35,7 +37,22 @@ namespace UE::DreamFX::Editor
 		// 1.1 -- stamp v2 (plan-v2 W3): module version GUIDs. Bumped because an asset stamped by 1.0
 		// has no versions recorded, and treating "absent" as "unchanged" would make the check useless
 		// on exactly the assets that predate it.
-		return TEXT("1.1");
+		// 1.2 -- dependency-aware source stamps and corrected generation/round-trip semantics.
+		return TEXT("1.2");
+	}
+
+	FString FProvenance::HashWithSourceDependencies(const FString& SourceHash, const TMap<FString, FString>& Dependencies)
+	{
+		if (Dependencies.IsEmpty()) { return SourceHash; }
+		TArray<FString> Paths;
+		Dependencies.GetKeys(Paths);
+		Paths.Sort();
+		FString Fingerprint = SourceHash;
+		for (const FString& Path : Paths)
+		{
+			Fingerprint += FString::Printf(TEXT("\n%d:%s=%s"), Path.Len(), *Path, *Dependencies[Path]);
+		}
+		return HashSourceText(Fingerprint);
 	}
 
 	void FProvenance::Write(UObject* Asset, const FProvenanceStamp& Stamp)

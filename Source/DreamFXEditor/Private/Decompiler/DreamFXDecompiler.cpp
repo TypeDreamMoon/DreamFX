@@ -10,6 +10,7 @@
 #include "Dom/JsonObject.h"
 #include "Misc/PackageName.h"
 #include "HAL/PlatformMemory.h"
+#include "NiagaraCommon.h"
 #include "NiagaraDataInterfaceCurve.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraScript.h"
@@ -1132,6 +1133,36 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
+		bool TryWriteUserParameterBinding(const TSharedPtr<FJsonValue>& Value,
+			const TSharedPtr<FJsonValue>& Default, FString& OutLiteral)
+		{
+			const TSharedPtr<FJsonObject>* Parameter = nullptr;
+			const TSharedPtr<FJsonObject>* DefaultParameter = nullptr;
+			if (!Value.IsValid() || Value->Type != EJson::Object
+				|| !Default.IsValid() || Default->Type != EJson::Object
+				|| !Value->AsObject()->TryGetObjectField(TEXT("parameter"), Parameter)
+				|| !Default->AsObject()->TryGetObjectField(TEXT("parameter"), DefaultParameter))
+			{
+				return false;
+			}
+			FString Name;
+			const TSharedPtr<FJsonValue> Type = (*Parameter)->TryGetField(TEXT("typeDefHandle"));
+			const TSharedPtr<FJsonValue> DefaultType = (*DefaultParameter)->TryGetField(TEXT("typeDefHandle"));
+			if (!(*Parameter)->TryGetStringField(TEXT("name"), Name) || !Type.IsValid() || !DefaultType.IsValid()
+				|| !FJsonValue::CompareEqual(*Type, *DefaultType))
+			{
+				return false;
+			}
+			// Niagara serializes TypeDefHandle as a process-local registry index. These bindings
+			// have a fixed renderer-defined type (MaterialInterface for Sprite/Ribbon); import only
+			// the name so the fresh renderer keeps that type in every editor session.
+			const TSharedRef<FJsonObject> StableParameter = MakeShared<FJsonObject>();
+			StableParameter->SetStringField(TEXT("name"), Name);
+			const TSharedRef<FJsonObject> StableBinding = MakeShared<FJsonObject>();
+			StableBinding->SetObjectField(TEXT("parameter"), StableParameter);
+			return TryWriteJsonBlob(MakeShared<FJsonValueObject>(StableBinding), OutLiteral);
+		}
+
 		void WriteChangedRendererProperties(const UClass* RendererClass, const FString& Json,
 			const FString& DefaultsJson, TArray<FString>& OutLines, TArray<FString>& OutGaps)
 		{
@@ -1177,8 +1208,22 @@ namespace UE::DreamFX::Editor
 
 				// Attribute bindings are a `Bind X -> Y` statement, not a property assignment. They are
 				// emitted from the live struct further down, so skipping them here is not a gap.
-				if (Key.EndsWith(TEXT("Binding"), ESearchCase::CaseSensitive))
+				const FStructProperty* Property = FindFProperty<FStructProperty>(RendererClass, FName(*Key));
+				if (Property != nullptr && Property->Struct == FNiagaraVariableAttributeBinding::StaticStruct())
 				{
+					continue;
+				}
+				if (Property != nullptr && Property->Struct == FNiagaraUserParameterBinding::StaticStruct())
+				{
+					FString Blob;
+					if (TryWriteUserParameterBinding(Value, Defaults.IsValid() ? Defaults->TryGetField(Key) : nullptr, Blob))
+					{
+						OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *Blob));
+					}
+					else
+					{
+						OutGaps.AddUnique(FString::Printf(TEXT("renderer user parameter binding '%s' has a non-default or unreadable type"), *Key));
+					}
 					continue;
 				}
 
@@ -1696,7 +1741,8 @@ namespace UE::DreamFX::Editor
 							continue;
 						}
 
-						Writer.Line(FString::Printf(TEXT("%s%s = %s;"),
+						Writer.Line(FString::Printf(TEXT("%s%s%s = %s;"),
+							Module.bEnabled ? TEXT("") : TEXT("disabled "),
 							*Prefix, *ToNameToken(Entry.Get<0>().ToString()), *AssignedSource));
 					}
 					continue;
@@ -2389,6 +2435,55 @@ namespace UE::DreamFX::Editor
 					Arguments.Add(FString::Printf(TEXT("Enabled = %s"),
 						*ToNameToken(Stage.EnabledBindingName)));
 				}
+
+				const FSimulationStageExecutionSettings& Execution = Stage.Execution;
+				const FSimulationStageExecutionSettings& Baseline = Defaults.Execution;
+				auto WriteBool = [&Arguments](const TCHAR* Key, const TOptional<bool>& Value, const TOptional<bool>& Default)
+				{
+					if (Value.IsSet() && Value != Default)
+					{
+						Arguments.Add(FString::Printf(TEXT("%s = %s"), Key, Value.GetValue() ? TEXT("true") : TEXT("false")));
+					}
+				};
+				auto WriteName = [&Arguments](const TCHAR* Key, const FString& Value, const FString& Default)
+				{
+					if (!Value.IsEmpty() && Value != Default)
+					{
+						Arguments.Add(FString::Printf(TEXT("%s = %s"), Key, *ToNameToken(Value)));
+					}
+				};
+				auto WriteIntegerBinding = [&Arguments](const TCHAR* Key, const FStageIntegerBinding& Value,
+					const FStageIntegerBinding& Default)
+				{
+					if (Value.Value.IsSet() && Value.Value != Default.Value)
+					{
+						Arguments.Add(FString::Printf(TEXT("%s = %d"), Key, Value.Value.GetValue()));
+					}
+					if (!Value.Binding.IsEmpty())
+					{
+						Arguments.Add(FString::Printf(TEXT("%s = %s"), Key, *ToNameToken(Value.Binding)));
+					}
+				};
+				WriteBool(TEXT("DisablePartialParticleUpdate"), Execution.DisablePartialParticleUpdate, Baseline.DisablePartialParticleUpdate);
+				WriteBool(TEXT("ParticleIterationStateEnabled"), Execution.ParticleIterationStateEnabled, Baseline.ParticleIterationStateEnabled);
+				WriteName(TEXT("ParticleIterationStateBinding"), Execution.ParticleIterationStateBinding.IsEmpty()
+					? FString(TEXT("None")) : Execution.ParticleIterationStateBinding,
+					Baseline.ParticleIterationStateBinding.IsEmpty() ? FString(TEXT("None")) : Baseline.ParticleIterationStateBinding);
+				if (Execution.ParticleIterationStateRange.IsSet() && Execution.ParticleIterationStateRange != Baseline.ParticleIterationStateRange)
+				{
+					const FIntPoint Range = Execution.ParticleIterationStateRange.GetValue();
+					Arguments.Add(FString::Printf(TEXT("ParticleIterationStateRange = (%d, %d)"), Range.X, Range.Y));
+				}
+				WriteBool(TEXT("GpuDispatchForceLinear"), Execution.GpuDispatchForceLinear, Baseline.GpuDispatchForceLinear);
+				WriteBool(TEXT("OverrideGpuDispatchNumThreads"), Execution.OverrideGpuDispatchNumThreads, Baseline.OverrideGpuDispatchNumThreads);
+				WriteName(TEXT("DirectDispatchType"), Execution.DirectDispatchType, Baseline.DirectDispatchType);
+				WriteName(TEXT("DirectDispatchElementType"), Execution.DirectDispatchElementType, Baseline.DirectDispatchElementType);
+				WriteIntegerBinding(TEXT("ElementCountX"), Execution.ElementCountX, Baseline.ElementCountX);
+				WriteIntegerBinding(TEXT("ElementCountY"), Execution.ElementCountY, Baseline.ElementCountY);
+				WriteIntegerBinding(TEXT("ElementCountZ"), Execution.ElementCountZ, Baseline.ElementCountZ);
+				WriteIntegerBinding(TEXT("OverrideGpuDispatchNumThreadsX"), Execution.OverrideGpuDispatchNumThreadsX, Baseline.OverrideGpuDispatchNumThreadsX);
+				WriteIntegerBinding(TEXT("OverrideGpuDispatchNumThreadsY"), Execution.OverrideGpuDispatchNumThreadsY, Baseline.OverrideGpuDispatchNumThreadsY);
+				WriteIntegerBinding(TEXT("OverrideGpuDispatchNumThreadsZ"), Execution.OverrideGpuDispatchNumThreadsZ, Baseline.OverrideGpuDispatchNumThreadsZ);
 
 				const FString Name = ToNameToken(Stage.StageName.ToString());
 				Writer.Line(Arguments.Num() == 0

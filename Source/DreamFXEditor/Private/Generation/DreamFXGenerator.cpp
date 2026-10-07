@@ -2,6 +2,7 @@
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
 #include "DreamFXExpressions.h"
+#include "DreamFXEmitterMerge.h"
 #include "DreamFXModule.h"
 #include "DreamFXParser.h"
 #include "DreamFXProvenance.h"
@@ -12,6 +13,7 @@
 #include "SourceFiles/DreamFXPaths.h"
 
 #include "Dom/JsonObject.h"
+#include "JsonObjectConverter.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
@@ -20,6 +22,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/StrongObjectPtr.h"
+#include "UObject/UnrealType.h"
 
 namespace UE::DreamFX::Editor
 {
@@ -256,6 +259,7 @@ namespace UE::DreamFX::Editor
 			TArray<FPlannedStack> SystemStacks;
 			TArray<FPlannedEmitter> Emitters;
 			FDependencySet Dependencies;
+			FString EffectiveSourceHash;
 		};
 
 		/** Converts a literal AST value into JSON for the object-property blob writers. */
@@ -540,10 +544,45 @@ namespace UE::DreamFX::Editor
 		}
 
 		bool PlanSettings(const TArray<FPropertyEntry>& Settings, TArrayView<const FSettingMapping> Mappings,
-			const FString& DefaultRoot, const TCHAR* ScopeLabel, FDiagnosticSink& Diagnostics, FString& OutJson)
+			const FString& DefaultRoot, const TCHAR* ScopeLabel, FDiagnosticSink& Diagnostics, FString& OutJson,
+			const TSharedPtr<FJsonObject>& Defaults)
 		{
 			bool bOk = true;
 			TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
+
+			// A rebuild owns the supported settings, including ones removed from the source. Seed
+			// only these fields from a fresh asset; copying the whole default blob would reset GUIDs,
+			// graphs, renderers and other state outside Settings' ownership.
+			for (const FSettingMapping& Mapping : Mappings)
+			{
+				TArray<FString> Segments;
+				FString(Mapping.PropertyName).ParseIntoArray(Segments, TEXT("."));
+				TSharedPtr<FJsonObject> Object = Defaults;
+				TSharedPtr<FJsonValue> Value;
+				for (int32 Index = 0; Object.IsValid() && Index < Segments.Num(); ++Index)
+				{
+					Value.Reset();
+					for (const auto& Field : Object->Values)
+					{
+						if (FString(Field.Key).Equals(Segments[Index], ESearchCase::IgnoreCase))
+						{
+							Value = Field.Value;
+							break;
+						}
+					}
+					if (Index + 1 < Segments.Num())
+					{
+						Object = Value.IsValid() && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+					}
+				}
+				if (!Value.IsValid())
+				{
+					Diagnostics.Error(TEXT("DFX3020"), FSourceLocation(),
+						FString::Printf(TEXT("Cannot read the default for %s setting '%s'."), ScopeLabel, Mapping.SourceName));
+					return false;
+				}
+				SetJsonFieldByPath(Properties, Mapping.PropertyName, Value);
+			}
 
 			for (const FPropertyEntry& Setting : Settings)
 			{
@@ -1227,7 +1266,8 @@ namespace UE::DreamFX::Editor
 						return false;
 					};
 
-					bool bCanFold = OutStack.Modules.Num() > 0 && OutStack.Modules.Last().bIsSetParameters;
+					bool bCanFold = OutStack.Modules.Num() > 0 && OutStack.Modules.Last().bIsSetParameters
+						&& OutStack.Modules.Last().bDisabled == Statement.bDisabled;
 					if (bCanFold)
 					{
 						TSet<FName> WrittenSoFar;
@@ -1246,6 +1286,7 @@ namespace UE::DreamFX::Editor
 					{
 						FPlannedModule SetParameters;
 						SetParameters.bIsSetParameters = true;
+						SetParameters.bDisabled = Statement.bDisabled;
 						SetParameters.SourceName = TEXT("Set Parameters");
 						SetParameters.Location = Statement.Location;
 						SetParameters.Parameters.Add(MoveTemp(Parameter));
@@ -1572,63 +1613,6 @@ namespace UE::DreamFX::Editor
 			return bOk;
 		}
 
-		/**
-		 * Copies a referenced emitter and lays the inline block over it.
-		 *
-		 * Merge granularity is deliberately coarse: a declared stack replaces the base's whole stack
-		 * rather than merging module by module. Per-module merging needs a stable module identity the
-		 * language does not have -- two calls to the same module in one stack are indistinguishable --
-		 * and guessing would silently reorder someone's effect. Settings merge per key because those
-		 * are unambiguously named.
-		 */
-		bool MergeEmitter(const FEmitter& Base, const FEmitter& Override, FEmitter& OutMerged,
-			FDiagnosticSink& Diagnostics)
-		{
-			OutMerged = Base;
-			OutMerged.Name = Override.Name;
-			OutMerged.Location = Override.Location;
-
-			for (const FPropertyEntry& Setting : Override.Settings)
-			{
-				FPropertyEntry* Existing = OutMerged.Settings.FindByPredicate([&Setting](const FPropertyEntry& Candidate)
-				{
-					return Candidate.Name.Equals(Setting.Name, ESearchCase::IgnoreCase);
-				});
-				if (Existing != nullptr)
-				{
-					*Existing = Setting;
-				}
-				else
-				{
-					OutMerged.Settings.Add(Setting);
-				}
-			}
-
-			for (const FStack& Stack : Override.Stacks)
-			{
-				const int32 Index = OutMerged.Stacks.IndexOfByPredicate(
-					[&Stack](const FStack& Candidate) { return Candidate.Kind == Stack.Kind; });
-				if (Index != INDEX_NONE)
-				{
-					OutMerged.Stacks[Index] = Stack;
-				}
-				else
-				{
-					OutMerged.Stacks.Add(Stack);
-				}
-			}
-
-			// All or nothing for renderers: they are addressed by declaration order, so overriding one
-			// of several would mean silently reindexing the rest.
-			if (Override.Renderers.Num() > 0)
-			{
-				OutMerged.Renderers = Override.Renderers;
-			}
-
-			(void)Diagnostics;
-			return true;
-		}
-
 		/** 3.4: every User.* a referenced emitter reads must be declared by the host system. */
 		bool CheckReferencedUserParameters(const FEmitter& Referenced,
 			const TMap<FName, FNiagaraTypeDefinition>& UserVariableTypes,
@@ -1715,8 +1699,31 @@ namespace UE::DreamFX::Editor
 
 			bool bOk = true;
 
+			TSharedRef<FJsonObject> SystemDefaults = MakeShared<FJsonObject>();
+			const UNiagaraSystem* DefaultSystem = GetDefault<UNiagaraSystem>();
+			for (const FSettingMapping& Mapping : SystemSettings)
+			{
+				FProperty* Property = UNiagaraSystem::StaticClass()->FindPropertyByName(Mapping.PropertyName);
+				if (Property != nullptr)
+				{
+					SystemDefaults->SetField(Mapping.PropertyName, FJsonObjectConverter::UPropertyToJsonValue(
+						Property, Property->ContainerPtrToValuePtr<void>(DefaultSystem)));
+				}
+			}
+			TSharedPtr<FJsonObject> EmitterDefaults;
+			if (!Document.Emitters.IsEmpty())
+			{
+				const FString* DefaultsJson = Modules.GetEmitterDefaults(Error);
+				if (DefaultsJson == nullptr || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(*DefaultsJson), EmitterDefaults))
+				{
+					Diagnostics.Error(TEXT("DFX3020"), Document.HeaderLocation,
+						TEXT("Could not read fresh emitter settings: ") + Error);
+					return false;
+				}
+			}
+
 			if (!PlanSettings(Document.Settings, SystemSettings, Document.Root, TEXT("system"),
-				Diagnostics, OutPlan.SystemPropertiesJson))
+				Diagnostics, OutPlan.SystemPropertiesJson, SystemDefaults))
 			{
 				bOk = false;
 			}
@@ -1851,6 +1858,7 @@ namespace UE::DreamFX::Editor
 				OutPlan.SystemStacks.Add(MoveTemp(Planned));
 			}
 
+			TMap<FString, FString> SourceDependencies;
 			TSet<FName> EmitterNames;
 			for (const FEmitter& Emitter : Document.Emitters)
 			{
@@ -1907,16 +1915,21 @@ namespace UE::DreamFX::Editor
 						continue;
 					}
 
-					if (!MergeEmitter(Referenced.EmitterDefinition, Emitter, Merged, Diagnostics))
+					if (!MergeEmitterDefinitions(Referenced.EmitterDefinition, Emitter, Merged, Diagnostics))
 					{
 						bOk = false;
 						continue;
 					}
 					Source = &Merged;
+					// Use the authored reference as identity and the resolved file's content as value.
+					// Absolute lookup results would make a portable source stale on another checkout.
+					FString DependencyPath = Emitter.FromPath;
+					FPaths::NormalizeFilename(DependencyPath);
+					SourceDependencies.Add(DependencyPath, Referenced.SourceHash);
 
 					// 3.4: a .dfe may read User.*, and only the host declares those. Checking here means
 					// the error points at the `from` line, which is where the fix belongs.
-					if (!CheckReferencedUserParameters(Referenced.EmitterDefinition, UserVariableTypes,
+					if (!CheckReferencedUserParameters(Merged, UserVariableTypes,
 						Emitter.FromLocation, ReferencedFile, Diagnostics))
 					{
 						bOk = false;
@@ -1929,7 +1942,7 @@ namespace UE::DreamFX::Editor
 				Planned.Location = Emitter.Location;
 
 				if (!PlanSettings(Source->Settings, EmitterSettings, Document.Root, TEXT("emitter"),
-					Diagnostics, Planned.PropertiesJson))
+					Diagnostics, Planned.PropertiesJson, EmitterDefaults))
 				{
 					bOk = false;
 				}
@@ -2110,6 +2123,8 @@ namespace UE::DreamFX::Editor
 
 				OutPlan.Emitters.Add(MoveTemp(Planned));
 			}
+
+			OutPlan.EffectiveSourceHash = FProvenance::HashWithSourceDependencies(Document.SourceHash, SourceDependencies);
 
 			if (OutPlan.Emitters.Num() == 0 && bOk)
 			{
@@ -2447,6 +2462,15 @@ namespace UE::DreamFX::Editor
 								ReportAdapterErrors(Errors, TEXT("DFX5025"), Nested.Location, Diagnostics);
 								bOk = false;
 							}
+						}
+					}
+					if (Module.bDisabled)
+					{
+						Errors.Reset();
+						if (!FNiagaraAdapter::SetModuleEnabled(ModuleAddress, false, Errors))
+						{
+							ReportAdapterErrors(Errors, TEXT("DFX5029"), Module.Location, Diagnostics);
+							bOk = false;
 						}
 					}
 					continue;
@@ -3597,7 +3621,7 @@ namespace UE::DreamFX::Editor
 		}
 		Result.System = System;
 
-		const bool bUpToDate = FProvenance::IsUpToDate(System, Document.SourceHash);
+		const bool bUpToDate = FProvenance::IsUpToDate(System, Plan.EffectiveSourceHash);
 
 		if (Options.bVerifyOnly)
 		{
@@ -3610,7 +3634,7 @@ namespace UE::DreamFX::Editor
 						*Plan.FullAssetPath));
 				Result.bDrifted = true;
 			}
-			else if (Stamp.SourceHash != Document.SourceHash)
+			else if (Stamp.SourceHash != Plan.EffectiveSourceHash)
 			{
 				Diagnostics.Error(TEXT("DFX7002"), Document.HeaderLocation,
 					FString::Printf(TEXT("Asset '%s' is stale: it was generated from a different revision of this source. Run the DreamFX build."),
@@ -3726,7 +3750,7 @@ namespace UE::DreamFX::Editor
 		Pending.ModuleLocations = MoveTemp(ModuleLocations);
 		Pending.HeaderLocation = Document.HeaderLocation;
 		Pending.SourceFilePath = Document.SourceFilePath;
-		Pending.SourceHash = Document.SourceHash;
+		Pending.SourceHash = Pending.Plan.EffectiveSourceHash;
 		Pending.bHasGpuEmitter = bHasGpuEmitter;
 		Pending.bSave = Options.bSave;
 

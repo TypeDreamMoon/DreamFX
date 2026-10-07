@@ -603,7 +603,9 @@ namespace UE::DreamFX::Editor
 					}
 
 					const int32 Suffix = ChainEnd - Index - AttributeName.Len();
-					const bool bIsAssignmentTarget = Suffix == 0 && IsAssignmentOperatorAt(Working, ChainEnd);
+					// A swizzle still writes the owning attribute. Its untouched components must arrive
+					// through a read pin before the complete value is written back to the parameter map.
+					const bool bIsAssignmentTarget = IsAssignmentOperatorAt(Working, ChainEnd);
 					const bool bCompound = bIsAssignmentTarget && IsCompoundAssignmentAt(Working, ChainEnd);
 
 					int32& BindingIndex = BindingIndices.FindOrAdd(AttributeName, INDEX_NONE);
@@ -618,7 +620,7 @@ namespace UE::DreamFX::Editor
 
 					FAttributeBinding& Binding = OutBindings[BindingIndex];
 					Binding.bWritten |= bIsAssignmentTarget;
-					Binding.bRead |= !bIsAssignmentTarget || bCompound;
+					Binding.bRead |= !bIsAssignmentTarget || bCompound || Suffix > 0;
 
 					// Placeholder: which pin a reference resolves to depends on whether the attribute is
 					// written *anywhere*, which is not known until the whole body has been read.

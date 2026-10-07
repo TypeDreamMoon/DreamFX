@@ -1053,6 +1053,7 @@ namespace UE::DreamFX::Editor
 			FString NumIterationsBindingName;
 			/** The parameter driving bEnabled, when one is bound; empty otherwise. */
 			FString EnabledBindingName;
+			UE::DreamFX::FSimulationStageExecutionSettings Execution;
 			/** The stage script's usage id -- per stage, random on authored content (never zero). */
 			FGuid ScriptUsageId;
 			bool bScriptMissing = false;
@@ -1110,7 +1111,7 @@ namespace UE::DreamFX::Editor
 			TArray<FString>& OutErrors);
 
 		/**
-		 * What a freshly added generic stage holds, read off the CDO. The decompiler judges Stage
+		 * What a freshly added generic stage holds, read off a transient instance. The decompiler judges Stage
 		 * header arguments against this, so an argument is written exactly when a rebuild that
 		 * omitted it would produce something else.
 		 */

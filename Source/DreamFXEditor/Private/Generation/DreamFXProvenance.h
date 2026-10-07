@@ -16,7 +16,7 @@ namespace UE::DreamFX::Editor
 		FString SourceRelativePath;
 		/** Absolute source path, for diagnostics and for opening the file from the editor guardrail. */
 		FString SourceFullPath;
-		/** Hash of the source text at generation time. Equal hash means the rebuild can be skipped. */
+		/** Hash of source text and referenced .dfe contents at generation time. */
 		FString SourceHash;
 		/** Generator version. Bumping it forces every asset to regenerate on the next build. */
 		FString GeneratorVersion;
@@ -49,6 +49,9 @@ namespace UE::DreamFX::Editor
 	public:
 		/** Bump when the generator's output changes in a way that must invalidate cached assets. */
 		static const TCHAR* GetGeneratorVersion();
+
+		/** Stable across checkout locations and dependency discovery order; no dependencies preserves the raw hash. */
+		static FString HashWithSourceDependencies(const FString& SourceHash, const TMap<FString, FString>& Dependencies);
 
 		static void Write(UObject* Asset, const FProvenanceStamp& Stamp);
 		static bool Read(const UObject* Asset, FProvenanceStamp& OutStamp);
