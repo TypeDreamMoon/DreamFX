@@ -17,6 +17,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
+#include "NiagaraMeshRendererProperties.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "Serialization/JsonSerializer.h"
@@ -1528,6 +1529,8 @@ namespace UE::DreamFX::Editor
 
 			bool bOk = true;
 
+			const bool bMeshRenderer = OutRenderer.Class->IsChildOf(UNiagaraMeshRendererProperties::StaticClass());
+
 			for (const FRendererBinding& Binding : Renderer.Bindings)
 			{
 				// A dot, not a namespace from the known set. Niagara aliases an emitter's own
@@ -1565,6 +1568,13 @@ namespace UE::DreamFX::Editor
 			{
 				if (!Property.Value.IsValid())
 				{
+					continue;
+				}
+				if (bMeshRenderer && Property.Name.Equals(TEXT("Material"), ESearchCase::IgnoreCase))
+				{
+					Diagnostics.Error(TEXT("DFX3049"), Property.Location,
+						TEXT("MeshRenderer has no Material property. Set OverrideMaterials = [\"/path/to/material\"]; and bOverrideMaterials = true; to override its mesh materials."));
+					bOk = false;
 					continue;
 				}
 				TSharedPtr<FJsonValue> Json;
@@ -1606,7 +1616,26 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
-				Properties->SetField(Property.Name, Json);
+				// These controls refer to reflected FNames, so alternate casing must share the
+				// same final value when diagnosing the material override switch below.
+				const FString JsonName = bMeshRenderer && Property.Name.Equals(TEXT("bOverrideMaterials"), ESearchCase::IgnoreCase)
+					? TEXT("bOverrideMaterials")
+					: bMeshRenderer && Property.Name.Equals(TEXT("OverrideMaterials"), ESearchCase::IgnoreCase)
+						? TEXT("OverrideMaterials") : Property.Name;
+				Properties->SetField(JsonName, Json);
+			}
+
+			if (bMeshRenderer)
+			{
+				const TArray<TSharedPtr<FJsonValue>>* Overrides = nullptr;
+				bool bOverridesEnabled = CastChecked<UNiagaraMeshRendererProperties>(OutRenderer.Class->GetDefaultObject())->bOverrideMaterials != 0;
+				Properties->TryGetBoolField(TEXT("bOverrideMaterials"), bOverridesEnabled);
+				if (Properties->TryGetArrayField(TEXT("OverrideMaterials"), Overrides)
+					&& Overrides != nullptr && !Overrides->IsEmpty() && !bOverridesEnabled)
+				{
+					Diagnostics.Warning(TEXT("DFX7105"), Renderer.Location,
+						TEXT("MeshRenderer OverrideMaterials is nonempty but material overrides are disabled. Set bOverrideMaterials = true; or remove OverrideMaterials to use the mesh's own materials."));
+				}
 			}
 
 			OutRenderer.PropertiesJson = Properties->Values.Num() > 0 ? SerializeJsonObject(Properties) : FString();

@@ -1,5 +1,7 @@
 #include "DreamFXValueLowering.h"
 
+#include "Components/ActorComponent.h"
+#include "GameFramework/Actor.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraTypes.h"
 #include "UObject/UObjectIterator.h"
@@ -455,6 +457,22 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	bool FValueLowering::ValidateObjectDefaultType(const FNiagaraTypeDefinition& Type,
+		const FString& InputDisplayName, const FSourceLocation& Location, FDiagnosticSink& Diagnostics)
+	{
+		const UClass* Class = Type.GetClass();
+		if (Class != nullptr && (Type.IsDataInterface() || Class->IsChildOf(UNiagaraDataInterface::StaticClass())
+			|| Class->IsChildOf(AActor::StaticClass()) || Class->IsChildOf(UActorComponent::StaticClass())
+			|| Class->HasAnyClassFlags(CLASS_DefaultToInstanced)))
+		{
+			Diagnostics.Error(TEXT("DFX4043"), Location,
+				FString::Printf(TEXT("Input '%s' is an instance-backed %s and cannot have a literal or asset-path default. Omit the default and supply an instance through a system parameter or stack input."),
+					*InputDisplayName, *DescribeType(Type)));
+			return false;
+		}
+		return true;
+	}
+
 	bool FValueLowering::Lower(const FValue& Value, const FNiagaraTypeDefinition& TargetType,
 		const FString& InputDisplayName, FDiagnosticSink& Diagnostics, FInputValue& OutValue)
 	{
@@ -589,6 +607,10 @@ namespace UE::DreamFX::Editor
 
 		case EValueKind::String:
 		{
+			if (!ValidateObjectDefaultType(BaseType, InputDisplayName, Value.Location, Diagnostics))
+			{
+				return false;
+			}
 			// An `Object<T>` parameter's value is a reference to an existing asset, so its spelling is
 			// the asset path -- the same one a renderer's Material already uses. Without this the
 			// declaration round-tripped bare and the rebuild left the slot empty, which is how the
@@ -611,6 +633,13 @@ namespace UE::DreamFX::Editor
 						FString::Printf(TEXT("Parameter '%s': '%s' is a %s, which is not a %s."),
 							*InputDisplayName, *Value.Text, *Asset->GetClass()->GetName(),
 							*BaseType.GetClass()->GetName()));
+					return false;
+				}
+				if (!Asset->IsAsset())
+				{
+					Diagnostics.Error(TEXT("DFX4043"), Value.Location,
+						FString::Printf(TEXT("Parameter '%s': '%s' names an object instance, not an asset. Supply the instance through a system parameter or stack input instead of an asset-path default."),
+							*InputDisplayName, *Value.Text));
 					return false;
 				}
 

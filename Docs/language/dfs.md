@@ -378,9 +378,14 @@ written as an array of paths:
 MeshRenderer Body
 {
     Meshes           = ["/Engine/BasicShapes/Cube"];
+    bOverrideMaterials = true;
     OverrideMaterials = ["Plugin.MoonToon:Materials/FX/M_Chunk"];
 }
 ```
+
+Mesh material overrides are disabled by default. A nonempty `OverrideMaterials` array needs
+`bOverrideMaterials = true;`; otherwise DreamFX reports DFX7105 and the renderer uses the mesh's own
+materials. Mesh renderers have no single `Material` property: writing one is an error (DFX3049).
 
 Each element is really a struct with the asset as one field inside it; which field is found by
 reflection, so this works for renderer types that do not exist yet. The struct's *other* fields — a
@@ -400,7 +405,7 @@ an export gap. These bindings are separate from attribute `Bind` statements.
 **Declaration order is renderer order**, and there is no other addressing scheme. Reordering two
 renderer blocks repaints the effect.
 
-Leaving `Material` out applies the engine default (DFX5004) rather than drawing nothing.
+Leaving `Material` out on a Sprite, Ribbon or Decal renderer applies the engine default (DFX5004).
 
 ## Referencing a `.dfe`
 
