@@ -8,6 +8,7 @@
 #include "Generation/DreamFXGenerator.h"
 #include "Lint/DreamFXLint.h"
 #include "SourceFiles/DreamFXPaths.h"
+#include "WriteBack/DreamFXPull.h"
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
 #include "Algo/StableSort.h"
@@ -1031,6 +1032,52 @@ namespace
 
 		return Errors;
 	}
+
+	/**
+	 * Values out of the asset and into the literals the text already writes (write-back ②).
+	 *
+	 * Writes no asset at all, and without -Apply writes no text either: the thing being changed is a
+	 * hand-maintained source file, so the default is the report that says which line would change and
+	 * from what to what.
+	 */
+	int32 RunPull(const FString& FilePath, bool bApply, const FString& AssetOverride)
+	{
+		FString Full = FilePath;
+		if (FPaths::IsRelative(Full))
+		{
+			Full = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), Full);
+		}
+		if (!FPaths::FileExists(Full))
+		{
+			UE_LOG(LogDreamFX, Error, TEXT("No DreamFX source file at '%s'."), *Full);
+			return 1;
+		}
+
+		FPullOptions Options;
+		Options.bApply = bApply;
+		Options.AssetOverride = AssetOverride;
+
+		FDiagnosticSink Diagnostics;
+		Diagnostics.SetFile(Full);
+		const FPullResult Result = FPuller::PullFile(Full, Options, Diagnostics);
+		LogDiagnostics(Diagnostics);
+
+		if (!Result.bSucceeded)
+		{
+			return FMath::Max(Diagnostics.NumErrors(), 1);
+		}
+
+		// One grep-able verdict, the way the build reports, and the only line that says whether the
+		// file on disk is still the one that was there when the run started.
+		UE_LOG(LogDreamFX, Display,
+			TEXT("=== DreamFX pull: %d value(s) compared, %d %s, %d not declared, %d not writable, %d stack(s) not addressed | %s ==="),
+			Result.Compared, Result.Changed,
+			Result.bWroteFile ? TEXT("written") : TEXT("to write"),
+			Result.Undeclared, Result.Unwritable, Result.Unaddressable,
+			Result.bWroteFile ? TEXT("applied") : TEXT("dry run"));
+
+		return Diagnostics.NumErrors();
+	}
 }
 
 UDreamFXCommandlet::UDreamFXCommandlet()
@@ -1137,6 +1184,14 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	if (FParse::Param(*Params, TEXT("Graph")))
 	{
 		return RunGraph();
+	}
+
+	FString PullTarget;
+	if (FParse::Value(*Params, TEXT("Pull="), PullTarget))
+	{
+		FString AssetOverride;
+		FParse::Value(*Params, TEXT("Asset="), AssetOverride);
+		return RunPull(PullTarget, FParse::Param(*Params, TEXT("Apply")), AssetOverride);
 	}
 
 	const bool bLintOnly = FParse::Param(*Params, TEXT("Lint"));

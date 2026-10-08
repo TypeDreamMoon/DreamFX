@@ -46,6 +46,16 @@
 .EXAMPLE
     ./dfx.ps1 mirror-diff -Path /Game/FX
     Check each mirror against the asset it was exported from: same text, and it compiles.
+
+.EXAMPLE
+    ./dfx.ps1 pull DFX/Decompiled/Game/FX/NS_Spark.dfs
+    Print which literals the asset's stored values disagree with -- a dry run, nothing written.
+
+.EXAMPLE
+    ./dfx.ps1 pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Asset /Game/FX/NS_Spark -Apply
+    Write the ORIGINAL's values into the export that names the mirror. -Asset is how the two are
+    addressed at once: the export's Name= can only ever point at one of them, and a build must keep
+    pointing at the mirror while pull reads the original the values were tuned in.
 #>
 [CmdletBinding()]
 param(
@@ -53,8 +63,9 @@ param(
     # verify — check assets against source without writing anything
     # schema — print one module's input signature
     # list   — print every module (or, with -DynamicInputs, every dynamic input) on the search paths
+    # pull   — write the asset's stored values back into the literals a text already has
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'asset-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'index', 'corpus')]
+    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'asset-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'index', 'corpus', 'pull')]
     [string]$Command,
 
     # build/verify: path to a .dfs (absolute, or relative to the working directory).
@@ -152,7 +163,16 @@ param(
     [switch]$DumpFacts,
 
     # Echo the full commandlet output instead of just the DreamFX lines.
-    [switch]$Raw
+    [switch]$Raw,
+
+    # pull: write the values into the source file. Without it pull is a dry run that prints the lines
+    # it would change and touches nothing.
+    [switch]$Apply,
+
+    # pull: read the values from THIS asset instead of the one the text names. Needed because an
+    # export cannot name the asset it came from -- it names the mirror it rebuilds -- so pulling the
+    # original's values into that export has no other spelling.
+    [string]$Asset
 )
 
 $ErrorActionPreference = 'Stop'
@@ -413,6 +433,12 @@ switch ($Command) {
     }
     'list' {
         $arguments += if ($DynamicInputs) { '-ListDynamicInputs' } else { '-ListModules' }
+    }
+    'pull' {
+        if (-not $Target) { throw "pull needs a source file, e.g. DFX/Decompiled/Game/FX/NS_Spark.dfs" }
+        $arguments += "-Pull=$((Resolve-Path -LiteralPath $Target).Path)"
+        if ($Asset) { $arguments += "-Asset=$Asset" }
+        if ($Apply) { $arguments += '-Apply' }
     }
 }
 
