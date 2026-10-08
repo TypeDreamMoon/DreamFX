@@ -14,7 +14,7 @@
 Input '%s' expects %s, but a number was written.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:520`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:530`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:545`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:621`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:584`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:594`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:609`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:685`
 <!-- generated:end DFX4001 -->
 
 **Cause.** A bare number was written where the input wants a vector, colour or other structured type.
@@ -32,7 +32,7 @@ Input '%s' expects %s, but a number was written.
 Expression for '%s': a vector literal must have 2 to 4 components.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:119`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:332`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:444`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:514`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:553`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:119`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:333`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:508`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:578`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:617`
 <!-- generated:end DFX4002 -->
 
 **Cause.** Niagara vector types are 2, 3 or 4 components.
@@ -50,7 +50,7 @@ Expression for '%s': a vector literal must have 2 to 4 components.
 Input '%s' is an integer, but %s was written. Narrowing is not implicit -- write int(%s) if truncation is intended.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:501`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:565`
 <!-- generated:end DFX4003 -->
 
 **Cause.** L7: `float -> int` is never implicit. A silently truncated spawn count is among the hardest effect bugs to find.
@@ -68,7 +68,7 @@ Input '%s' is an integer, but %s was written. Narrowing is not implicit -- write
 Input '%s' has no resolvable Niagara type.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:463`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:580`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:527`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:644`
 <!-- generated:end DFX4004 -->
 
 **Cause.** The input's type could not be resolved from the module schema.
@@ -86,7 +86,7 @@ Input '%s' has no resolvable Niagara type.
 Property '%s': component %d is not a number.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1123`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1444`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:346`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:373`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:567`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:669`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1176`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1497`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:347`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:374`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:631`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:733`
 <!-- generated:end DFX4005 -->
 
 **Cause.** A vector or `box()` component is not a number.
@@ -104,7 +104,7 @@ Property '%s': component %d is not a number.
 Input '%s' is a %s, which has no entry named '%s'. Valid entries: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:643`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:707`
 <!-- generated:end DFX4006 -->
 
 **Cause.** The enum has no entry by that name. Niagara's user-defined enums store `NewEnumerator0` internally and keep the real name in display text, so the names here are not guessable from the asset -- they are read live.
@@ -122,7 +122,7 @@ Input '%s' is a %s, which has no entry named '%s'. Valid entries: %s
 Input '%s' expects %s. '%s' is neither a literal of that type nor a parameter reference -- parameter references start with a namespace such as User., Particles., Emitter., System. or Engine.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:652`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:716`
 <!-- generated:end DFX4007 -->
 
 **Cause.** The value is neither a literal of the expected type nor a namespace-qualified parameter.
@@ -140,7 +140,7 @@ Input '%s' expects %s. '%s' is neither a literal of that type nor a parameter re
 Input '%s' is set more than once on dynamic input '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1033`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1434`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1086`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1487`
 <!-- generated:end DFX4010 -->
 
 **Cause.** The same input was given twice on one dynamic input call.
@@ -158,7 +158,7 @@ Input '%s' is set more than once on dynamic input '%s'.
 Parameter '%s': 'Object' needs an inner type, e.g. Object<Texture>.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:328`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:373`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:392`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:437`
 <!-- generated:end DFX4020 -->
 
 **Cause.** `DI` names no class on its own.
@@ -176,7 +176,7 @@ Parameter '%s': 'Object' needs an inner type, e.g. Object<Texture>.
 Parameter '%s': no UObject class named '%s'. Object<> takes a class name such as Object<Texture> or Object<StaticMesh>.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:361`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:407`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:425`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:471`
 <!-- generated:end DFX4021 -->
 
 **Cause.** The declared type is not one DreamFX knows.
@@ -194,7 +194,7 @@ Parameter '%s': no UObject class named '%s'. Object<> takes a class name such as
 Cannot infer the type of '%s' from its value. A first assignment to a new attribute must use a literal, so its type is unambiguous.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:451`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:515`
 <!-- generated:end DFX4022 -->
 
 **Cause.** L2 types a new attribute from its first value, and this value carries no type -- an `hlsl` block, a dynamic input and an inline expression all have none of their own.
@@ -212,7 +212,7 @@ Cannot infer the type of '%s' from its value. A first assignment to a new attrib
 Property '%s': box() takes 6 numbers -- minX, minY, minZ, maxX, maxY, maxZ.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:458`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:470`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:473`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:485`
 <!-- generated:end DFX4023 -->
 
 **Cause.** `box()` is minX, minY, minZ, maxX, maxY, maxZ.
@@ -230,7 +230,7 @@ Property '%s': box() takes 6 numbers -- minX, minY, minZ, maxX, maxY, maxZ.
 Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Properties, or assign a literal first so the type is explicit.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:736`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:789`
 <!-- generated:end DFX4024 -->
 
 **Cause.** The right-hand side references a parameter whose type is not known at this point.
@@ -248,7 +248,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 '%s' is not a valid assignment target. Parameter names are namespace-qualified, e.g. Particles.MyValue or Emitter.MyCounter.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1114`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1939`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1167`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1992`
 <!-- generated:end DFX4025 -->
 
 **Cause.** An unqualified assignment target has no namespace to live in, and guessing one would put the value somewhere never named.
@@ -266,7 +266,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 'Bind %s -> %s': the target must be a qualified parameter -- either a namespace such as Particles.SpriteSize, or an emitter's own alias such as MyEmitter.Velocity.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1498`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1551`
 <!-- generated:end DFX4026 -->
 
 **Cause.** A renderer binding target is a parameter, not a bare name.
@@ -284,7 +284,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 '%s' is %s, but '%s' is %s. Linking binds a parameter directly -- there is no conversion. Declare '%s' as %s, or drive the input another way.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:783`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:836`
 <!-- generated:end DFX4027 -->
 
 **Cause.** L7 across a link. A linked value binds the parameter directly -- there is no conversion step to truncate or widen in -- so the two types have to match exactly.
@@ -302,7 +302,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 Default for '%s' needs a declared type. A default has no module signature to infer one from, so write it: `float %s = …`.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1947`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2000`
 <!-- generated:end DFX4028 -->
 
 **Cause.** A `Defaults` entry was written without a type. Elsewhere the type can come from the value or from the module signature the input belongs to; a default belongs to no module and its value may be an `hlsl` block or a link, so there is nothing to infer from.
@@ -320,7 +320,7 @@ Default for '%s' needs a declared type. A default has no module signature to inf
 Default for '%s' must be a literal, an enum or another parameter. A dynamic input computes a value per particle, which a default cannot do.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1984`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2037`
 <!-- generated:end DFX4029 -->
 
 **Cause.** A `Defaults` entry was given a dynamic input. A default is one value stored on the parameter, and a dynamic input is a graph that runs per particle -- there is nowhere to run it.
@@ -518,7 +518,7 @@ Unknown curve interpolation '%s'. Expected Auto, Cubic, Linear or Constant.
 Parameter '%s': no asset at '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:601`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:665`
 <!-- generated:end DFX4040 -->
 
 **Cause.** An `Object<T>` parameter was given an asset path and nothing is at that path. Usually the asset moved or was renamed after the source was written, or the path is a content-browser display name rather than an object path.
@@ -536,7 +536,7 @@ Parameter '%s': no asset at '%s'.
 Parameter '%s': '%s' is a %s, which is not a %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:610`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:674`
 <!-- generated:end DFX4041 -->
 
 **Cause.** The asset at that path exists but is not the class the parameter declares. `Object<Texture> = ".../M_Fire"` names a material, and Niagara would refuse the binding at runtime rather than at build time.
@@ -572,7 +572,7 @@ Unknown curve tangent mode '%s'. Expected Auto, User, Break or None.
 Input '%s': dynamic inputs, hlsl blocks, curves and inline expressions are not available yet (planned for Phase 3).
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:663`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:727`
 <!-- generated:end DFX4091 -->
 
 **Cause.** A Phase 2 build met a Phase 3 value mode. Historical -- it should not appear on a current build.

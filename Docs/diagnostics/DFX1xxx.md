@@ -14,7 +14,7 @@
 Could not read source file '%s'.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1837`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXParser.cpp:1856`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:328`
 <!-- generated:end DFX1000 -->
 
 **Cause.** The path does not exist, or the process cannot read it. A `from` reference and a `-File=` argument both land here.
@@ -32,7 +32,7 @@ Could not read source file '%s'.
 Unterminated string literal.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:304`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:314`
 <!-- generated:end DFX1001 -->
 
 **Cause.** A quoted string ran to the end of the line without a closing quote.
@@ -68,7 +68,7 @@ Unterminated block comment.
 Unexpected character '%c' (U+%04X).
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:335`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:345`
 <!-- generated:end DFX1003 -->
 
 **Cause.** A character that is not part of the language appeared outside a string, comment or raw block. Smart quotes pasted from a document are the usual cause.
@@ -86,7 +86,7 @@ Unexpected character '%c' (U+%04X).
 Unterminated raw block: missing '}'.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:488`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:502`
 <!-- generated:end DFX1004 -->
 
 **Cause.** A raw block -- `hlsl { }`, `Body = { }` -- was opened and never closed. Raw blocks are brace-balanced, so an unbalanced brace *inside* the HLSL runs the block to end of file.
@@ -104,7 +104,7 @@ Unterminated raw block: missing '}'.
 Unterminated back-quoted name. A `name` must close on the same line.
 ```
 
-**Raised by** `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:185`, `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:198`
+**Raised by** `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:195`, `Source/DreamFX/Private/Parser/DreamFXLexer.cpp:208`
 <!-- generated:end DFX1005 -->
 
 **Cause.** A back-quote opened a name that never closed before the end of the line, or closed

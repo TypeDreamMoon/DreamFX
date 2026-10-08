@@ -655,6 +655,31 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 （`NS_Effects1_Mesh`、`破空灰尘`、`/AtlasFX/Templates/NS_Atlas2D_Mesh`）hash 前后不变
 （拦截发生在 save 之前），字节留档在 `Saved/DreamFX/gate-probe/asset-backup/`。
 
+### 6.9 已实现：`pull`（资产 → 文本）
+
+> 分支 `feat/pull`，命令 `dfx pull`，诊断 `DFX7105`–`DFX7111`。**完整语义、边界与实测在
+> [`pull.md`](pull.md)**；本节只记它和本文前几节的关系，以及实测纠正/确认了哪些结论。
+
+- **§6.4 的两次「建议改成」按原样落地了一半，另一半换了个做法。** 建议是把 `-NoDefaults` 从
+  「诊断用」升格成「写回路径的读取模式」，并把「普通模式与 `-NoDefaults` 的差集」定义为抑制集。
+  实现里：`-NoDefaults` 仍然是**把键写进文本**的那一半（`pull` 依赖它 —— 文本里没有的输入，
+  `pull` 不会替你加），而**值**不再走 pin：`pull` 直接反射读 rapid-iteration store，
+  口径与 `asset-diff`、安全闸完全一致。于是「抑制集」这件事不再需要单独定义：
+  文本没声明的，`pull` 一律不碰（`DFX7106`）。
+- **§3.5 的 `MeshYaw` 现在可以在文本里修好了**：`pull -Apply` 把 `-90` 写进导出文本
+  （`0.0 -> -90.0`，整文件只有这一行变化），随后的 `build` 1 built / 0 error，
+  日志里没有任何 `build safety` 行 —— 值变了但文本声明了它，安全闸规则 3 放行；
+  `asset-diff` 里这一项两侧都成了 `0000B4C2`。**§3.5 末尾「镜像是否真的画得不一样」的 L3 问题不受影响，
+  仍然未验证**；本命令解决的是「文本带不带这个值」，不是「运行时读哪个」。
+- **§6.8 第 7 行的 8 条，现在会被 `pull` 逐条报出来并跳过**，这就是「不新增结构」的直接证据
+  （`破空灰尘`：19 compared / 0 to write / 94 not declared / 0 stack(s) not addressed，
+  文件 SHA256 前后相同）。**读数订正**：94 是「按名字去重」的数，和 §3.4/§6.8 的 37 / 57 不是同一口径 ——
+  后者是**逐脚本的事实条数**（同一个名字在 `ParticleSpawnScriptInterpolated` 与 `ParticleUpdateScript`
+  里各算一条），前者是一个名字一行。用哪个数字都行，但别把它们当成同一个量。
+- **一条新的适配器契约**（`pull` 踩到的）：`FNiagaraAdapter::GetEmitterInfo` 的 out 参数是**追加**语义，
+  同一个 `FEmitterInfo` 实例给两个 emitter 用，第二个 emitter 会拿到第一个的 stack。
+  `pull` 每个 emitter 新建一个实例并写了注释；**适配器本身没动**（共享路径，改它要单独评估）。
+
 ---
 
 ## 7. 复现步骤
