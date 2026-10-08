@@ -48,13 +48,14 @@
 | 写不进去就报错（DUI7004） | 只有 **Adopt** 有这道闸（`DFX8010`），而它依赖的是 `UnsupportedFeatures`，即读侧**自己承认**表达不了的项 | **build 上还没有** ⇒ 资产里存在、文本不会生成的东西会被静默冲掉。实测的当前例子（[write-back-coverage.md](write-back-coverage.md) §3）：① `NS_ScanScene` 整篇 build 不进去（21 × DFX4007，而 `coverage` 对同一个资产报 `ok`）；② 模块输入的 rapid-iteration 字面量根本不进文本（`破空灰尘` 37+4 条、`TR刀光_System` 61+9 条）；③ `MeshYaw` 原资产 −90 / 镜像 0 这种「L1/L2 全绿但值不同」的分歧。三条都是"资产里有、文本里没有"，`DFX8010` 一条都拦不到 |
 | 一次 flush 一个 undo | 无 | 一次 build 一个事务 |
 
-> **2026-10-08 订正（实测）**：上表最后一行里"材质参数绑定被冲掉"这个**举例已经不成立** —— `asset-diff` 显示
+> **2026-10-08 订正（实测）**：上表「写不进去就报错（DUI7004）」那一行里"材质参数绑定被冲掉"这个**举例已经不成立** —— `asset-diff` 显示
 > `Sheet ← User.Atlas.ResolvedTexture` 现在两侧**逐字符相同**（`MaterialParameters` 一致、`MaterialParamValidMask = 4095`），
 > 也就是说在打过引擎补丁的 5.8.2 上这条绑定**能导出、也能写回**。白块事故是在引擎侧能力就位**之前**观察到的；
 > "当初被冲掉是否因为缺少引擎侧能力"属**推测，未证明**。
 >
 > 但安全闸的结论**不变**：build 侧仍然没有闸，而 `DFX8010` 依赖的 `UnsupportedFeatures` **覆盖不到**上面实测的三类
-> （那三个资产一条都没报）。详见 [write-back-coverage.md](write-back-coverage.md) §6。
+> （那三个资产一条都没报）。证据与建议见 [write-back-coverage.md](write-back-coverage.md) §3、§6.1。
+
 ## 3. 建议的实现顺序（给作者）
 
 1. **先补 build 侧的安全闸**（投入最小、收益最大）：build 打开目标资产时顺带扫"资产里有、文本不会生成"的项，
@@ -78,3 +79,5 @@
   （单测在 `Source/DreamGUITests/Private/Editor/DreamUI*WriteBack*Tests.cpp`）
 - 语言文档：`Plugins/DreamGUI/Docs/DuiLanguage.md`（§"What the designer writes back"，以及 DUI7004）
 - DreamFX 现有同类机制：`dfx.ps1 mirror-diff`、`Corpus.RoundTrip`、`DFX8010`（Adopt 拒绝）
+- DreamFX 实测缺口（同日、59 个系统）：[write-back-coverage.md](write-back-coverage.md) ——
+  可写回 / 不可写回清单、固定点抽样结果，以及 build 侧安全闸该拦什么
