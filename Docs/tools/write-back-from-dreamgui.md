@@ -67,12 +67,23 @@
    `DeferRequestCompile`，状态更新用 `if (RequestCompileStatus == None)` 保护、不降级更强的状态；
    债由 `WaitForCompilationComplete` / `PollForCompilationComplete` 兑现。
 
-## 4. 验收标准（两条硬的）
+## 4. 验收标准（两层都要过）
 
-- **无操作写回逐字节不变**：`decompile → build → decompile` 两次结果一致（DFX 的 `mirror-diff` 就是干这个的）。
+写回正确性要**两层同时过**，缺一层就会漏：
+
+- **文本层 —— 无操作写回逐字节不变**：`decompile → build → decompile` 两次结果一致
+  （DFX 的 `mirror-diff` 就是干这个的）。
+- **资产层 —— `asset-diff` 的 fact 集合相等**：原资产与镜像在**反射层**逐项一致。
+  这一层不能省，理由是实测出来的：**L1 比的是「导出 vs 导出」，两侧都是同一个有损导出器的输出，
+  所以读侧的丢失在 L1 里结构性失明**（`Source/DreamFXEditor/Private/Diff/DreamFXAssetFacts.h:12-16`
+  自己就是这么写的）。本次实测里只有文本层会漏掉这三类 —— `NS_ScanScene` 整篇 build 不进去
+  （21 × DFX4007）、模块输入的字面量不进文本（`破空灰尘` 37+4 条、`TR刀光_System` 61+9 条）、
+  `MeshYaw` 原资产 −90 / 镜像 0；这三个资产的 L1/L2 全绿，是 `asset-diff` 才判的 DIFF
+  （[write-back-coverage.md](write-back-coverage.md) §3、§5）。
+  *（`asset-diff` 自己还有两个盲区：不比对系统级属性、不比父链 —— 见
+  [write-back-coverage.md](write-back-coverage.md) §3.9；补上之后这一层才算完整。）*
 - **一批编辑只编译一次**：`LogDreamFX Verbose` 数 `PHASE RequestCompile issued` 的次数 —— 打引擎补丁前
   最坏系统 260 次 / 8.3 秒，补丁后应为 1 次。
-
 ## 5. 参考位置
 
 - DreamGUI 源码：`Plugins/DreamGUI/Source/DreamGUIEditor/Private/Text/DreamUITextWriteBack.cpp`
