@@ -1,0 +1,1322 @@
+diff --git a/Engine/Plugins/FX/Niagara/Source/Niagara/Classes/NiagaraSystem.h b/Engine/Plugins/FX/Niagara/Source/Niagara/Classes/NiagaraSystem.h
+index f46358b..130b20e 100644
+--- a/Engine/Plugins/FX/Niagara/Source/Niagara/Classes/NiagaraSystem.h
++++ b/Engine/Plugins/FX/Niagara/Source/Niagara/Classes/NiagaraSystem.h
+@@ -616,6 +616,37 @@ public:
+ 	/** Do we have any pending compilation requests or not */
+ 	bool NeedsRequestCompile() const { return RequestCompileStatus != ERequestCompileStatus::None; }
+ 
++	/**
++	 * MoonEngine: records that a compile is owed without launching one.
++	 *
++	 * For a caller making many edits before it wants a result. RequestCompile aborts whatever is
++	 * still queued and launches again, so calling it per edit means every launch but the last is
++	 * thrown away -- 260 of them, 8.3 s, on one text-authored system. The debt is honoured by
++	 * WaitForCompilationComplete and PollForCompilationComplete, both of which already begin by
++	 * asking NeedsRequestCompile(). Never downgrades a stronger pending status.
++	 */
++	void DeferRequestCompile()
++	{
++		if (RequestCompileStatus == ERequestCompileStatus::None)
++		{
++			RequestCompileStatus = ERequestCompileStatus::RequestPending;
++		}
++	}
++
++	/**
++	 * MoonEngine: while set, RequestCompile records the debt (see DeferRequestCompile) and launches
++	 * nothing.
++	 *
++	 * For an external batch edit whose intermediate states are not worth compiling. The guarded
++	 * launch sites (RefreshAll's compile, auto-compile) already stand down while a debt or an active
++	 * compilation is outstanding; this catches the unguarded ones -- parameter renames, emitter
++	 * change notifications, and a view model construction that begins by paying the on-demand debt
++	 * of a freshly loaded system. Whoever ends the batch pays once: any explicit RequestCompile, or
++	 * WaitForCompilationComplete, which begins by honouring the debt.
++	 */
++	void SetSuppressCompileRequests(bool bSuppress) { bSuppressCompileRequests = bSuppress; }
++	bool GetSuppressCompileRequests() const { return bSuppressCompileRequests; }
++
+ protected:
+ 	/** When enable constant values are baked into the scripts while editing the system, this will increase iteration times but improve performance. */
+ 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Performance", meta=(DisplayName="Bake Rapid Iteration Parameters During Edit"))
+@@ -661,6 +692,9 @@ protected:
+ 	};
+ 	ERequestCompileStatus RequestCompileStatus = ERequestCompileStatus::None;
+ 
++	/** MoonEngine: RequestCompile defers to the debt instead of launching. See SetSuppressCompileRequests. */
++	bool bSuppressCompileRequests = false;
++
+ public:
+ 	/** Subscriptions to definitions of parameters. */
+ 	UPROPERTY()
+diff --git a/Engine/Plugins/FX/Niagara/Source/Niagara/Private/NiagaraSystem.cpp b/Engine/Plugins/FX/Niagara/Source/Niagara/Private/NiagaraSystem.cpp
+index d66e5d0..f92055d 100644
+--- a/Engine/Plugins/FX/Niagara/Source/Niagara/Private/NiagaraSystem.cpp
++++ b/Engine/Plugins/FX/Niagara/Source/Niagara/Private/NiagaraSystem.cpp
+@@ -3792,6 +3792,19 @@ bool UNiagaraSystem::RequestCompile(bool bForce, FNiagaraSystemUpdateContext* Op
+ 	check(IsInGameThread());
+ 	TRACE_CPUPROFILER_EVENT_SCOPE(UNiagaraSystem::RequestCompile)
+ 
++	// MoonEngine: an external batch edit is in progress -- record the debt and launch nothing. The
++	// status update keeps every outstanding-work query truthful, so the guarded launch sites stay
++	// closed for the rest of the batch. See SetSuppressCompileRequests.
++	if (bSuppressCompileRequests)
++	{
++		if (RequestCompileStatus == ERequestCompileStatus::None)
++		{
++			RequestCompileStatus = ERequestCompileStatus::RequestPending;
++		}
++		UE_LOG(LogNiagara, Verbose, TEXT("RequestCompile suppressed during batch edit for %s"), *GetPathName());
++		return false;
++	}
++
+ 	if (RequestCompileStatus == ERequestCompileStatus::RequestPendingForcedRetry)
+ 	{
+ 		bForce = true;
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraExternalSystemEditorUtilities.cpp b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraExternalSystemEditorUtilities.cpp
+index 6c0f2f3..8418908 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraExternalSystemEditorUtilities.cpp
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraExternalSystemEditorUtilities.cpp
+@@ -12,6 +12,7 @@
+ #include "AssetBuildUtilities/NiagaraAssetBuilder.h"
+ #include "NiagaraStackQuery.h"
+ #include "NiagaraStackEntryEnumerable.h"
++#include "NiagaraDataInterfaceCurveBase.h"
+ #include "NiagaraShared.h"
+ #include "PropertyHandle.h"
+ #include "ViewModels/NiagaraEmitterHandleViewModel.h"
+@@ -52,6 +53,57 @@
+ 
+ #define LOCTEXT_NAMESPACE "FNiagaraExternalSystemEditorUtilities"
+ 
++//////////////////////////////////////////////////////////////////////////
++// MoonEngine: accumulating step stats for the external-edit write path
++
++namespace
++{
++	TMap<FName, FNiagaraExternalEditStepStats::FStep> GMoonStepStats;
++
++	/** Accumulates the enclosing scope into one FNiagaraExternalEditStepStats row. */
++	struct FMoonScopedStep
++	{
++		FName Name;
++		double Start;
++		explicit FMoonScopedStep(FName InName) : Name(InName), Start(FPlatformTime::Seconds()) {}
++		~FMoonScopedStep() { FNiagaraExternalEditStepStats::Add(Name, FPlatformTime::Seconds() - Start); }
++	};
++}
++
++void FNiagaraExternalEditStepStats::Add(FName Step, double Seconds)
++{
++	FStep& Entry = GMoonStepStats.FindOrAdd(Step);
++	Entry.Seconds += Seconds;
++	++Entry.Count;
++}
++
++void FNiagaraExternalEditStepStats::Reset()
++{
++	GMoonStepStats.Reset();
++}
++
++void FNiagaraExternalEditStepStats::BuildReport(TArray<FString>& OutLines)
++{
++	TArray<TPair<FName, FStep>> Sorted;
++	for (const TPair<FName, FStep>& Entry : GMoonStepStats)
++	{
++		Sorted.Add(Entry);
++	}
++	Sorted.Sort([](const TPair<FName, FStep>& A, const TPair<FName, FStep>& B)
++	{
++		return A.Value.Seconds > B.Value.Seconds;
++	});
++
++	for (const TPair<FName, FStep>& Entry : Sorted)
++	{
++		OutLines.Add(FString::Printf(TEXT("%9.2f s  %7lld x  %8.2f ms each  %s"),
++			Entry.Value.Seconds,
++			Entry.Value.Count,
++			Entry.Value.Count > 0 ? (Entry.Value.Seconds * 1000.0 / Entry.Value.Count) : 0.0,
++			*Entry.Key.ToString()));
++	}
++}
++
+ //////////////////////////////////////////////////////////////////////////
+ // Helper functions for property access and JSON conversion
+ 
+@@ -1594,6 +1646,190 @@ void UNiagaraExternalEditUtilities::GetEmitterSummary(const FNiagaraExt_StackIte
+ 	FillEmitterMetadata(*Emitter, OutSummary.EmitterName, OutSummary.bEnabled, OutSummary.SimTarget, OutSummary.RendererClasses);
+ }
+ 
++namespace
++{
++	/** MoonEngine: the emitter's own parameter graph, where its parameter defaults live. */
++	UNiagaraGraph* GetEmitterGraph(const FNiagaraEmitterHandle& Emitter)
++	{
++		FNiagaraEmitterHandle& MutableHandle = const_cast<FNiagaraEmitterHandle&>(Emitter);
++		const FVersionedNiagaraEmitterData* Data = MutableHandle.GetEmitterData();
++		if (Data == nullptr)
++		{
++			return nullptr;
++		}
++		const UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(Data->GraphSource);
++		return Source != nullptr ? Source->NodeGraph : nullptr;
++	}
++}
++
++void UNiagaraExternalEditUtilities::GetEmitterParameterDefaults(const FNiagaraExt_StackItemReference& EmitterRef, TArray<FNiagaraExt_ParameterDefault>& OutDefaults, FNiagaraExternalEditContext& Context)
++{
++	const FNiagaraEmitterHandle* Emitter = EmitterRef.GetEmitter(Context);
++	if (Emitter == nullptr)
++	{
++		return;
++	}
++
++	UNiagaraGraph* Graph = GetEmitterGraph(*Emitter);
++	if (Graph == nullptr)
++	{
++		Context.Error(NSLOCTEXT("NiagaraExternalEdit", "ParameterDefaults_NoGraph",
++			"Emitter has no parameter graph, so its parameter defaults cannot be read."));
++		return;
++	}
++
++	// GetAllVariables and GetDefaultMode rather than GetAllMetaData: a graph keeps parameters in two
++	// stores -- UNiagaraScriptVariable objects and the newer FNiagaraScriptVariableData structs --
++	// and GetAllMetaData only sees the first. Reading just that store found nothing at all on a
++	// loaded asset, which looked exactly like "this asset has no defaults".
++	// Reading the reference map first is load-bearing, not decorative: it is what rebuilds the
++	// graph's parameter store, and a graph that has only been loaded reports zero variables until
++	// it runs.
++	Graph->GetParameterReferenceMap();
++
++	TArray<FNiagaraVariable> Variables;
++	Graph->GetAllVariables(Variables);
++
++	UE_CLOG(UE_LOG_ACTIVE(LogNiagaraEditor, Verbose), LogNiagaraEditor, Verbose,
++		TEXT("PARAMDEFAULTS emitter '%s': graph has %d variable(s)"),
++		*Emitter->GetName().ToString(), Variables.Num());
++
++	for (const FNiagaraVariable& Variable : Variables)
++	{
++		FNiagaraScriptVariableBinding Binding;
++		const TOptional<ENiagaraDefaultMode> Mode = Graph->GetDefaultMode(Variable, &Binding);
++
++		// FailIfPreviouslyNotSet is what a parameter gets when nobody chose, so reporting it would
++		// make every read look like it carried an authored decision.
++		if (!Mode.IsSet() || *Mode == ENiagaraDefaultMode::FailIfPreviouslyNotSet)
++		{
++			continue;
++		}
++
++		FNiagaraExt_ParameterDefault& Entry = OutDefaults.AddDefaulted_GetRef();
++		Entry.Variable.Name = Variable.GetName();
++		Entry.Variable.Type = Variable.GetType();
++		Entry.Mode = *Mode;
++		Entry.Binding = Binding.GetName();
++
++		if (*Mode == ENiagaraDefaultMode::Value)
++		{
++			// GetDefaultMode reads both stores; the value is only reachable through the object one,
++			// which is private in the other. A caller that gets a mode with no value knows the
++			// default exists and that this API could not hand it over, which beats reporting neither.
++			if (const UNiagaraScriptVariable* ScriptVariable = Graph->GetScriptVariable(Variable))
++			{
++				Entry.Value.Set(Variable.GetType(), ScriptVariable->GetDefaultValueVariant());
++			}
++		}
++	}
++}
++
++void UNiagaraExternalEditUtilities::SetEmitterParameterDefault(const FNiagaraExt_StackItemReference& EmitterRef, const FNiagaraExt_ParameterDefault& InDefault, FNiagaraExternalEditContext& Context)
++{
++	const FNiagaraEmitterHandle* Emitter = EmitterRef.GetEmitter(Context);
++	if (Emitter == nullptr)
++	{
++		return;
++	}
++
++	UNiagaraGraph* Graph = GetEmitterGraph(*Emitter);
++	if (Graph == nullptr)
++	{
++		Context.Error(NSLOCTEXT("NiagaraExternalEdit", "ParameterDefaults_NoGraphForSet",
++			"Emitter has no parameter graph, so a parameter default cannot be set on it."));
++		return;
++	}
++
++	const FNiagaraVariable Parameter(InDefault.Variable.Type, InDefault.Variable.Name);
++	UNiagaraScriptVariable* ScriptVariable = Graph->GetScriptVariable(Parameter);
++	if (ScriptVariable == nullptr)
++	{
++		// A parameter only read by a module link has no entry of its own until something asks for
++		// one, which is exactly the case this exists to fix.
++		ScriptVariable = Graph->AddParameter(Parameter);
++	}
++	if (ScriptVariable == nullptr)
++	{
++		Context.Error(FText::Format(
++			NSLOCTEXT("NiagaraExternalEdit", "ParameterDefaults_AddFailed",
++				"Could not create a graph parameter for '{0}' to hold its default."),
++			FText::FromName(InDefault.Variable.Name)));
++		return;
++	}
++
++	const FScopedTransaction Transaction(LOCTEXT("ExternalSetParameterDefault", "External System Set Parameter Default"));
++	ScriptVariable->Modify();
++	ScriptVariable->DefaultMode = InDefault.Mode;
++
++	if (InDefault.Mode == ENiagaraDefaultMode::Binding)
++	{
++		ScriptVariable->DefaultBinding.SetName(InDefault.Binding);
++	}
++	else if (InDefault.Mode == ENiagaraDefaultMode::Value && InDefault.Value.IsValid())
++	{
++		FNiagaraVariant Variant;
++		InDefault.Value.Get(Variant, Context);
++
++		// SetDefaultValueData allocates from ScriptVariable->Variable's size before copying, so that
++		// has to be the right variable first. The variant also has to be carrying plain bytes: an
++		// object or data interface default has no byte form to store here.
++		if (Variant.GetMode() == ENiagaraVariantMode::Bytes
++			&& Variant.GetNumBytes() == Parameter.GetType().GetSize())
++		{
++			ScriptVariable->Variable = Parameter;
++			ScriptVariable->SetDefaultValueData(Variant.GetBytes());
++		}
++		else
++		{
++			Context.Error(FText::Format(
++				NSLOCTEXT("NiagaraExternalEdit", "ParameterDefaults_ValueUnsupported",
++					"Default value for '{0}' is not plain data, so it cannot be stored as a parameter default."),
++				FText::FromName(InDefault.Variable.Name)));
++			return;
++		}
++	}
++
++	// Three steps, and all three are needed. PostEditChange settles the object; ScriptVariableChanged
++	// is what the details panel calls after the same edit, and is what pushes the new mode out to the
++	// map-get nodes that read the parameter -- without it the value reads back correctly and the
++	// compile still fails, because the pin the mode asks for was never built.
++	ScriptVariable->PostEditChange();
++	Graph->ScriptVariableChanged(Parameter);
++	Graph->NotifyGraphNeedsRecompile();
++}
++
++void UNiagaraExternalEditUtilities::CleanUpStaleEmitterParameters(const FNiagaraExt_StackItemReference& EmitterRef, FNiagaraExternalEditContext& Context)
++{
++	const FNiagaraEmitterHandle* Emitter = EmitterRef.GetEmitter(Context);
++	if (Emitter == nullptr)
++	{
++		return;
++	}
++
++	FVersionedNiagaraEmitter Instance = const_cast<FNiagaraEmitterHandle*>(Emitter)->GetInstance();
++	if (Instance.Emitter == nullptr || Instance.GetEmitterData() == nullptr)
++	{
++		Context.Error(NSLOCTEXT("NiagaraExternalEdit", "CleanUpStale_NoEmitterData",
++			"Emitter has no data, so its stale parameters cannot be cleaned up."));
++		return;
++	}
++
++	const FScopedTransaction Transaction(LOCTEXT("ExternalCleanUpStaleParameters", "External System Clean Up Stale Parameters"));
++	Instance.Emitter->Modify();
++
++	// Hygiene, not a fix for anything measured. It drops the constants of modules that are no longer
++	// in the stack, which is what the merge manager does after a merge for the same reason.
++	//
++	// It does NOT close the in-place-vs-fresh gap, and emptying the store outright does not either:
++	// both were tried on N_MagicRuneCast_2 and its rebuilt mirror still carries 18 constants that a
++	// fresh-path build does not, with MainRune still emitting nothing. Those 18 belong to modules
++	// that *are* in the stack (`SubUVAnimation.Start Frame Offset` and friends) and survive an empty
++	// store, so the rebuild re-creates them -- they are produced, not left behind, and whatever
++	// produces them is still unidentified.
++	FNiagaraStackGraphUtilities::CleanUpStaleRapidIterationParameters(Instance);
++}
++
+ // --- Topology tier ----------------------------------------------------------
+ 
+ void UNiagaraExternalEditUtilities::GetEmitterTopology(const FNiagaraExt_StackItemReference& EmitterRef, FNiagaraExt_EmitterTopology& OutTopology, FNiagaraExternalEditContext& Context)
+@@ -1648,7 +1884,7 @@ void UNiagaraExternalEditUtilities::GetScriptStackTopology(const FNiagaraExt_Sta
+ 	}
+ }
+ 
+-void UNiagaraExternalEditUtilities::GetModuleTopology(const FNiagaraExt_StackItemReference& ModuleRef, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context)
++void UNiagaraExternalEditUtilities::GetModuleTopology(const FNiagaraExt_StackItemReference& ModuleRef, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context, EModuleTopologyDetail Detail)
+ {
+ 	if (UNiagaraStackModuleItem* Module = ModuleRef.GetModule(Context))
+ 	{
+@@ -1657,6 +1893,11 @@ void UNiagaraExternalEditUtilities::GetModuleTopology(const FNiagaraExt_StackIte
+ 		OutTopology.ModuleScript = Module->GetModuleNode().FunctionScript;
+ 		OutTopology.bIsSetParametersModule = (Cast<UNiagaraNodeAssignment>(&Module->GetModuleNode()) != nullptr);
+ 
++		if (Detail == EModuleTopologyDetail::HeaderOnly)
++		{
++			return;
++		}
++
+ 		// Flatten static-switch / conditional sub-inputs into the same Inputs array as their
+ 		// parent (script-level inputs share one flat namespace per module). Stop at Dynamic-
+ 		// mode boundaries; those chains are accessed via GetDynamicInputChain. Inline edit
+@@ -2042,10 +2283,12 @@ void UNiagaraExternalEditUtilities::AddUserVariable(UNiagaraSystem* System, cons
+ 		return;
+ 	}
+ 
+-	if (!Variable.DefaultValue.IsValid())
+-	{
+-		return;
+-	}
++	// MoonEngine: this used to `return` when there was no default value, which dropped the whole
++	// call -- the parameter, its type and its description with it. A parameter declared without a
++	// value is still a parameter: `Vector HitNormal [ Description="..." ]` has everything except the
++	// one thing that was being required. Plain-data types get a zero of the right size, which is what
++	// Niagara's own add-parameter path gives a new one.
++	const bool bNeedsSyntheticDefault = !Variable.DefaultValue.IsValid();
+ 
+ 	const FScopedTransaction Transaction(LOCTEXT("ExternalAddUserVariable", "External System Add User Variable"));
+ 	System->Modify();
+@@ -2055,10 +2298,53 @@ void UNiagaraExternalEditUtilities::AddUserVariable(UNiagaraSystem* System, cons
+ 
+ 	FNiagaraVariableBase Var(Variable.Type, Variable.Name);
+ 	FNiagaraVariant DefaultValue;
+-	Variable.DefaultValue.Get(DefaultValue, Context);
+-	System->GetExposedParameters().SetParameter_InternalUseOnly(Var, DefaultValue, true);
++	if (bNeedsSyntheticDefault)
++	{
++		// A texture or data interface parameter declared with no value is a slot to be filled at
++		// runtime, which is null -- not a reason to refuse the parameter. Everything else gets a zero
++		// of the right size, which is what Niagara's own add-parameter path gives a new one.
++		if (Variable.Type.IsDataInterface())
++		{
++			DefaultValue.SetDataInterface(nullptr);
++		}
++		else if (Variable.Type.IsUObject())
++		{
++			DefaultValue.SetUObject(nullptr);
++		}
++		else
++		{
++			FNiagaraVariable Zeroed(Variable.Type, Variable.Name);
++			Zeroed.AllocateData();
++			DefaultValue = FNiagaraVariant(Zeroed.GetData(), Zeroed.GetSizeInBytes());
++		}
++	}
++	else
++	{
++		Variable.DefaultValue.Get(DefaultValue, Context);
++	}
++	// A data-interface parameter cannot go through SetParameter_InternalUseOnly: that function
++	// refuses them in its first three lines, and it does so *before* the AddParameter call, so the
++	// parameter is not merely left unset -- it never exists. Every texture and curve user parameter
++	// of every system round-tripped through this API was silently disappearing on that early return.
++	if (Var.IsDataInterface())
++	{
++		FNiagaraVariable DataInterfaceParameter(Var.GetType(), Var.GetName());
++		System->GetExposedParameters().AddParameter(DataInterfaceParameter, /*bInitialize=*/true);
++		if (UNiagaraDataInterface* Supplied = DefaultValue.GetMode() == ENiagaraVariantMode::DataInterface
++			? DefaultValue.GetDataInterface() : nullptr)
++		{
++			System->GetExposedParameters().SetDataInterface(Supplied, DataInterfaceParameter);
++		}
++	}
++	else
++	{
++		System->GetExposedParameters().SetParameter_InternalUseOnly(Var, DefaultValue, true);
++	}
++
++	// GetScriptVariableForUserParameter is a FindOrAdd, so the entry exists by the time it returns.
+ 	if (UNiagaraScriptVariable* ScriptVariable = FNiagaraEditorUtilities::UserParameters::GetScriptVariableForUserParameter(Var, *System))
+ 	{
++		ScriptVariable->Modify();
+ 		ScriptVariable->Metadata.Description = Variable.Description;
+ 	}
+ 	FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
+@@ -2321,7 +2607,7 @@ void UNiagaraExternalEditUtilities::RemoveRenderer(const FNiagaraExt_StackItemRe
+ 	Emitter->RemoveRenderer(Renderer, EmitterData->Version.VersionGuid);
+ }
+ 
+-void UNiagaraExternalEditUtilities::AddModule(const FNiagaraExt_StackItemReference& NewModuleLocationRef, const UNiagaraScript* ModuleAsset, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context)
++void UNiagaraExternalEditUtilities::AddModule(const FNiagaraExt_StackItemReference& NewModuleLocationRef, const UNiagaraScript* ModuleAsset, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context, EModuleTopologyDetail Detail, bool bDeferStackRefresh)
+ {
+ 	if (!Context.CheckScriptAsset(ModuleAsset)) return;
+ 
+@@ -2350,21 +2636,57 @@ void UNiagaraExternalEditUtilities::AddModule(const FNiagaraExt_StackItemReferen
+ 		FNiagaraStackGraphUtilities::FAddScriptModuleToStackArgs Args(ModuleAsset, *TargetOutputNode);
+ 		Args.TargetIndex = TargetIndex;
+ 		Args.VersionGuid = ModuleAsset->GetLatestScriptData()->Version.VersionGuid;//TODO: allow old versions?
++
++		// MoonEngine: per-step timing, because bulk external-edit tooling calls this once per module
++		// and 60 ms of it was unattributed. The accumulator always runs; the per-call log stays
++		// Verbose-gated: -LogCmds="LogNiagaraEditor Verbose". See DreamFX plan-v6 P.
++		double MoonStepStart = FPlatformTime::Seconds();
++		const bool bMoonTrace = UE_LOG_ACTIVE(LogNiagaraEditor, Verbose);
++#define MOON_ADD_STEP(Label) \
++	{ \
++		const double MoonNow = FPlatformTime::Seconds(); \
++		FNiagaraExternalEditStepStats::Add(FName("ADDMODULE " Label), MoonNow - MoonStepStart); \
++		if (bMoonTrace) { \
++			UE_LOG(LogNiagaraEditor, Verbose, TEXT("ADDMODULE %-24s %7.2f ms"), \
++				TEXT(Label), (MoonNow - MoonStepStart) * 1000.0); \
++		} \
++		MoonStepStart = MoonNow; \
++	}
++
+ 		if (UNiagaraNodeFunctionCall* Func = FNiagaraStackGraphUtilities::AddScriptModuleToStack(Args))
+ 		{
++			MOON_ADD_STEP("AddScriptModuleToStack")
++
++			// MoonEngine: a deferred add takes its name straight off the graph node -- the stack
++			// query below only ever re-derived it -- and leaves the refresh, the property broadcast
++			// and the topology walk to the batch's closing RefreshScriptStack.
++			if (bDeferStackRefresh)
++			{
++				OutTopology.ModuleName = *Func->GetFunctionName();
++			}
++			else
++			{
++
+ 			ScriptItem->RefreshChildren();
++			MOON_ADD_STEP("RefreshChildren")
+ 
+ 			FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
+ 			System->PostEditChangeProperty(PropertyChangedEvent);
++			MOON_ADD_STEP("PostEditChangeProperty")
+ 
+ 			TNiagaraStackQueryResult<UNiagaraStackModuleItem> AddModuleResult = FNiagaraStackScriptItemGroupQuery(*ScriptItem).FindModuleItem(Func->GetFunctionName()).GetResult();
++			MOON_ADD_STEP("FindModuleItem")
++
+ 			if (AddModuleResult.IsValid())
+ 			{
+ 				FNiagaraExt_StackItemReference NewModuleReference = NewModuleLocationRef;
+ 				NewModuleReference.SetModule(AddModuleResult.StackEntry);
+-				GetModuleTopology(NewModuleReference, OutTopology, Context);
++				GetModuleTopology(NewModuleReference, OutTopology, Context, Detail);
++				MOON_ADD_STEP("GetModuleTopology")
+ 			}
++			} // !bDeferStackRefresh
+ 		}
++#undef MOON_ADD_STEP
+ 		else
+ 		{
+ 			Context.Error(FText::Format(
+@@ -2440,7 +2762,25 @@ namespace
+ 	}
+ }
+ 
+-void UNiagaraExternalEditUtilities::AddSetParametersModule(const FNiagaraExt_StackItemReference& NewModuleLocationRef, const TArray<FNiagaraExt_SetParameterEntry>& Parameters, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context)
++void UNiagaraExternalEditUtilities::RefreshScriptStack(const FNiagaraExt_StackItemReference& ScriptRef, FNiagaraExternalEditContext& Context)
++{
++	UNiagaraStackScriptItemGroup* ScriptItem = ScriptRef.GetScript(Context);
++	if (ScriptItem == nullptr)
++	{
++		return;
++	}
++
++	FMoonScopedStep MoonStep(FName("ADDMODULE batch RefreshChildren"));
++	ScriptItem->RefreshChildren();
++
++	if (UNiagaraSystem* System = ScriptRef.GetSystem(Context))
++	{
++		FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
++		System->PostEditChangeProperty(PropertyChangedEvent);
++	}
++}
++
++void UNiagaraExternalEditUtilities::AddSetParametersModule(const FNiagaraExt_StackItemReference& NewModuleLocationRef, const TArray<FNiagaraExt_SetParameterEntry>& Parameters, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context, EModuleTopologyDetail Detail, bool bDeferStackRefresh)
+ {
+ 	if (Parameters.IsEmpty())
+ 	{
+@@ -2512,6 +2852,16 @@ void UNiagaraExternalEditUtilities::AddSetParametersModule(const FNiagaraExt_Sta
+ 
+ 	if (UNiagaraNodeAssignment* AssignmentNode = FNiagaraStackGraphUtilities::AddParameterModuleToStack(ParameterVariables, *TargetOutputNode, TargetIndex, DefaultValues))
+ 	{
++		// MoonEngine: same contract as AddModule's deferred path -- name off the graph node, the
++		// refresh and the find left to the batch's closing RefreshScriptStack. The rollback branch
++		// below only exists to catch a refreshed stack that cannot see the new node; deferring the
++		// refresh defers that check to the caller's mirror gates, which see far more than it does.
++		if (bDeferStackRefresh)
++		{
++			OutTopology.ModuleName = *AssignmentNode->GetFunctionName();
++			return;
++		}
++
+ 		ScriptItem->RefreshChildren();
+ 
+ 		FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
+@@ -2522,7 +2872,7 @@ void UNiagaraExternalEditUtilities::AddSetParametersModule(const FNiagaraExt_Sta
+ 		{
+ 			FNiagaraExt_StackItemReference NewModuleReference = NewModuleLocationRef;
+ 			NewModuleReference.SetModule(AddModuleResult.StackEntry);
+-			GetModuleTopology(NewModuleReference, OutTopology, Context);
++			GetModuleTopology(NewModuleReference, OutTopology, Context, Detail);
+ 		}
+ 		else
+ 		{
+@@ -2684,6 +3034,54 @@ void UNiagaraExternalEditUtilities::RemoveModule(const FNiagaraExt_StackItemRefe
+ 	System->PostEditChangeProperty(PropertyChangedEvent);
+ }
+ 
++void UNiagaraExternalEditUtilities::ClearScriptStack(const FNiagaraExt_StackItemReference& ScriptRef, FNiagaraExternalEditContext& Context)
++{
++	UNiagaraSystem* System = ScriptRef.GetSystem(Context);
++	UNiagaraStackScriptItemGroup* ScriptItem = ScriptRef.GetScript(Context);
++	if (System == nullptr || ScriptItem == nullptr)
++	{
++		return;
++	}
++
++	UNiagaraNodeOutput* OutputNode = ScriptItem->GetScriptOutputNode();
++	if (OutputNode == nullptr)
++	{
++		return;
++	}
++
++	// Read the module list from the graph rather than from the stack entries: the entries are what
++	// the refresh at the end rebuilds, and walking them while removing would be walking a list that
++	// is being invalidated underneath.
++	TArray<UNiagaraNodeFunctionCall*> ModuleNodes;
++	FNiagaraStackGraphUtilities::GetOrderedModuleNodes(*OutputNode, ModuleNodes);
++	if (ModuleNodes.Num() == 0)
++	{
++		return;
++	}
++
++	const FNiagaraEmitterHandle* Emitter = ScriptRef.GetEmitter(Context, /*bRequired=*/false);
++	const FGuid EmitterId = Emitter != nullptr ? Emitter->GetId() : FGuid();
++
++	const FScopedTransaction Transaction(LOCTEXT("ExternalClearScriptStack", "External System Clear Script Stack"));
++	System->Modify();
++
++	// Back to front: removal reindexes what is left, and the graph nodes are addressed directly here
++	// so the order only matters for the same reason it does in an ordinary loop.
++	TArray<TWeakObjectPtr<UNiagaraNodeInput>> RemovedInputNodes;
++	for (int32 Index = ModuleNodes.Num() - 1; Index >= 0; --Index)
++	{
++		if (ModuleNodes[Index] != nullptr)
++		{
++			FNiagaraStackGraphUtilities::RemoveModuleFromStack(*System, EmitterId, *ModuleNodes[Index], RemovedInputNodes);
++		}
++	}
++
++	ScriptItem->RefreshChildren();
++
++	FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
++	System->PostEditChangeProperty(PropertyChangedEvent);
++}
++
+ void UNiagaraExternalEditUtilities::SetModuleEnabled(const FNiagaraExt_StackItemReference& ModuleRef, bool bEnabled, FNiagaraExternalEditContext& Context)
+ {
+ 	UNiagaraSystem* System = ModuleRef.GetSystem(Context);
+@@ -2780,9 +3178,25 @@ void UNiagaraExternalEditUtilities::SetStackInputData(const FNiagaraExt_StackIte
+ 		return;
+ 	}
+ 
++	// MoonEngine: see DreamFX plan-v6 P. The accumulator always runs (a clock read per step); the
++	// per-call log stays Verbose-gated.
++	double MoonStepStart = FPlatformTime::Seconds();
++	const bool bMoonTrace = UE_LOG_ACTIVE(LogNiagaraEditor, Verbose);
++#define MOON_SET_STEP(Label) \
++	{ \
++		const double MoonNow = FPlatformTime::Seconds(); \
++		FNiagaraExternalEditStepStats::Add(FName("SETINPUT " Label), MoonNow - MoonStepStart); \
++		if (bMoonTrace) { \
++			UE_LOG(LogNiagaraEditor, Verbose, TEXT("SETINPUT %-24s %7.2f ms"), \
++				TEXT(Label), (MoonNow - MoonStepStart) * 1000.0); \
++		} \
++		MoonStepStart = MoonNow; \
++	}
++
+ 	// Refuse to mutate non-editable inputs. The three gating axes mirror GetStackInputTopology's
+ 	// read path — keep in sync. Each rejection points the caller at the gating input to flip first.
+ 	UNiagaraStackFunctionInput* Input = StackInputRef.GetInput(Context);
++	MOON_SET_STEP("GetInput#1")
+ 	if (Input == nullptr)
+ 	{
+ 		// GetInput already logged the failure; don't fall through to InitStackInputFromValue
+@@ -2818,7 +3232,24 @@ void UNiagaraExternalEditUtilities::SetStackInputData(const FNiagaraExt_StackIte
+ 		return;
+ 	}
+ 
++	MOON_SET_STEP("editability gates")
+ 	InData.InitStackInputFromValue(StackInputRef, Context);
++	MOON_SET_STEP("InitStackInputFromValue")
++
++	// MoonEngine: a static switch changes which *other* inputs exist, and the engine defers the
++	// stack refresh that would show them to a tick a commandlet never runs. Refresh the owning
++	// module item synchronously instead, so a live external edit context keeps describing this
++	// module and the driving tool does not have to rebuild a whole system view model per switch.
++	// After the write on purpose -- and after every use of Input, which this refresh invalidates.
++	if (Input->IsStaticParameter())
++	{
++		if (UNiagaraStackModuleItem* ModuleItem = StackInputRef.GetModule(Context, /*bRequired=*/false))
++		{
++			ModuleItem->RefreshChildren();
++		}
++		MOON_SET_STEP("switch RefreshChildren")
++	}
++#undef MOON_SET_STEP
+ }
+ 
+ //////////////////////////////////////////////////////////////////////////
+@@ -2971,7 +3402,14 @@ void FNiagaraExt_StackInputValue::InitFromStackInput(const FNiagaraExt_StackItem
+ 
+ void FNiagaraExt_StackInputValue::InitStackInputFromValue(const FNiagaraExt_StackItemReference& StackInputRef, FNiagaraExternalEditContext& Context)const
+ {
++	// MoonEngine: the second resolve of the same reference this call already made -- probing whether
++	// it is free (a cache hit) or the caller pays for the walk twice. See DreamFX plan-v6 P.
++	const double MoonResolveStart = FPlatformTime::Seconds();
+ 	UNiagaraStackFunctionInput* Input = StackInputRef.GetInput(Context);
++	FNiagaraExternalEditStepStats::Add(FName("SETINPUT GetInput#2"), FPlatformTime::Seconds() - MoonResolveStart);
++	UE_CLOG(UE_LOG_ACTIVE(LogNiagaraEditor, Verbose), LogNiagaraEditor, Verbose,
++		TEXT("SETINPUT %-24s %7.2f ms"), TEXT("GetInput#2"), (FPlatformTime::Seconds() - MoonResolveStart) * 1000.0);
++
+ 	UNiagaraSystem* System = StackInputRef.GetSystem(Context);
+ 
+ 	if(System == nullptr || Input == nullptr)
+@@ -2984,8 +3422,9 @@ void FNiagaraExt_StackInputValue::InitStackInputFromValue(const FNiagaraExt_Stac
+ 	
+ 	if (const FNiagaraExt_StackInputData_Enum* EnumValue = GetPtr<FNiagaraExt_StackInputData_Enum>())
+ 	{
++		FMoonScopedStep MoonStep(FName("INIT SetLocalValue(enum)"));
+ 		if(UEnum* Enum = EnumValue->Enum)
+-		{			
++		{
+ 			int32 NewEnumValue = Enum->GetValueByName(EnumValue->EnumName);
+ 			TSharedPtr<FStructOnScope> StructOnScope = MakeShared<FStructOnScope>(FNiagaraInt32::StaticStruct());
+ 			FMemory::Memcpy(StructOnScope->GetStructMemory(), &NewEnumValue, sizeof(FNiagaraInt32));
+@@ -2994,10 +3433,12 @@ void FNiagaraExt_StackInputValue::InitStackInputFromValue(const FNiagaraExt_Stac
+ 	}
+ 	else if (const FNiagaraExt_StackInputData_Linked* LinkedValue = GetPtr<FNiagaraExt_StackInputData_Linked>())
+ 	{
++		FMoonScopedStep MoonStep(FName("INIT SetLinkedParameterValue"));
+ 		Input->SetLinkedParameterValue(FNiagaraVariableBase(LinkedValue->LinkedVariable.Type, LinkedValue->LinkedVariable.Name));
+ 	}
+ 	else if (const FNiagaraExt_StackInputData_HlslExpression* HlslValue = GetPtr<FNiagaraExt_StackInputData_HlslExpression>())
+ 	{
++		FMoonScopedStep MoonStep(FName("INIT SetCustomExpression"));
+ 		if (Input->SupportsCustomExpressions())
+ 		{
+ 			Input->SetCustomExpression(HlslValue->HlslExpression);
+@@ -3012,6 +3453,7 @@ void FNiagaraExt_StackInputValue::InitStackInputFromValue(const FNiagaraExt_Stac
+ 	}
+ 	else if (const FNiagaraExt_StackInputData_DataInterface* DIValue = GetPtr<FNiagaraExt_StackInputData_DataInterface>())
+ 	{
++		FMoonScopedStep MoonStep(FName("INIT SetDataInterface"));
+ 		UClass* DIClass = Input->GetInputType().GetClass();
+ 		if(DIClass && DIClass->IsChildOf<UNiagaraDataInterface>())
+ 		{
+@@ -3026,6 +3468,14 @@ void FNiagaraExt_StackInputValue::InitStackInputFromValue(const FNiagaraExt_Stac
+ 								FText::FromName(Input->GetInputParameterHandle().GetName()),
+ 								FText::FromString(GetStackItemPath(StackInputRef))));
+ 						}
++						else if (UNiagaraDataInterfaceCurveBase* CurveDI = Cast<UNiagaraDataInterfaceCurveBase>(DI))
++						{
++							// A curve DI's sample table is baked, not derived on read, and the
++							// properties just written are only the keys. Bake here or every
++							// downstream CopyToInternal starts from a stale table and logs
++							// "LUT generation is out of sync" while healing only its own copy.
++							CurveDI->UpdateLUT();
++						}
+ 					}
+ 					else
+ 					{
+@@ -3047,10 +3497,12 @@ void FNiagaraExt_StackInputValue::InitStackInputFromValue(const FNiagaraExt_Stac
+ 	}
+ 	else if (const FNiagaraExt_StackInputData_DynamicInput* DynamicValue = GetPtr<FNiagaraExt_StackInputData_DynamicInput>())
+ 	{
++		FMoonScopedStep MoonStep(FName("INIT SetDynamicInput"));
+ 		Input->SetDynamicInput(DynamicValue->DynamicInputAsset);
+ 	}
+ 	else if(IsValid())
+ 	{
++		FMoonScopedStep MoonStep(FName("INIT SetLocalValue(local)"));
+ 		FNiagaraTypeDefinition IncommingTypeDef(const_cast<UScriptStruct*>(ScriptStruct.Get()), FNiagaraTypeDefinition::EAllowUnfriendlyStruct::Allow);//Ugh. Todo. Propagate constness into the NiagaraTypeDefinition Struct.
+ 		if (InputType != IncommingTypeDef)
+ 		{
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraNodeParameterMapGet.h b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraNodeParameterMapGet.h
+index 9d50150..bb1e805 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraNodeParameterMapGet.h
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraNodeParameterMapGet.h
+@@ -10,7 +10,7 @@ class UEdGraphPin;
+ 
+ 
+ /** A node that allows a user to get multiple values from a parameter map. */
+-UCLASS()
++UCLASS(MinimalAPI)
+ class UNiagaraNodeParameterMapGet : public UNiagaraNodeParameterMapBase
+ {
+ public:
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraNodeParameterMapSet.h b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraNodeParameterMapSet.h
+index 302051a..9837c9a 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraNodeParameterMapSet.h
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/NiagaraNodeParameterMapSet.h
+@@ -10,7 +10,7 @@ class UEdGraphPin;
+ 
+ 
+ /** A node that allows a user to set multiple values into a parameter map. */
+-UCLASS()
++UCLASS(MinimalAPI)
+ class UNiagaraNodeParameterMapSet : public UNiagaraNodeParameterMapBase
+ {
+ public:
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/NiagaraEmitterHandleViewModel.cpp b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/NiagaraEmitterHandleViewModel.cpp
+index a91fd86..0f53089 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/NiagaraEmitterHandleViewModel.cpp
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/NiagaraEmitterHandleViewModel.cpp
+@@ -117,7 +117,20 @@ void FNiagaraEmitterHandleViewModel::Initialize(TSharedRef<FNiagaraSystemViewMod
+ 	FVersionedNiagaraEmitter Emitter = EmitterHandle != nullptr ? EmitterHandle->GetInstance() : FVersionedNiagaraEmitter();
+ 	EmitterViewModel->Initialize(Emitter, InSimulation);
+ 	EmitterViewModel->OnEmitterSelectionRequested().BindSP(this, &FNiagaraEmitterHandleViewModel::RequestEmitterSelection);
+-	EmitterStackViewModel->InitializeWithViewModels(InOwningSystemViewModel, this->AsShared(), FNiagaraStackViewModelOptions(false, true));
++
++	// MoonEngine: defer the stack for data-only view models -- it is the whole cost of a refresh, and
++	// a data-processing caller usually wants one emitter, not all of them. See the header.
++	if (InOwningSystemViewModel->GetIsForDataProcessingOnly())
++	{
++		bStackInitializationDeferred = true;
++		DeferredStackSystemViewModel = InOwningSystemViewModel;
++	}
++	else
++	{
++		bStackInitializationDeferred = false;
++		DeferredStackSystemViewModel.Reset();
++		EmitterStackViewModel->InitializeWithViewModels(InOwningSystemViewModel, this->AsShared(), FNiagaraStackViewModelOptions(false, true));
++	}
+ }
+ 
+ void FNiagaraEmitterHandleViewModel::Reset()
+@@ -345,8 +358,29 @@ TSharedRef<FNiagaraEmitterViewModel> FNiagaraEmitterHandleViewModel::GetEmitterV
+ 	return EmitterViewModel;
+ }
+ 
++void FNiagaraEmitterHandleViewModel::ResolveDeferredStack()
++{
++	if (!bStackInitializationDeferred)
++	{
++		return;
++	}
++
++	// Cleared first: InitializeWithViewModels can reach back through this view model, and a second
++	// entry here would recurse.
++	bStackInitializationDeferred = false;
++
++	if (TSharedPtr<FNiagaraSystemViewModel> OwningSystemViewModel = DeferredStackSystemViewModel.Pin())
++	{
++		EmitterStackViewModel->InitializeWithViewModels(OwningSystemViewModel.ToSharedRef(), this->AsShared(),
++			FNiagaraStackViewModelOptions(false, true));
++	}
++	DeferredStackSystemViewModel.Reset();
++}
++
+ UNiagaraStackViewModel* FNiagaraEmitterHandleViewModel::GetEmitterStackViewModel()
+ {
++	// MoonEngine: data-only view models leave the stack unbuilt until it is asked for. See the header.
++	ResolveDeferredStack();
+ 	return EmitterStackViewModel;
+ }
+ 
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/NiagaraSystemViewModel.cpp b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/NiagaraSystemViewModel.cpp
+index a1257fe..f952ec3 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/NiagaraSystemViewModel.cpp
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/NiagaraSystemViewModel.cpp
+@@ -27,6 +27,7 @@
+ #include "NiagaraEmitterFactoryNew.h"
+ #include "NiagaraEmitterHandle.h"
+ #include "NiagaraEmitterInstanceImpl.h"
++#include "NiagaraExternalSystemEditorUtilities.h"
+ #include "NiagaraGraph.h"
+ #include "NiagaraMessageManager.h"
+ #include "NiagaraMessageUtilities.h"
+@@ -127,46 +128,70 @@ void FNiagaraSystemViewModel::Initialize(UNiagaraSystem& InSystem, FNiagaraSyste
+ 
+ 	SystemChangedDelegateHandle = System->OnSystemPostEditChange().AddSP(this, &FNiagaraSystemViewModel::SystemChanged);
+ 
++	// MoonEngine: per-step timing for this constructor, because bulk external-edit tooling builds one
++	// of these per structural operation and the cost of each step was not known. Verbose, so it is
++	// free unless asked for: -LogCmds="LogNiagaraEditor Verbose". See DreamFX plan-v6 P.
++	double MoonStepStart = FPlatformTime::Seconds();
++	const bool bMoonTrace = UE_LOG_ACTIVE(LogNiagaraEditor, Verbose);
++#define MOON_VM_STEP(Label) \
++	if (bMoonTrace) { \
++		UE_LOG(LogNiagaraEditor, Verbose, TEXT("VMINIT %-32s %7.2f ms  (dataOnly=%d)"), \
++			TEXT(Label), (FPlatformTime::Seconds() - MoonStepStart) * 1000.0, bIsForDataProcessingOnly ? 1 : 0); \
++		MoonStepStart = FPlatformTime::Seconds(); \
++	}
++
+ 	SelectionViewModel = NewObject<UNiagaraSystemSelectionViewModel>(GetTransientPackage());
+ 	SelectionViewModel->Initialize(this->AsShared());
+ 	SelectionViewModel->OnEmitterHandleIdSelectionChanged().AddSP(this, &FNiagaraSystemViewModel::SystemSelectionChanged);
++	MOON_VM_STEP("SelectionViewModel")
+ 
+ 	SystemScriptViewModel = MakeShared<FNiagaraSystemScriptViewModel>(bIsForDataProcessingOnly);
+ 	SystemScriptViewModel->Initialize(this->AsShared());
++	MOON_VM_STEP("SystemScriptViewModel")
+ 
+ 	OverviewGraphViewModel = MakeShared<FNiagaraOverviewGraphViewModel>();
+ 	OverviewGraphViewModel->Initialize(this->AsShared());
++	MOON_VM_STEP("OverviewGraphViewModel")
+ 
+ 	SystemStackViewModel = NewObject<UNiagaraStackViewModel>(GetTransientPackage());
+ 	SystemStackViewModel->OnStructureChanged().AddSP(this, &FNiagaraSystemViewModel::StackViewModelStructureChanged);
++	MOON_VM_STEP("SystemStackViewModel")
+ 
+ 	EditorDocumentsViewModel = NewObject< UNiagaraSystemEditorDocumentsViewModel >(GetTransientPackage());
+ 	EditorDocumentsViewModel->Initialize(this->AsShared());
++	MOON_VM_STEP("EditorDocumentsViewModel")
+ 
+ 	ScriptScratchPadViewModel = NewObject<UNiagaraScratchPadViewModel>(GetTransientPackage());
+ 	ScriptScratchPadViewModel->Initialize(this->AsShared());
+ 	ScriptScratchPadViewModel->OnScriptRenamed().AddSP(this, &FNiagaraSystemViewModel::ScratchPadScriptsChanged);
+ 	ScriptScratchPadViewModel->OnScriptDeleted().AddSP(this, &FNiagaraSystemViewModel::ScratchPadScriptsChanged);
++	MOON_VM_STEP("ScriptScratchPadViewModel")
+ 
+ 	CurveSelectionViewModel = NewObject<UNiagaraCurveSelectionViewModel>(GetTransientPackage());
+ 	CurveSelectionViewModel->Initialize(this->AsShared());
++	MOON_VM_STEP("CurveSelectionViewModel")
+ 
+ 	ScalabilityViewModel = NewObject<UNiagaraSystemScalabilityViewModel>(GetTransientPackage());
+ 	ScalabilityViewModel->Initialize(this->AsShared());
++	MOON_VM_STEP("ScalabilityViewModel")
+ 
+ 	UserParameterPanelViewModel = MakeShared<FNiagaraUserParameterPanelViewModel>();
+-	
++
+ 	UserParametersHierarchyViewModel = NewObject<UNiagaraUserParametersHierarchyViewModel>(GetTransientPackage());
+ 	UserParametersHierarchyViewModel->Initialize(this->AsShared());
+-	
++	MOON_VM_STEP("UserParametersHierarchyViewModel")
++
+ 	PlaceholderDataInterfaceManager = MakeShared<FNiagaraPlaceholderDataInterfaceManager>(this->AsShared());
+ 
+ 	SystemGraphSelectionViewModel = MakeShared<FNiagaraSystemGraphSelectionViewModel>();
+ 	SystemGraphSelectionViewModel->Initialize(this->AsShared());
++	MOON_VM_STEP("SystemGraphSelectionViewModel")
+ 
+ 	PreviewMovieViewModel = MakeShared<FNiagaraPreviewMovieViewModel>();
+ 	PreviewMovieViewModel->Initialize();
+-	
++	MOON_VM_STEP("PreviewMovieViewModel")
++#undef MOON_VM_STEP
++
+ 	bSupportCompileForEdit = !bIsForDataProcessingOnly && (EditMode == ENiagaraSystemViewModelEditMode::SystemAsset || EditMode == ENiagaraSystemViewModelEditMode::EmitterAsset);
+ 	bIsCompileForEdit = false;
+ 	if (bSupportCompileForEdit)
+@@ -2038,24 +2063,65 @@ void FNiagaraSystemViewModel::SetupPreviewComponentAndInstance()
+ 
+ void FNiagaraSystemViewModel::RefreshAll()
+ {
++	// MoonEngine: per-step timing. This function is the real cost of constructing a view model --
++	// Initialize ends by calling it -- so bulk external-edit tooling pays for all of it once per
++	// structural operation. Verbose, free unless asked for. See DreamFX plan-v6 P.
++	double MoonStepStart = FPlatformTime::Seconds();
++	const bool bMoonTrace = UE_LOG_ACTIVE(LogNiagaraEditor, Verbose);
++#define MOON_REFRESH_STEP(Label) \
++	{ \
++		const double MoonNow = FPlatformTime::Seconds(); \
++		FNiagaraExternalEditStepStats::Add(FName("REFRESHALL " Label), MoonNow - MoonStepStart); \
++		if (bMoonTrace) { \
++			UE_LOG(LogNiagaraEditor, Verbose, TEXT("REFRESHALL %-30s %8.2f ms  (dataOnly=%d)"), \
++				TEXT(Label), (MoonNow - MoonStepStart) * 1000.0, bIsForDataProcessingOnly ? 1 : 0); \
++		} \
++		MoonStepStart = MoonNow; \
++	}
++
+ 	if (GetSystem().HasOutstandingCompilationRequests() == false)
+ 	{
+ 		// Data changes which require full refreshes can cause stability problems when resetting the accompanying system, especially
+ 		// when used in conjunction with warm up.  This is a temporary fix for these crashes.
+ 		CompileSystem(false);
+ 	}
++	MOON_REFRESH_STEP("CompileSystem")
++
+ 	ResetSystem(ETimeResetMode::AllowResetTime, EMultiResetMode::AllowResetAllInstances, EReinitMode::ReinitializeSystem);
++	MOON_REFRESH_STEP("ResetSystem")
++
+ 	RefreshEmitterHandleViewModels();
++	MOON_REFRESH_STEP("RefreshEmitterHandleViewModels")
++
+ 	RefreshSequencerTracks();
++	MOON_REFRESH_STEP("RefreshSequencerTracks")
++
+ 	ClearSystemStats();
+ 	ClearEmitterStats();
+ 	InvalidateCachedCompileStatus();
++	MOON_REFRESH_STEP("ClearStats+Invalidate")
++
+ 	ScriptScratchPadViewModel->RefreshScriptViewModels();
+-	CurveSelectionViewModel->Refresh();
++	MOON_REFRESH_STEP("ScratchPadRefresh")
++
++	// MoonEngine: the curve selection tree exists to feed the curve editor panel. A data-processing
++	// view model has no panels, and this walk was 1.9 s of a text-authored build (measured, DreamFX
++	// plan-v6). Interactive editing is untouched.
++	if (!bIsForDataProcessingOnly)
++	{
++		CurveSelectionViewModel->Refresh();
++	}
++	MOON_REFRESH_STEP("CurveSelectionRefresh")
++
+ 	SystemStackViewModel->InitializeWithViewModels(this->AsShared(), TSharedPtr<FNiagaraEmitterHandleViewModel>(), FNiagaraStackViewModelOptions(true, false));
++	MOON_REFRESH_STEP("SystemStackInitialize")
++
+ 	SelectionViewModel->Refresh();
+ 	// clean invalid tabs has to be called after view models have refreshed as invalid tabs can be determined by view model state
+ 	EditorDocumentsViewModel->CleanInvalidTabs();
++	MOON_REFRESH_STEP("SelectionRefresh+CleanTabs")
++#undef MOON_REFRESH_STEP
++
+ 	bPendingAssetMessagesChanged = true;
+ }
+ 
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/Stack/NiagaraStackFunctionInput.cpp b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/Stack/NiagaraStackFunctionInput.cpp
+index 1069247..e09ccd8 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/Stack/NiagaraStackFunctionInput.cpp
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Private/ViewModels/Stack/NiagaraStackFunctionInput.cpp
+@@ -10,6 +10,7 @@
+ #include "INiagaraEditorTypeUtilities.h"
+ #include "IPythonScriptPlugin.h"
+ #include "NiagaraAnalytics.h"
++#include "NiagaraExternalSystemEditorUtilities.h"
+ #include "NiagaraClipboard.h"
+ #include "NiagaraConstants.h"
+ #include "NiagaraConvertInPlaceUtilityBase.h"
+@@ -2291,6 +2292,21 @@ void UNiagaraStackFunctionInput::SetLocalValue(TSharedRef<FStructOnScope> InLoca
+ 		return;
+ 	}
+ 
++	// MoonEngine: see DreamFX plan-v6 P. The accumulator always runs (a clock read per step); the
++	// per-call log stays Verbose-gated.
++	double MoonStepStart = FPlatformTime::Seconds();
++	const bool bMoonTrace = UE_LOG_ACTIVE(LogNiagaraEditor, Verbose);
++#define MOON_LOCAL_STEP(Label) \
++	{ \
++		const double MoonNow = FPlatformTime::Seconds(); \
++		FNiagaraExternalEditStepStats::Add(FName("SETLOCAL " Label), MoonNow - MoonStepStart); \
++		if (bMoonTrace) { \
++			UE_LOG(LogNiagaraEditor, Verbose, TEXT("SETLOCAL %-26s %7.2f ms"), \
++				TEXT(Label), (MoonNow - MoonStepStart) * 1000.0); \
++		} \
++		MoonStepStart = MoonNow; \
++	}
++
+ 	TGuardValue<bool> UpdateGuard(bUpdatingLocalValueDirectly, true);
+ 	FScopedTransaction ScopedTransaction(LOCTEXT("UpdateInputLocalValue", "Update input local value"));
+ 	bool bGraphWillNeedRelayout = false;
+@@ -2314,6 +2330,8 @@ void UNiagaraStackFunctionInput::SetLocalValue(TSharedRef<FStructOnScope> InLoca
+ 			bGraphWillNeedRelayout = true;
+ 		}
+ 
++		MOON_LOCAL_STEP("RI: remove override pin")
++
+ 		// Update the value on all affected scripts.
+ 		for (TWeakObjectPtr<UNiagaraScript> Script : AffectedScripts)
+ 		{
+@@ -2334,10 +2352,24 @@ void UNiagaraStackFunctionInput::SetLocalValue(TSharedRef<FStructOnScope> InLoca
+ 			}
+ 		}
+ 
+-		UNiagaraSystem& NiagaraSystem = GetSystemViewModel()->GetSystem();
++		MOON_LOCAL_STEP("RI: SetParameterData loop")
++
++		const TSharedRef<FNiagaraSystemViewModel> OwningSystemViewModel = GetSystemViewModel();
++		UNiagaraSystem& NiagaraSystem = OwningSystemViewModel->GetSystem();
+ 		if (NiagaraSystem.ShouldUseRapidIterationParameters() == false)
+ 		{
+-			NiagaraSystem.RequestCompile(false);
++			// MoonEngine: a data-processing view model has no live editor to keep compiled, and the
++			// tool driving it compiles when its batch is done -- so record the debt instead of
++			// launching a compile the next write would abort. Interactive editing is untouched.
++			if (OwningSystemViewModel->GetIsForDataProcessingOnly())
++			{
++				NiagaraSystem.DeferRequestCompile();
++			}
++			else
++			{
++				NiagaraSystem.RequestCompile(false);
++			}
++			MOON_LOCAL_STEP("RI: RequestCompile")
+ 		}
+ 	}
+ 	else
+@@ -2356,28 +2388,36 @@ void UNiagaraStackFunctionInput::SetLocalValue(TSharedRef<FStructOnScope> InLoca
+ 			{
+ 				OverridePin = &GetOrCreateOverridePin();
+ 				bGraphWillNeedRelayout = true;
++				MOON_LOCAL_STEP("pin: GetOrCreateOverridePin")
+ 			}
+ 
+ 			OverridePin->Modify();
+ 			OverridePin->DefaultValue = PinDefaultValue;
+ 			Cast<UNiagaraNode>(OverridePin->GetOwningNode())->MarkNodeRequiresSynchronization(TEXT("OverridePin Default Value Changed"), true);
++			MOON_LOCAL_STEP("pin: MarkNodeRequiresSync")
+ 		}
+ 	}
+ 	
++	MOON_LOCAL_STEP("write value")
+ 	if (bGraphWillNeedRelayout)
+ 	{
+ 		FNiagaraStackGraphUtilities::RelayoutGraph(*OwningFunctionCallNode->GetNiagaraGraph());
++		MOON_LOCAL_STEP("RelayoutGraph")
+ 	}
+ 	TSharedRef<FNiagaraSystemViewModel> CachedSysViewModel = GetSystemViewModel();
+ 	if (CachedSysViewModel->GetSystemStackViewModel())
+ 		CachedSysViewModel->GetSystemStackViewModel()->InvalidateCachedParameterUsage();
++	MOON_LOCAL_STEP("InvalidateCachedParamUsage")
+ 	EValueMode PreviousValueMode = InputValues.Mode;
+ 	RefreshValues();
++	MOON_LOCAL_STEP("RefreshValues")
+ 
+ 	if (InputValues.Mode != PreviousValueMode)
+ 	{
+ 		RefreshChildren();
++		MOON_LOCAL_STEP("RefreshChildren")
+ 	}
++#undef MOON_LOCAL_STEP
+ }
+ 
+ void UNiagaraStackFunctionInput::SetDataInterfaceValueExternal(TSubclassOf<UNiagaraDataInterface> InDataInterfaceType, TFunction<void(UNiagaraDataInterface*)> ExternalSet)
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h
+index ea47a3d..64af295 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraExternalSystemEditorUtilities.h
+@@ -182,6 +182,36 @@ struct FNiagaraExt_UserVariable : public FNiagaraExt_Variable
+ 	FText Description;
+ };
+ 
++/**
++ * MoonEngine: the graph-level default of one parameter -- what a read of it produces when nothing
++ * set it earlier in the stack.
++ *
++ * Without this the rest of the API can describe a system that reads `Particles.MySize` but not the
++ * fact that reading it is legal, and the difference is a Niagara compile error ("read before set")
++ * on a rebuild of an asset that compiled fine. Nothing else here exposes UNiagaraScriptVariable's
++ * DefaultMode, so a tool round-tripping a system through this API silently downgraded every
++ * defaulted attribute to FailIfPreviouslyNotSet.
++ */
++USTRUCT(BlueprintInternalUseOnly)
++struct FNiagaraExt_ParameterDefault
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, Category="Parameter")
++	FNiagaraExt_Variable Variable;
++
++	UPROPERTY(EditAnywhere, Category="Parameter")
++	ENiagaraDefaultMode Mode = ENiagaraDefaultMode::FailIfPreviouslyNotSet;
++
++	/** Only meaningful when Mode is Binding. */
++	UPROPERTY(EditAnywhere, Category="Parameter")
++	FName Binding;
++
++	/** Only meaningful when Mode is Value. */
++	UPROPERTY(EditAnywhere, Category="Parameter")
++	FNiagaraExt_VariableValue Value;
++};
++
+ /** A single parameter entry for a SetParameters (UNiagaraNodeAssignment) module. */
+ USTRUCT(BlueprintInternalUseOnly)
+ struct FNiagaraExt_SetParameterEntry
+@@ -1185,6 +1215,28 @@ struct FNiagaraExt_ApplyStackIssueFixResult
+ 	FString AppliedFixDescription;
+ };
+ 
++/**
++ * MoonEngine: accumulating step timers for the external-edit write path.
++ *
++ * The per-call Verbose logs (SETINPUT / SETLOCAL / REFRESHALL) answer "where did THIS call go";
++ * at twenty thousand calls per build they cannot be left on. These accumulate always -- the cost
++ * is a clock read and a map add per step -- and the driving tool prints one table at the end.
++ * Game thread only, like everything else on this path.
++ */
++struct FNiagaraExternalEditStepStats
++{
++	struct FStep
++	{
++		double Seconds = 0.0;
++		int64 Count = 0;
++	};
++
++	static UE_API void Add(FName Step, double Seconds);
++	static UE_API void Reset();
++	/** Rows formatted like "  12.34 s  1234 x  10.00 ms each  Label", sorted by total, descending. */
++	static UE_API void BuildReport(TArray<FString>& OutLines);
++};
++
+ USTRUCT(BlueprintInternalUseOnly)
+ struct FNiagaraExternalEditContext
+ {
+@@ -1293,8 +1345,60 @@ public:
+ 	/** Returns script stack topology: all modules and their inputs in execution order. */
+ 	UE_API static void GetScriptStackTopology(const FNiagaraExt_StackItemReference& ScriptRef, FNiagaraExt_ScriptStackTopology& OutTopology, FNiagaraExternalEditContext& Context);
+ 
++	/**
++	 * MoonEngine: how much of a module's topology a caller wants filled in.
++	 *
++	 * The header fields are four reads off the module node. Inputs walks every input on the module
++	 * and resolves each one's own topology, which is the whole cost -- 18 ms per module on a
++	 * text-authored system whose adder only wanted the name back.
++	 */
++	enum class EModuleTopologyDetail : uint8
++	{
++		/** Name, enabled, script, set-parameters flag. */
++		HeaderOnly,
++		/** The above, plus every input flattened into OutTopology.Inputs. */
++		WithInputs,
++	};
++
+ 	/** Returns module topology: metadata and all inputs (name/type/visibility only, no values). */
+-	UE_API static void GetModuleTopology(const FNiagaraExt_StackItemReference& ModuleRef, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context);
++	UE_API static void GetModuleTopology(const FNiagaraExt_StackItemReference& ModuleRef, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context, EModuleTopologyDetail Detail = EModuleTopologyDetail::WithInputs);
++
++	/**
++	 * MoonEngine: the graph-level parameter defaults of an emitter, one entry per parameter whose
++	 * default mode is not the FailIfPreviouslyNotSet the graph would give a fresh parameter.
++	 *
++	 * Defaults live on the emitter's own graph, not on any module, which is why this is addressed by
++	 * emitter rather than by stack.
++	 *
++	 * INCOMPLETE, and the reason is written down rather than left to be rediscovered. On every
++	 * emitter of a loaded third-party system this returns nothing, because
++	 * `EmitterData->GraphSource->NodeGraph` reports zero variables there -- not "no defaults", zero
++	 * parameters of any kind. Three things were tried and measured: iterating GetAllMetaData (the
++	 * UObject store, empty), GetScriptVariableData (compilation copies only, and private), and
++	 * calling GetParameterReferenceMap first to force a rebuild (no change). The write half below is
++	 * unproven for the same reason -- setting a mode on that graph does not change what the
++	 * translator sees. Whatever holds these parameters, it is not the graph this reaches.
++	 */
++	UE_API static void GetEmitterParameterDefaults(const FNiagaraExt_StackItemReference& EmitterRef, TArray<FNiagaraExt_ParameterDefault>& OutDefaults, FNiagaraExternalEditContext& Context);
++
++	/** MoonEngine: applies one such default, creating the graph parameter if it is not there yet. */
++	UE_API static void SetEmitterParameterDefault(const FNiagaraExt_StackItemReference& EmitterRef, const FNiagaraExt_ParameterDefault& InDefault, FNiagaraExternalEditContext& Context);
++
++	/**
++	 * MoonEngine: drops the emitter's rapid-iteration parameters whose module is no longer in its
++	 * stack.
++	 *
++	 * A caller that rebuilds an emitter's stacks in place -- clearing them and adding modules back --
++	 * leaves the constants of every module it removed behind, because they live in the script's
++	 * RapidIterationParameters and nothing in the stack API touches them. They accumulate across
++	 * rebuilds, and an emitter carrying enough of them stops behaving like the same emitter built
++	 * fresh: measured on N_MagicRuneCast_2, where the in-place rebuild kept 18 constants a
++	 * fresh-path build did not have and its MainRune emitted nothing at all.
++	 *
++	 * FNiagaraStackGraphUtilities::CleanUpStaleRapidIterationParameters already does exactly this and
++	 * the merge manager already calls it; this only makes it reachable from outside.
++	 */
++	UE_API static void CleanUpStaleEmitterParameters(const FNiagaraExt_StackItemReference& EmitterRef, FNiagaraExternalEditContext& Context);
+ 
+ 	/** Returns stack input topology: name, type, visibility, editability. No value payload. */
+ 	UE_API static void GetStackInputTopology(const FNiagaraExt_StackItemReference& StackInputRef, FNiagaraExt_StackInputTopology& OutTopology, FNiagaraExternalEditContext& Context);
+@@ -1389,11 +1493,30 @@ public:
+ 	UE_API static void AddRenderer(const FNiagaraExt_StackItemReference& NewRendererLocation, const TSubclassOf<UNiagaraRendererProperties> RendererClass, FNiagaraExt_RendererRef& OutRef, FNiagaraExternalEditContext& Context);
+ 	UE_API static void RemoveRenderer(const FNiagaraExt_StackItemReference& RendererToRemove, FNiagaraExternalEditContext& Context);
+ 
+-	UE_API static void AddModule(const FNiagaraExt_StackItemReference& NewModuleLocationRef, const UNiagaraScript* ModuleAsset, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context);
+-	UE_API static void AddSetParametersModule(const FNiagaraExt_StackItemReference& NewModuleLocationRef, const TArray<FNiagaraExt_SetParameterEntry>& Parameters, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context);
++	/**
++	 * MoonEngine, bDeferStackRefresh: a caller appending many modules pays the stack refresh once,
++	 * via RefreshScriptStack, instead of per add. While deferred the stack view model does not
++	 * describe the graph -- nothing that resolves through the stack (inputs, module items) is valid
++	 * until the refresh runs. The returned topology carries the module name only, straight off the
++	 * graph node; it is the same name the refreshed stack will show.
++	 */
++	UE_API static void AddModule(const FNiagaraExt_StackItemReference& NewModuleLocationRef, const UNiagaraScript* ModuleAsset, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context, EModuleTopologyDetail Detail = EModuleTopologyDetail::WithInputs, bool bDeferStackRefresh = false);
++	UE_API static void AddSetParametersModule(const FNiagaraExt_StackItemReference& NewModuleLocationRef, const TArray<FNiagaraExt_SetParameterEntry>& Parameters, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context, EModuleTopologyDetail Detail = EModuleTopologyDetail::WithInputs, bool bDeferStackRefresh = false);
++
++	/** MoonEngine: the one refresh a deferred batch of adds pays. See bDeferStackRefresh above. */
++	UE_API static void RefreshScriptStack(const FNiagaraExt_StackItemReference& ScriptRef, FNiagaraExternalEditContext& Context);
+ 	UE_API static void AddSetParameterEntry(const FNiagaraExt_StackItemReference& ModuleRef, const FNiagaraExt_SetParameterEntry& Entry, FNiagaraExt_ModuleTopology& OutTopology, FNiagaraExternalEditContext& Context);
+ 	UE_API static void RemoveSetParameterEntry(const FNiagaraExt_StackItemReference& ModuleRef, FName ParameterName, FNiagaraExternalEditContext& Context);
+ 	UE_API static void RemoveModule(const FNiagaraExt_StackItemReference& ModuleToRemove, FNiagaraExternalEditContext& Context);
++
++	/**
++	 * MoonEngine: removes every module from one script stack, refreshing once at the end.
++	 *
++	 * RemoveModule refreshes the whole group after each removal, so clearing a stack of n modules
++	 * rebuilds the group n times to reach a state that is empty either way. A tool that replaces a
++	 * template's stacks wholesale does that on every emitter of every asset it builds.
++	 */
++	UE_API static void ClearScriptStack(const FNiagaraExt_StackItemReference& ScriptRef, FNiagaraExternalEditContext& Context);
+ 	UE_API static void SetModuleEnabled(const FNiagaraExt_StackItemReference& ModuleRef, bool bEnabled, FNiagaraExternalEditContext& Context);
+ 
+ 	UE_API static void SetSystemData(UNiagaraSystem* System, const FNiagaraExt_SystemData& InData, FNiagaraExternalEditContext& Context);
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraGraph.h b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraGraph.h
+index 91abf43..d8e4228 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraGraph.h
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraGraph.h
+@@ -377,7 +377,9 @@ public:
+ 
+ 	/** Adds parameter to the VariableToScriptVariable map.*/
+ 	UNiagaraScriptVariable* AddParameter(const FNiagaraVariable& Parameter, bool bIsStaticSwitch = false);
+-	UNiagaraScriptVariable* AddParameter(const FNiagaraVariable& Parameter, const FNiagaraVariableMetaData& ParameterMetaData, bool bIsStaticSwitch, bool bNotifyChanged);
++	// MoonEngine: exported so external tooling can author module input defaults and metadata.
++	// Declaration-only. See DreamFX plan-v2 W1.
++	NIAGARAEDITOR_API UNiagaraScriptVariable* AddParameter(const FNiagaraVariable& Parameter, const FNiagaraVariableMetaData& ParameterMetaData, bool bIsStaticSwitch, bool bNotifyChanged);
+ 	UNiagaraScriptVariable* AddParameter(const UNiagaraScriptVariable* InScriptVar);
+ 
+ 	/** Adds an FNiagaraGraphParameterReference to the ParameterToReferenceMap. */
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraNodeCustomHlsl.h b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraNodeCustomHlsl.h
+index 4f7ed9f..0c651a1 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraNodeCustomHlsl.h
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraNodeCustomHlsl.h
+@@ -17,7 +17,9 @@ class UNiagaraNodeCustomHlsl : public UNiagaraNodeFunctionCall
+ 
+ public:
+ 	const FString& GetCustomHlsl() const;
+-	void SetCustomHlsl(const FString& InCustomHlsl);
++	// MoonEngine: exported so external tooling can author module/dynamic-input scripts from text.
++	// Declaration-only change; the implementation is untouched. See DreamFX plan-v2 W1.
++	NIAGARAEDITOR_API void SetCustomHlsl(const FString& InCustomHlsl);
+ 
+ 	bool IsShaderCodeShown() const;
+ 	void SetShaderCodeShown(bool bInShown);
+@@ -52,7 +54,8 @@ public:
+ 
+ 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+ 
+-	void InitAsCustomHlslDynamicInput(const FNiagaraTypeDefinition& OutputType);
++	// MoonEngine: exported alongside SetCustomHlsl. Declaration-only. See DreamFX plan-v2 W1.
++	NIAGARAEDITOR_API void InitAsCustomHlslDynamicInput(const FNiagaraTypeDefinition& OutputType);
+ 
+ 	bool CallsImpureDataInterfaceFunctions() const;
+ 
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraNodeWithDynamicPins.h b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraNodeWithDynamicPins.h
+index c859573..7cc2fdb 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraNodeWithDynamicPins.h
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/NiagaraNodeWithDynamicPins.h
+@@ -26,7 +26,9 @@ public:
+ 	virtual bool IncludeParentNodeContextMenu() const override { return true; }
+ 
+ 	/** Requests a new pin be added to the node with the specified direction, type, and name. */
+-	UEdGraphPin* RequestNewTypedPin(EEdGraphPinDirection Direction, const FNiagaraTypeDefinition& Type, FName InName);
++	// MoonEngine: exported so external tooling can build a custom-HLSL node's parameter-map pins.
++	// Declaration-only. See DreamFX plan-v2 W1.
++	NIAGARAEDITOR_API UEdGraphPin* RequestNewTypedPin(EEdGraphPinDirection Direction, const FNiagaraTypeDefinition& Type, FName InName);
+ 
+ 	/** Requests a new pin be added to the node with the specified direction and type. */
+ 	UEdGraphPin* RequestNewTypedPin(EEdGraphPinDirection Direction, const FNiagaraTypeDefinition& Type);
+diff --git a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/ViewModels/NiagaraEmitterHandleViewModel.h b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/ViewModels/NiagaraEmitterHandleViewModel.h
+index 8f010a4..2f0417d 100644
+--- a/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/ViewModels/NiagaraEmitterHandleViewModel.h
++++ b/Engine/Plugins/FX/Niagara/Source/NiagaraEditor/Public/ViewModels/NiagaraEmitterHandleViewModel.h
+@@ -152,6 +152,22 @@ private:
+ 	/** The stack view model which represents the emitter pointed to by this handle. */
+ 	TObjectPtr<UNiagaraStackViewModel> EmitterStackViewModel;
+ 
++	// MoonEngine: deferred stack construction for data-only view models. See DreamFX plan-v6 P.
++	//
++	// Building this stack is what a data-processing refresh actually costs: the system view model
++	// rebuilds *every* emitter's stack on every RefreshAll, while an external-edit caller addresses
++	// one emitter per call. Measured on a ten-emitter system, 889 refreshes spent 62.3 s of a 74 s
++	// build in RefreshEmitterHandleViewModels, at 70 ms a call.
++	//
++	// So in data-only mode Initialize records what the stack would have been built from and returns;
++	// GetEmitterStackViewModel() builds it on the first ask. Interactive view models are untouched --
++	// the editor wants every stack ready before it draws them.
++	bool bStackInitializationDeferred = false;
++	TWeakPtr<FNiagaraSystemViewModel> DeferredStackSystemViewModel;
++
++	/** Builds EmitterStackViewModel if Initialize deferred it. Called from GetEmitterStackViewModel. */
++	void ResolveDeferredStack();
++
+ 	/** A multicast delegate which is called any time a property on the handle changes. */
+ 	FOnPropertyChanged OnPropertyChangedDelegate;
+ 
