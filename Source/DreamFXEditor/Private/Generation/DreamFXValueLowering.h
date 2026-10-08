@@ -71,5 +71,20 @@ namespace UE::DreamFX::Editor
 
 		/** The same round trip, entered from the qualified FName a read hands back. */
 		static FString EnumEntryToSourceToken(const UEnum* Enum, FName QualifiedName);
+
+		/**
+		 * Renders a literal value back to source, given the type that says how to read its bytes.
+		 *
+		 * The inverse of Lower for the literal modes, and the one implementation of "how a value is
+		 * spelled" that the reader and the writer share. It lives here rather than in the decompiler
+		 * because a second caller needs exactly this: `pull` reads a value out of an asset and writes
+		 * it into the text, and a value the reader would spell differently from the writer is a
+		 * rewrite that never converges.
+		 *
+		 * @return false when the bytes are not a literal this language can spell -- an empty value, a
+		 *         struct that is not float/int/bool/2-4 vector shaped, or a type with no literal form.
+		 */
+		static bool LiteralToSource(const FInputValue& Value, const FNiagaraTypeDefinition& Type,
+			FString& Out);
 	};
 }

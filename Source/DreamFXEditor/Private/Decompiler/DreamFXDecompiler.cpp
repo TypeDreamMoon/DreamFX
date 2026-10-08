@@ -58,66 +58,6 @@ namespace UE::DreamFX::Editor
 			return FormatFloatLossless(Value);
 		}
 
-		/** Renders a literal value back to source, given the type that says how to read its bytes. */
-		bool LiteralToSource(const FInputValue& Value, const FNiagaraTypeDefinition& Type, FString& Out)
-		{
-			const UScriptStruct* Struct = Value.LiteralStruct;
-			if (Struct == nullptr || Value.LiteralBytes.Num() == 0)
-			{
-				return false;
-			}
-
-			const uint8* Memory = Value.LiteralBytes.GetData();
-
-			if (Struct == FNiagaraFloat::StaticStruct())
-			{
-				Out = FormatFloat(reinterpret_cast<const FNiagaraFloat*>(Memory)->Value);
-				return true;
-			}
-			if (Struct == FNiagaraInt32::StaticStruct())
-			{
-				const int32 Integer = reinterpret_cast<const FNiagaraInt32*>(Memory)->Value;
-				// An int-typed slot holding an enum is written as the enum entry, not a raw number.
-				if (UEnum* Enum = Type.GetEnum())
-				{
-					const int32 Index = Enum->GetIndexByValue(Integer);
-					if (Index != INDEX_NONE)
-					{
-						const FString Token = FValueLowering::EnumEntryToSourceToken(Enum, Index);
-						if (!Token.IsEmpty())
-						{
-							Out = Token;
-							return true;
-						}
-					}
-				}
-				Out = FString::FromInt(Integer);
-				return true;
-			}
-			if (Struct == FNiagaraBool::StaticStruct())
-			{
-				Out = reinterpret_cast<const FNiagaraBool*>(Memory)->GetValue() ? TEXT("true") : TEXT("false");
-				return true;
-			}
-
-			// Everything else in the family is packed floats; the component count comes from the size.
-			const int32 Components = Struct->GetStructureSize() / static_cast<int32>(sizeof(float));
-			if (Components >= 2 && Components <= 4
-				&& Struct->GetStructureSize() == Components * static_cast<int32>(sizeof(float)))
-			{
-				const float* Floats = reinterpret_cast<const float*>(Memory);
-				TArray<FString> Parts;
-				for (int32 Index = 0; Index < Components; ++Index)
-				{
-					Parts.Add(FormatFloat(Floats[Index]));
-				}
-				Out = FString::Printf(TEXT("(%s)"), *FString::Join(Parts, TEXT(", ")));
-				return true;
-			}
-
-			return false;
-		}
-
 		/** Reads a curve data interface's JSON back into a `curve { }` literal. */
 		bool CurveJsonToSource(const FString& Json, int32 IndentLevel, FString& Out)
 		{
@@ -640,7 +580,7 @@ namespace UE::DreamFX::Editor
 			case EInputValueMode::Literal:
 			{
 				FString Text;
-				if (LiteralToSource(Value, Type, Text))
+				if (FValueLowering::LiteralToSource(Value, Type, Text))
 				{
 					return Text;
 				}
@@ -2514,7 +2454,7 @@ namespace UE::DreamFX::Editor
 
 					FString DefaultText;
 					if (Variable.DefaultValue.Mode == EInputValueMode::Literal
-						&& LiteralToSource(Variable.DefaultValue, Variable.Type, DefaultText))
+						&& FValueLowering::LiteralToSource(Variable.DefaultValue, Variable.Type, DefaultText))
 					{
 						Line += FString::Printf(TEXT(" = %s"), *DefaultText);
 					}
