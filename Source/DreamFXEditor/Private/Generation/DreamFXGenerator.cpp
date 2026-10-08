@@ -6,6 +6,7 @@
 #include "DreamFXParser.h"
 #include "DreamFXProvenance.h"
 #include "DreamFXValueLowering.h"
+#include "Diff/DreamFXBuildSafetyGate.h"
 #include "Generation/DreamFXModuleGenerator.h"
 #include "Lint/DreamFXLint.h"
 #include "Schema/DreamFXModuleLibrary.h"
@@ -388,6 +389,20 @@ namespace UE::DreamFX::Editor
 			const TCHAR* PropertyName;
 			/** Pairs of {written, actual}, terminated by a null. Empty when no aliasing is needed. */
 			const TCHAR* const* ValueAliases;
+
+			/**
+			 * A bool property the setting cannot work without, set to true whenever the setting is
+			 * written, and null when the setting stands on its own.
+			 *
+			 * The engine reads a box through an override flag, and the language has no spelling for
+			 * that flag: `FixedBounds` is the only way to say "this system's bounds are authored", so
+			 * writing the box without turning the override on is a setting that looks applied and is
+			 * not -- the bounds stay dynamic and the box is inert. The round trip then loses it too,
+			 * because the decompiler prints a box only when the flag says it is live: the corpus
+			 * measured exactly that, `RoundTrip/ValueModes.dfs` declaring +/-50 and coming back as the
+			 * engine's +/-100 default, while every fixture that declared the default box hid it.
+			 */
+			const TCHAR* CompanionBool = nullptr;
 		};
 
 		const TCHAR* const SimTargetAliases[] = { TEXT("CPU"), TEXT("CPUSim"), TEXT("GPU"), TEXT("GPUComputeSim"), nullptr };
@@ -397,7 +412,7 @@ namespace UE::DreamFX::Editor
 		{
 			{ TEXT("EffectType"),  TEXT("EffectType"),  nullptr },
 			{ TEXT("WarmupTime"),  TEXT("WarmupTime"),  nullptr },
-			{ TEXT("FixedBounds"), TEXT("FixedBounds"), nullptr },
+			{ TEXT("FixedBounds"), TEXT("FixedBounds"), nullptr, TEXT("bFixedBounds") },
 			// Substepping. The decompiler's SystemSettingFields carries the same pair; a system that
 			// ticks at a fixed 1/60 simulates visibly differently from one stepped per-frame, and
 			// nothing below the system properties records that fact.
@@ -595,6 +610,11 @@ namespace UE::DreamFX::Editor
 				}
 
 				SetJsonFieldByPath(Properties, Mapping->PropertyName, Json);
+
+				if (Mapping->CompanionBool != nullptr)
+				{
+					Properties->SetBoolField(Mapping->CompanionBool, true);
+				}
 			}
 
 			OutJson = Properties->Values.Num() > 0 ? SerializeJsonObject(Properties) : FString();
@@ -3354,6 +3374,11 @@ namespace UE::DreamFX::Editor
 		FString SourceHash;
 		bool bHasGpuEmitter = false;
 		bool bSave = true;
+
+		/** The asset's facts as they were read, before this build's first write to it. */
+		FBuildSafetySnapshot PreBuildFacts;
+		/** `-Force`: the safety gate reports what a rebuild drops instead of refusing it. */
+		bool bForceLossyRebuild = false;
 	};
 
 	namespace
@@ -3378,7 +3403,9 @@ namespace UE::DreamFX::Editor
 				// -DreamFXSaveFailedBuilds keeps the wreck on disk for the coroner. A failed build
 				// normally saves nothing, and every later reader then silently measures the LAST
 				// saved asset instead -- a five-hour-stale mirror once answered an afternoon of
-				// questions about a build it had nothing to do with.
+				// questions about a build it had nothing to do with. The safety gate below does not
+				// apply here: this save is already a diagnostic dump of a build that failed loudly,
+				// and refusing it would destroy the one artifact the flag exists to leave behind.
 				if (Pending.bSave && FParse::Param(FCommandLine::Get(), TEXT("DreamFXSaveFailedBuilds")))
 				{
 					TArray<FString> SaveErrors;
@@ -3449,6 +3476,21 @@ namespace UE::DreamFX::Editor
 
 			if (Pending.bSave)
 			{
+				// The safety gate, and the last point at which refusing still means anything: the
+				// system in memory is now exactly what the save would write -- every write applied, the
+				// compile finished, the provenance stamp set -- and nothing has reached the disk yet.
+				// `Before` was read before the first write, so this is the one comparison in the
+				// pipeline that is not text against text (write-back-coverage.md 6.1).
+				if (!FBuildSafetyGate::CheckBeforeSave(System, Pending.PreBuildFacts,
+					Pending.bForceLossyRebuild, Pending.Plan.FullAssetPath, Pending.HeaderLocation,
+					Diagnostics))
+				{
+					// Deliberately no save and no stamp: leaving the package untouched is what makes
+					// this a refusal rather than a warning, and the next run starts from the same
+					// asset state and reaches the same verdict.
+					return false;
+				}
+
 				Errors.Reset();
 				if (!FNiagaraAdapter::SaveSystem(System, Errors))
 				{
@@ -3639,6 +3681,16 @@ namespace UE::DreamFX::Editor
 
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE ApplyPlan begin '%s'"), *Plan.FullAssetPath);
 
+		// The safety gate's before-side, read here because everything below this line is a mutation.
+		// Two cases are deliberately not captured: a verify (nothing is written at all) and a first
+		// generation -- a package that did not exist has no earlier content for a rebuild to replace,
+		// so there is nothing to lose and nothing to compare against.
+		FBuildSafetySnapshot PreBuildFacts;
+		if (Options.bSave && !bCreated)
+		{
+			PreBuildFacts = FBuildSafetyGate::Capture(System);
+		}
+
 		TMap<FName, FSourceLocation> ModuleLocations;
 		{
 			// The window holds every structural and value write, and nothing in it needs a compiled
@@ -3689,6 +3741,8 @@ namespace UE::DreamFX::Editor
 		Pending.SourceHash = Document.SourceHash;
 		Pending.bHasGpuEmitter = bHasGpuEmitter;
 		Pending.bSave = Options.bSave;
+		Pending.PreBuildFacts = MoveTemp(PreBuildFacts);
+		Pending.bForceLossyRebuild = Options.bForceLossyRebuild;
 
 		// A rebuild whose writes all landed on values the asset already held raises no change id, and
 		// the compile request would then bless whatever VM the asset came in with -- including one

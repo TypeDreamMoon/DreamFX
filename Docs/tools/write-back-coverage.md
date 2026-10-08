@@ -570,6 +570,77 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 | `Docs/diagnostics/DFX5xxx.md:186-202`（DFX5093） | 「`MaterialParam` is reserved syntax and is not implemented in v1」/「Fix. Not available.」 | 保留语法（`MaterialParam X = Y;`）确实没实现，但**属性形式 `MaterialParameters = "…json…";` 是通的**，而且反编译器产出的就是这一种。建议在 DFX5093 里点明「有另一条能用的通路」 |
 | `Docs/language/dfs.md:302-316` | `Meshes = ["/Engine/BasicShapes/Cube"]` | 反编译器 90/90 都产出 JSON blob，0 处路径数组。写编辑器集成 / 写解析器时按 blob 处理 |
 
+### 6.8 已实现：build 侧安全闸
+
+> 分支 `feat/build-safety-gate`，诊断 `DFX8017`。§6.1 按「用 `DescribeSystemFacts`、不要用文本」
+> 落地，§6.2 的系统级属性补盲一并在内。**下面这一节是新增实测，不改变 §1–§7 原有内容。**
+
+**语义**
+
+- **在第一次写资产之前**用 `DescribeSystemFacts`（反射级，不过导出器）记下 fact 集合；
+  编译完成、provenance 盖章之后、`SaveSystem` **之前**再读一次，两边做**多重集差**
+  （与 `asset-diff` 同一套比较，不是「第一处不同」）。
+- **只拦「少掉的」**：重建后缺失的项 ⇒ 拒绝保存、以 error 退出，明细**逐条**打出
+  `路径 : 旧值 -> 新值` 或 `旧值 -> (missing)`；diagnostic 只有一条汇总，明细是同级日志行。
+- `-Force` ⇒ 照常写入，同一份明细改以 **warning** 级别打进日志（Output Log 事后可追责）。
+- 目标资产**原本不存在** ⇒ 没有可比对象，不拦（首次生成）。`verify` / `-NoSave` 不拦（不写盘）。
+- 只比**稳定**事实：闸内另外剥掉 `bBindingExistsOnSource` / `bIsCachedParticleValue`
+  （§3.10 已声明为编译期推导的缓存）和 `compiled … writes:` 的**空列表**
+  （PostLoad 丢掉缓存 VM 的产物；第一轮实测 13 条里有 5 条全是它）。两处**只改闸**，
+  `asset-diff` 的输出与 §3/§5 引用的数字原样不动 —— 它是报告工具，闸是拒绝，
+  误报会让使用者学会无脑 `-Force`。
+- **新增采集面**：`UNiagaraSystem` 自身属性进 fact 集合（§3.9 的盲区），形如
+  `system WarmupTime = …` / `system FixedBounds = …`；skip 表只排除编译器产物、
+  编辑器簿记、身份与 R3 抽出的 scratch pad，理由写在 `DreamFXAssetFacts.cpp` 注释里。
+- **出口只有 `-Force`**，而且它与 `bForce` 是**两个开关**：Adopt、保存时重建（watcher）、
+  DreamGUI bridge 只设后者，所以它们**会被拦**，不会继承覆盖权。
+- 产物：`Saved/DreamFX/BuildSafety/<资产>.{before,after,lost}.facts`（每次触发都写；
+  `-Force` 之后资产已不含 before 状态，这份是唯一记录）。
+
+**实测**（同一次编译产物；每条命令一次编辑器启动，日志在 `Saved/DreamFX/gate-probe/runs{,2,3}/`）
+
+| # | 命令 | 结果 |
+|---|---|---|
+| 1 | `dfx build <镜像导出＋一行注释>`，无 `-Force` | `1 built`，0 error / 0 warning：**无误报**。加 `-LogCmds=LogDreamFX Verbose -FullStdOutLogOutput` 后可见闸自己的判语：`build safety: '/AtlasFX/Decompiled/Templates/NS_Atlas2D_Mesh' still holds all 186 fact(s) after the rebuild.` |
+| 2 | 探针：`-Force` 把 `MeshYaw = -90` / `UniformScale = 2.0` 写进一次性资产 | 写入成功，4 条以 warning 列出（`0 → -90`、`1.0 → 2.0`）|
+| 3 | 探针：同一目标，两个输入**都不在文本里**，无 `-Force` | **拦下** 4 条：`… MeshYaw : 0000B4C2 -> 00000000`、`… UniformScale : 00000040 -> 0000803F`；exit 1，`0 built, 1 failed`，资产未落盘 |
+| 4 | 同上 ＋ `-Force` | 写入成功，同 4 条改以 warning 列出，exit 0 |
+| 5 | `NS_Effects1_Mesh` 的导出（`Name=` 去掉 `Decompiled/`）指向**原资产** | **拦下**：`MeshYaw : 0000B4C2 -> 00000000`（spawn/update 各一条）；原 `.uasset` 的 SHA256 与 mtime 不变 |
+| 6 | `破空灰尘` 同上 | **拦下** 8 条：4 × `ri … ScaleColor.Scale RGBA` 整条消失 ＋ 4 × `ri system-update … EmitterState.Min/MaxDistance` 消失；原 `.uasset` 不变 |
+| 7 | 系统属性探针：两个源只差 `WarmupTime` 5.0 / 1.0 | **拦下** 1 条：`system WarmupTime : 5.000000 -> 1.000000` —— 系统级属性确实在比对里 |
+| 8 | `DFX/Templates/NS_Atlas2D_Mesh.dfs` 的副本（手工维护的模板源） | **拦下** 1 条：`emitter Atlas2D_Mesh renderer 0:… MaterialParameters`，新值 `(AttributeBindings=,…)` 全空 —— 就是白块事故 |
+
+**读数注意（一处订正）**：§3.4 的「37+4 条只在原资产里」是**原资产 vs 镜像**的差集；
+**原地重建**（`CleanUpStaleParameters` 之后按文本重填）实测只丢上表第 6 行的 8 条 ——
+其余 29 条的值恰好等于模块默认值，重建时被默认值补回、fact 相同。所以「文本没带它们」是真的，
+「原地重建会丢 37 条」不是：两者不是同一个比较。
+
+**最可能被作者反对的一条：改值也拦。** 第 2 行就是它 —— 把文本里**已经写着**的
+`UniformScale` 从 1.0 改成 2.0，闸报的也是「丢了 `0000803F`」，要 `-Force` 才写。
+这是按本次要求的语义实现（「少掉原来有的事实就拒绝」），也因为今天分不出
+「文本表达的改动」与「文本表达不了的旧值」—— 那需要 §6.4 的抑制集/脏集合。
+要放宽的话，唯一的改动点是 `DreamFXBuildSafetyGate::CheckBeforeSave`。
+
+**第 8 行是本次最有价值的副作用**：手工维护的 `DFX/Templates/NS_Atlas2D_Mesh.dfs`
+**不含** `MaterialParameters = "{…}"` 那个 blob（镜像导出里有），所以按现在文档写的方式
+重建模板 = 清掉 Sheet 绑定 = 白块事故。闸把它拦下了，代价是那条工作流现在要显式 `-Force`
+（模板头注释本来就要求随后再跑一次 `AtlasFXSetup`）。
+
+**顺带修的一处（不然仓库自带的 corpus 会红）**：新增的系统级 fact 让 `dfx corpus` 立刻红了 ——
+`RoundTrip/ValueModes.dfs` 声明 `FixedBounds = box(-50…50)`，重建回来的是引擎默认的 ±100。
+根因不在闸：写侧只写箱子、从不开 `bFixedBounds`，读侧又只在开关为真时才打印箱子，
+于是「声明了固定包围盒」这条设置看着生效、其实一直悬空（其它 fixture 全都声明 ±100 = 默认值，
+这个洞就在 corpus 里藏住了）。修法是一行映射：系统 `FixedBounds` 带一个 companion bool
+（`FSettingMapping::CompanionBool`）。**副作用**：本工程 DFX 源里声明了系统 `FixedBounds` 的
+只有 `DFX/Templates/NS_Atlas2D_Mesh.dfs` 与 `NS_Atlas2D_Sprite.dfs`（±300），
+它们下一次重建会真正启用固定包围盒 —— 这正是那两行的本意，但需要作者知情。
+修后 `dfx corpus`：**55 passed / 0 failed**。
+
+**写入的东西（自证）**：只创建了两个一次性探针资产（`/Game/DreamFXProbe/NS_GateProbe`、
+`/Game/DreamFXProbe/NS_GateSysProbe`，验证后已删除）和各自的镜像重建；三个被「瞄准」的手工资产
+（`NS_Effects1_Mesh`、`破空灰尘`、`/AtlasFX/Templates/NS_Atlas2D_Mesh`）hash 前后不变
+（拦截发生在 save 之前），字节留档在 `Saved/DreamFX/gate-probe/asset-backup/`。
+
 ---
 
 ## 7. 复现步骤

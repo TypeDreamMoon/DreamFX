@@ -17,6 +17,19 @@ namespace UE::DreamFX::Editor
 		bool bForce = false;
 
 		/**
+		 * `-Force` also overrides the build safety gate: a rebuild that would drop facts this source
+		 * cannot express is written anyway, with the losses logged as warnings instead of refusing.
+		 *
+		 * A separate flag from bForce on purpose. bForce means "rebuild even though the hash says it
+		 * is current", and every in-editor caller sets it -- Adopt, the source watcher, the DreamGUI
+		 * bridge -- because they each know a build is wanted. Those are exactly the callers for which
+		 * a silent loss is the expensive mistake, so none of them may inherit the override by
+		 * accident. Only a command line, where a human typed `-Force` after reading the refusal, sets
+		 * this.
+		 */
+		bool bForceLossyRebuild = false;
+
+		/**
 		 * Plan-doc 4.6-2. Reports what would happen and whether the asset has drifted, but writes
 		 * nothing -- neither the asset nor the provenance stamp.
 		 */

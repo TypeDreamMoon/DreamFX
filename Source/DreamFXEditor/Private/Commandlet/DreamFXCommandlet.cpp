@@ -1145,6 +1145,11 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	Options.bVerifyOnly = FParse::Param(*Params, TEXT("Verify"));
 	Options.bStrictVersions = FParse::Param(*Params, TEXT("StrictVersions"));
 	Options.bForce = FParse::Param(*Params, TEXT("Force"));
+	// The same switch read twice, because it answers two different questions and only a human at a
+	// command line has answered both: "rebuild even though the hash says it is current", and "write
+	// even though the rebuild drops facts the text cannot express". The in-editor callers set the
+	// first without meaning the second (see FGenerateOptions::bForceLossyRebuild).
+	Options.bForceLossyRebuild = Options.bForce;
 	Options.bSave = !FParse::Param(*Params, TEXT("NoSave")) && !Options.bVerifyOnly;
 
 	// -Window=N: how many systems may sit between their compile request and their finalize. Source

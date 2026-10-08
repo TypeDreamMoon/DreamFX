@@ -200,7 +200,7 @@ Because DFX8010 already ruled out every *known* gap, a mismatch here is a real d
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3332`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3333`
 <!-- generated:end DFX8013 -->
 
 **Cause.** The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its
@@ -281,4 +281,49 @@ than living only in a commandlet log.
 
 **Fix.** Nothing to fix in the source file — this is a representation limit. If the stage matters,
 keep authoring that emitter in the Niagara editor; a rebuilt mirror will not run it.
+
+## DFX8017
+
+<!-- generated:begin DFX8017 -->
+**Severity** error
+
+**Message**
+
+```
+'%s' was not saved: rebuilding it would drop %d fact(s) this source cannot express, and a save would destroy them. They are listed above, and the asset still holds every one of them. -Force writes anyway; full lists in %s
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:242`, `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:248`
+<!-- generated:end DFX8017 -->
+
+**Cause.** A rebuild would leave the asset holding less than it holds now, so the save was refused. One line is
+raised per fact that would be lost, and then this one as the summary; the fact lists themselves are written to
+`Saved/DreamFX/BuildSafety/<asset>.{before,after,lost}.facts`, because the console truncates long facts and
+because after a `-Force` save the asset no longer holds the `before` state at all.
+
+The build replays text onto the asset, and text is not a complete description of a Niagara system. Inputs the
+decompiler suppressed (R8: only inputs that differ from a pristine module are printed), renderer bindings a
+commandlet patched in after the last build, properties no setting table carries --- a rebuild replaces whatever
+those held, silently. Measured on this project's own content: 41 stored module-input constants on one asset,
+`Sprite_Atlas_Size.MeshYaw` -90 -> 0 on another, 61 on a third. Every one of them had L1 and L2 green, because
+both sides of an L1 comparison are the same lossy exporter's output.
+
+What separates this gate from DFX8010 is where it reads. DFX8010 refuses an *adoption* using the exporter's own
+list of features it could not carry, and none of the three assets above appears in that list. This compares the
+asset against itself by reflection --- `DescribeSystemFacts`, read before the build's first write and again
+immediately before the save --- so a loss the exporter makes on both sides is exactly what it is able to see. The
+system's own properties are part of that comparison, which they were not before this gate existed.
+
+**Fix.** Read the lines above: each names one address, the value it holds now, and either the value the rebuild
+would write instead or `(missing)` when the rebuild has nothing for it at all. Then pick one:
+
+- Teach the source to carry it. A suppressed input can usually simply be written out; a renderer's
+  material-parameter bindings travel as the `MaterialParameters = "{...}"` JSON the decompiler emits.
+- Keep authoring that asset in the editor and export it (*Export .dfs*) instead of adopting it. Adopt makes the
+  text the only source of truth, and this gate is what turns that from a side effect into a decision.
+- `-Force` writes anyway. The same list is logged at warning severity, so a forced build stays accountable
+  afterwards; the refusal is never silent.
+
+A rebuild that loses nothing logs nothing, and a target with no asset yet is never refused: a first generation has
+no earlier content to replace.
 

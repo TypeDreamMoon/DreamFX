@@ -14,7 +14,7 @@
 Stack '%s' has no Niagara script usage mapping.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1095`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1096`
 <!-- generated:end DFX5001 -->
 
 **Cause.** A stack kind with no Niagara script usage behind it. Every kind the parser can produce
@@ -35,7 +35,7 @@ was added to the enum without extending `ScriptUsageForStack`.
 This system declares no emitters, so it will produce nothing.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2104`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2105`
 <!-- generated:end DFX5002 -->
 
 **Cause.** A system with no emitters compiles and produces nothing.
@@ -53,7 +53,7 @@ This system declares no emitters, so it will produce nothing.
 '%s' is not declared in this source, so its existing modules are left as-is: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2849`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2850`
 <!-- generated:end DFX5003 -->
 
 **Cause.** Declaring a stack means taking it over; a stack this source never mentions keeps whatever it had. `CreateNiagaraSystem` puts a `SystemState` in `SystemUpdate`, and clearing it wholesale would make every `.dfs` without an explicit `SystemUpdate` produce a system that never runs. Informational so the difference is visible rather than silent.
@@ -71,7 +71,7 @@ This system declares no emitters, so it will produce nothing.
 No Material was set, so the engine default was applied: %s. Write 'Material = \"...\";' to choose your own.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2962`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2963`
 <!-- generated:end DFX5004 -->
 
 **Cause.** A renderer with no `Material` gets the engine default, which is why an untextured effect still draws.
@@ -107,7 +107,7 @@ SavePackage failed for '%s'.
 Emitter '%s' declares more than one OnEvent block. Only one event handler per emitter is representable; split the extra handlers into their own emitters.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2035`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2036`
 <!-- generated:end DFX5031 -->
 
 **Cause.** An emitter block declares two or more `OnEvent` blocks.
@@ -127,7 +127,7 @@ DreamFX reaches event stacks through the external edit API's ordinary stack rail
 Emitter '%s' declares two Stage blocks named '%s'. Stages are identified by name; rename one.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2013`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2014`
 <!-- generated:end DFX5032 -->
 
 **Cause.** One emitter declares two `Stage` blocks with the same name. The write side
@@ -150,7 +150,7 @@ its own.
 Emitter '%s' declares Stage blocks but simulates on the CPU. Simulation stages are a GPU feature: set `SimTarget = GPU` in the emitter's Settings.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3091`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3092`
 <!-- generated:end DFX5033 -->
 
 **Cause.** An emitter declares `Stage` blocks while simulating on the CPU. Simulation stages are a
@@ -172,7 +172,7 @@ emitters cannot compute for themselves), or delete the `Stage` blocks.
 Emitter '%s' uses 'as %s' on two module calls. Node names are unique per emitter; rename one.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2087`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2088`
 <!-- generated:end DFX5034 -->
 
 **Cause.** Two module calls in one emitter carry the same `as <name>` suffix. The suffix names the
@@ -194,7 +194,7 @@ are unique by construction, so this fires on hand-edited sources.
 'MaterialParam' is reserved syntax and is not implemented in v1 (plan section 7).
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1513`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1514`
 <!-- generated:end DFX5093 -->
 
 **Cause.** `MaterialParam` is reserved syntax (L8) with no implementation in v1.
@@ -212,7 +212,7 @@ are unique by construction, so this fires on hand-edited sources.
 Only System documents can be generated right now; this file declares a %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3511`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3534`
 <!-- generated:end DFX5097 -->
 
 **Cause.** Only `.dfs` and `.dfm` produce assets. A `.dfe` is merged into its host by copy (R3) and has nothing of its own to generate.
@@ -230,7 +230,7 @@ Only System documents can be generated right now; this file declares a %s.
 Data interface parameter '%s' takes its configuration as a quoted JSON object, the form the decompiler writes.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1778`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1779`
 <!-- generated:end DFX5098 -->
 
 **Cause.** A `DI<T>` user parameter's configuration is a quoted JSON object — the same verbatim form a module's data interface input takes, and the form the exporter writes. Anything else here is a value the applier cannot read. The code also reports under DFX5098 when the configuration was well-formed but the engine refused to apply it, which usually means a property name in the blob no longer exists on that interface class.
@@ -250,7 +250,7 @@ Data interface parameter '%s' takes its configuration as a quoted JSON object, t
 [Group] and [SortPriority] are kept in source only: the external edit API's user variable struct has no metadata fields to write them to.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1815`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1816`
 <!-- generated:end DFX5099 -->
 
 **Cause.** `[Group]` and `[SortPriority]` have nowhere to go: the external edit API's user variable struct carries name, type and description and no other metadata.
