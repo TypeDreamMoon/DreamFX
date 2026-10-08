@@ -73,12 +73,97 @@ namespace UE::DreamFX::Editor
 	 *     A value the text writes is a value the text meant, and it is allowed through;
 	 *   * when the declaration cannot be consulted at all, it refuses too and says so (`suspected drift
 	 *     (cannot tell)`), which is the conservative half of that rule.
+	 *
+	 * And one exception to the second rule, which is about where a value lives rather than whether it
+	 * survived: a constant can sit in two scripts' rapid-iteration stores at once (an emitter update
+	 * module's constant lives in the system update script, and the editor's own `SetInput` -- the
+	 * slider -- also writes a copy into the system spawn script), while a rebuild materialises one.
+	 * The copy that goes is then a copy and nothing else: the same value, at the same
+	 * `<emitter>.<node>.<input>` address, is still stored by the script that stayed. That is reported
+	 * (verbose, one line per copy), never refused -- and only when the value really is still there:
+	 * two copies that DISAGREE, or a value that went with nothing left holding it, are judged by the
+	 * rules above exactly as before.
 	 */
 	class FBuildSafetyGate
 	{
 	public:
 		/** Reads the asset's facts. Call before the build's first write to it. */
 		static FBuildSafetySnapshot Capture(UNiagaraSystem* System);
+
+		/**
+		 * One fact the rebuild no longer carries exactly, and what was decided about it.
+		 *
+		 * Kept separate from the report because the decision is the part worth asserting: the gate
+		 * writes files, refuses saves and prints console lines, none of which a test wants to drive.
+		 */
+		struct FVerdict
+		{
+			/** The fact as the asset held it; one entry per copy that went. */
+			FString Fact;
+			/** What the report prints: the address, without the value. */
+			FString Display;
+			FString OldValue;
+			FString NewValue;
+
+			/**
+			 * How the decision was reached, because the reader is the one who decides whether to reach
+			 * for -Force: None -- the fact vanished, or a copy of it did, and no rule could have
+			 * allowed it; Deterministic -- the source's declarations were consulted and do not name
+			 * it; Suspected -- there is no declaration record for that structure at all.
+			 */
+			enum class EKind : uint8 { None, Deterministic, Suspected };
+			EKind Kind = EKind::None;
+
+			/**
+			 * True when this copy went and the rebuild still stores its exact value at the same
+			 * address in another script: a collapse of two identical copies into one, not a loss. Such
+			 * a verdict never refuses a save, and the report names it (`merged |`) rather than
+			 * dropping it silently.
+			 */
+			bool bCollapsedIntoAnotherStore = false;
+		};
+
+		/** What one comparison concluded, over the two fact sets the caller hands in. */
+		struct FComparison
+		{
+			TArray<FVerdict> Verdicts;
+			/** Leftover facts inside a structure the rebuild kept. */
+			int32 Candidates = 0;
+			/** Facts the rebuild added. */
+			int32 Gained = 0;
+
+			/** The verdicts a save would be refused over. */
+			int32 NumRefused() const
+			{
+				int32 Count = 0;
+				for (const FVerdict& Verdict : Verdicts)
+				{
+					Count += Verdict.bCollapsedIntoAnotherStore ? 0 : 1;
+				}
+				return Count;
+			}
+
+			/** The verdicts that went but left their value in another script's store. */
+			int32 NumCollapsed() const
+			{
+				int32 Count = 0;
+				for (const FVerdict& Verdict : Verdicts)
+				{
+					Count += Verdict.bCollapsedIntoAnotherStore ? 1 : 0;
+				}
+				return Count;
+			}
+		};
+
+		/**
+		 * The four rules, applied to two fact sets -- no asset, no sink, no file.
+		 *
+		 * This is what `CheckBeforeSave` runs on a live asset, and what the corpus asserts on
+		 * synthetic pairs (DreamFX.Corpus.WriteBack's `CollapsedCopy`): the rules are the part with a
+		 * cost to getting wrong, so they are reachable without a Niagara system to hold them.
+		 */
+		static FComparison Compare(const TArray<FString>& BeforeFacts, const TArray<FString>& AfterFacts,
+			const FDeclaredFacts& Declared);
 
 		/**
 		 * Compares the snapshot against the asset as it stands now -- after the build, after the

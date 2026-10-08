@@ -214,23 +214,6 @@ namespace UE::DreamFX::Editor
 			Out.Scope = Fact;
 			return Out;
 		}
-
-		/** One line of the report: what the fact was about, what it held, and what it becomes. */
-		struct FReportedLoss
-		{
-			FString Display;
-			FString OldValue;
-			FString NewValue;
-
-			/**
-			 * How the decision was reached, because the reader is the one who decides whether to reach
-			 * for -Force: None -- the fact vanished, or a copy of it did, and no rule could have
-			 * allowed it; Deterministic -- the source's declarations were consulted and do not name
-			 * it; Suspected -- there is no declaration record for that structure at all.
-			 */
-			enum class EKind : uint8 { None, Deterministic, Suspected };
-			EKind Kind = EKind::None;
-		};
 	}
 
 	void FDeclaredFacts::Add(const FString& Scope, const FString& Subject)
@@ -262,23 +245,16 @@ namespace UE::DreamFX::Editor
 		return Snapshot;
 	}
 
-	bool FBuildSafetyGate::CheckBeforeSave(UNiagaraSystem* System, const FBuildSafetySnapshot& Before,
-		const FDeclaredFacts& Declared, bool bForceFromCommandLine, const FString& AssetPath,
-		const FSourceLocation& Location, FDiagnosticSink& Diagnostics)
+	FBuildSafetyGate::FComparison FBuildSafetyGate::Compare(const TArray<FString>& BeforeFactsRaw,
+		const TArray<FString>& AfterFactsRaw, const FDeclaredFacts& Declared)
 	{
-		if (!Before.bCaptured || System == nullptr)
-		{
-			return true;
-		}
-
-		TArray<FString> RawAfter;
-		DescribeSystemFacts(System, RawAfter);
+		FComparison Out;
 
 		TArray<FString> BeforeFacts;
-		CollectComparableFacts(Before.Facts, BeforeFacts);
+		CollectComparableFacts(BeforeFactsRaw, BeforeFacts);
 
 		TArray<FString> AfterFacts;
-		CollectComparableFacts(RawAfter, AfterFacts);
+		CollectComparableFacts(AfterFactsRaw, AfterFacts);
 
 		// The multiset difference of the two sets: a fact both sides carry the same number of times is
 		// agreement however the facts are ordered, so what is left over on the before side is every
@@ -297,19 +273,21 @@ namespace UE::DreamFX::Editor
 		// four answers the gate gives: the structure went with it (the text's doing), or the fact
 		// vanished inside a structure that stayed, or its value changed and the source does -- or does
 		// not -- name it.
+		//
+		// Three indexes, because the rules ask three different questions: which structures stayed
+		// (address without the script label), what the address holds now (for "the value changed"),
+		// and which address+value pairs the rebuild still carries at all (for the copy collapse).
 		TSet<FString> AfterScopes;
 		TMap<FString, FString> AfterByKey;
+		TSet<FString> AfterValuesByKey;
 		for (const FString& Fact : AfterFacts)
 		{
 			const FAddressedFact Addressed = AddressFact(Fact);
+			const FString Key = MakeKey(Addressed.Scope, Addressed.Subject);
 			AfterScopes.Add(Addressed.Scope);
-			AfterByKey.Add(MakeKey(Addressed.Scope, Addressed.Subject), Addressed.Value);
+			AfterByKey.Add(Key, Addressed.Value);
+			AfterValuesByKey.Add(MakeKey(Key, Addressed.Value));
 		}
-
-		TArray<FReportedLoss> Reported;
-		TArray<FString> ReportedFacts;
-		int32 Candidates = 0;
-		int32 Gained = 0;
 
 		for (const TPair<FString, int32>& Entry : Counts)
 		{
@@ -318,7 +296,7 @@ namespace UE::DreamFX::Editor
 			// the rebuild added.
 			if (Entry.Value <= 0)
 			{
-				Gained += -Entry.Value;
+				Out.Gained += -Entry.Value;
 				continue;
 			}
 
@@ -333,31 +311,60 @@ namespace UE::DreamFX::Editor
 				continue;
 			}
 
-			++Candidates;
-			const FString* NewValue = AfterByKey.Find(MakeKey(Addressed.Scope, Addressed.Subject));
+			++Out.Candidates;
+			const FString Key = MakeKey(Addressed.Scope, Addressed.Subject);
+			const FString* NewValue = AfterByKey.Find(Key);
 
 			for (int32 Copy = 0; Copy < Entry.Value; ++Copy)
 			{
-				FReportedLoss Loss;
-				Loss.Display = Addressed.Display;
-				Loss.OldValue = Addressed.Value;
+				FVerdict Verdict;
+				Verdict.Fact = Entry.Key;
+				Verdict.Display = Addressed.Display;
+				Verdict.OldValue = Addressed.Value;
+
+				if (AfterValuesByKey.Contains(MakeKey(Key, Addressed.Value)))
+				{
+					// Rules 1 and 2 meet here, and this is the one place a copy that went is not a
+					// loss. The same value is still stored at this same `<emitter>.<node>.<input>`
+					// address, in a script whose label the address deliberately drops -- because the
+					// label says where a value is STORED, not where the source declared it: an emitter
+					// update module's constant lives in the system update script, and the editor's own
+					// `SetInput` (the slider a person drags) also writes a copy into the system spawn
+					// script. A rebuild materialises one of them, deterministically, every time.
+					//
+					// So what went is a duplicate placement of a value that is still there, which is a
+					// representation collapsing rather than state disappearing: nothing a save would
+					// destroy, and nothing the source would need a spelling for. Reported as a collapse
+					// (verbose, one line per copy) and never refused.
+					//
+					// Narrow on purpose: the address AND the value both have to match. A copy that
+					// disagrees with the one that stayed, or a value nothing holds any more, falls
+					// through to the rules below and is judged exactly as it was before this existed.
+					Verdict.bCollapsedIntoAnotherStore = true;
+					Out.Verdicts.Add(MoveTemp(Verdict));
+					continue;
+				}
 
 				if (NewValue == nullptr)
 				{
 					// Rule 2. The fact is gone from a structure that stayed: the text has no spelling
 					// for it, so a save would destroy it.
-					Loss.NewValue = TEXT("(missing)");
+					Verdict.NewValue = TEXT("(missing)");
 				}
 				else if (*NewValue == Addressed.Value)
 				{
-					// The same fact, one copy fewer: a repeated fact the rebuild now carries once.
-					Loss.NewValue = TEXT("one copy fewer");
+					// The same fact, one copy fewer, and the value index above did not find it: this
+					// cannot happen while both indexes are built from one walk of the after side, and
+					// it is kept because "a fact went and nothing holds its value" is precisely what
+					// rule 2 refuses -- so if the two ever diverge, this is the branch that must say so
+					// rather than let the fact through.
+					Verdict.NewValue = TEXT("one copy fewer");
 				}
 				else
 				{
 					// Rule 3. The value changed, and the source decides: a subject the text names is a
 					// value the text meant, so the rebuild is doing what it was told.
-					Loss.NewValue = *NewValue;
+					Verdict.NewValue = *NewValue;
 					if (Declared.Names(Addressed.Scope, Addressed.Subject))
 					{
 						continue;
@@ -366,23 +373,89 @@ namespace UE::DreamFX::Editor
 					// Rule 4. Refuse when it cannot be decided, but say which of the two this is:
 					// "the text does not name this" is a decision the reader can act on, "cannot tell"
 					// is one they have to investigate first.
-					Loss.Kind = Declared.HasScope(Addressed.Scope)
-						? FReportedLoss::EKind::Deterministic
-						: FReportedLoss::EKind::Suspected;
+					Verdict.Kind = Declared.HasScope(Addressed.Scope)
+						? FVerdict::EKind::Deterministic
+						: FVerdict::EKind::Suspected;
 				}
 
-				Reported.Add(MoveTemp(Loss));
-				ReportedFacts.Add(Entry.Key);
+				Out.Verdicts.Add(MoveTemp(Verdict));
 			}
 		}
 
+		return Out;
+	}
+
+	bool FBuildSafetyGate::CheckBeforeSave(UNiagaraSystem* System, const FBuildSafetySnapshot& Before,
+		const FDeclaredFacts& Declared, bool bForceFromCommandLine, const FString& AssetPath,
+		const FSourceLocation& Location, FDiagnosticSink& Diagnostics)
+	{
+		if (!Before.bCaptured || System == nullptr)
+		{
+			return true;
+		}
+
+		TArray<FString> RawAfter;
+		DescribeSystemFacts(System, RawAfter);
+
+		const FComparison Comparison = Compare(Before.Facts, RawAfter, Declared);
+
+		TArray<FVerdict> Reported;
+		TArray<FString> ReportedFacts;
+		TArray<FString> Collapsed;
+		int32 BeforeCount = 0;
+		int32 AfterCount = 0;
+		{
+			TArray<FString> BeforeFacts;
+			CollectComparableFacts(Before.Facts, BeforeFacts);
+			BeforeCount = BeforeFacts.Num();
+
+			TArray<FString> AfterFacts;
+			CollectComparableFacts(RawAfter, AfterFacts);
+			AfterCount = AfterFacts.Num();
+		}
+
+		for (const FVerdict& Verdict : Comparison.Verdicts)
+		{
+			if (Verdict.bCollapsedIntoAnotherStore)
+			{
+				Collapsed.Add(Verdict.Fact);
+				continue;
+			}
+
+			ReportedFacts.Add(Verdict.Fact);
+			Reported.Add(Verdict);
+		}
+
+		// A collapse is not a refusal, so it is stated at verbose -- one line per copy, because the
+		// count alone leaves a reader unable to tell which constant it was about, and a line is what
+		// separates "the gate looked at this and allowed it" from "the gate never saw it".
+		const auto ReportCollapsed = [&Collapsed]()
+		{
+			for (const FString& Fact : Collapsed)
+			{
+				UE_LOG(LogDreamFX, Verbose,
+					TEXT("            merged | %s -> the same value is still stored by another script, so the copy that went is not drift."),
+					*Truncate(Fact, 400));
+			}
+		};
+
 		if (Reported.Num() == 0)
 		{
-			// Verbose, because a clean rebuild is the common case -- but it is a line, so "was this
-			// build checked?" has an answer in the log rather than an absence of evidence.
-			UE_LOG(LogDreamFX, Verbose,
-				TEXT("build safety: '%s' still holds all %d fact(s) after the rebuild."),
-				*AssetPath, BeforeFacts.Num());
+			if (Collapsed.Num() > 0)
+			{
+				UE_LOG(LogDreamFX, Verbose,
+					TEXT("build safety: '%s' still holds every one of its %d fact(s) after the rebuild; %d duplicate cop(y/ies) of a constant another script's store also carries collapsed into one."),
+					*AssetPath, BeforeCount, Collapsed.Num());
+				ReportCollapsed();
+			}
+			else
+			{
+				// Verbose, because a clean rebuild is the common case -- but it is a line, so "was this
+				// build checked?" has an answer in the log rather than an absence of evidence.
+				UE_LOG(LogDreamFX, Verbose,
+					TEXT("build safety: '%s' still holds all %d fact(s) after the rebuild."),
+					*AssetPath, BeforeCount);
+			}
 			return true;
 		}
 
@@ -391,6 +464,10 @@ namespace UE::DreamFX::Editor
 		const FString DumpDir = FPaths::ProjectSavedDir() / TEXT("DreamFX/BuildSafety");
 		const FString BaseName = FPackageName::GetShortName(AssetPath);
 		IFileManager::Get().MakeDirectory(*DumpDir, /*Tree=*/true);
+		TArray<FString> BeforeFacts;
+		CollectComparableFacts(Before.Facts, BeforeFacts);
+		TArray<FString> AfterFacts;
+		CollectComparableFacts(RawAfter, AfterFacts);
 		FFileHelper::SaveStringArrayToFile(BeforeFacts, *(DumpDir / BaseName + TEXT(".before.facts")));
 		FFileHelper::SaveStringArrayToFile(AfterFacts, *(DumpDir / BaseName + TEXT(".after.facts")));
 		FFileHelper::SaveStringArrayToFile(ReportedFacts, *(DumpDir / BaseName + TEXT(".lost.facts")));
@@ -411,7 +488,18 @@ namespace UE::DreamFX::Editor
 
 		Report(FString::Printf(
 			TEXT("build safety: '%s' held %d fact(s), the rebuild produces %d; of the %d fact(s) it no longer holds exactly, %d are drift inside a structure the rebuild kept, %d gained."),
-			*AssetPath, BeforeFacts.Num(), AfterFacts.Num(), Candidates, Reported.Num(), Gained));
+			*AssetPath, BeforeCount, AfterCount, Comparison.Candidates, Reported.Num(), Comparison.Gained));
+
+		// Beside the refusals rather than folded into their count: the two are different answers, and a
+		// reader who has to reach for -Force should be able to see how much of what went was not drift
+		// -- otherwise the next refusal looks larger than it is and the gate teaches bypassing.
+		if (Collapsed.Num() > 0)
+		{
+			Report(FString::Printf(
+				TEXT("build safety: '%s': a further %d cop(y/ies) of a constant another script's store still carries collapsed into one -- not drift, and not counted above."),
+				*AssetPath, Collapsed.Num()));
+			ReportCollapsed();
+		}
 
 		// Capped like every other report here, and the cap says so. A whole family can go at once (a
 		// stripped module, a recreated renderer), and a report nobody reads to the end is a report
@@ -419,15 +507,15 @@ namespace UE::DreamFX::Editor
 		constexpr int32 MaxReported = 200;
 		for (int32 Index = 0; Index < FMath::Min(Reported.Num(), MaxReported); ++Index)
 		{
-			const FReportedLoss& Loss = Reported[Index];
+			const FVerdict& Loss = Reported[Index];
 			FString Line = FString::Printf(TEXT("            lost | %s : %s -> %s"),
 				*Truncate(Loss.Display, 300), *Truncate(Loss.OldValue, 240), *Truncate(Loss.NewValue, 240));
 
-			if (Loss.Kind == FReportedLoss::EKind::Deterministic)
+			if (Loss.Kind == FVerdict::EKind::Deterministic)
 			{
 				Line += TEXT("   [deterministic drift (the text does not name this input)]");
 			}
-			else if (Loss.Kind == FReportedLoss::EKind::Suspected)
+			else if (Loss.Kind == FVerdict::EKind::Suspected)
 			{
 				Line += TEXT("   [suspected drift (cannot tell)]");
 			}
