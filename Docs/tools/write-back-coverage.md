@@ -592,6 +592,8 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
   **有意，忽略** —— 所以「删掉一个模块」干净通过（下表第 3 行）。
 - **规则 2｜范围内事实消失 ⇒ 拦**：结构两侧都在，它下面某条 fact 却没了 ⇒ 文本没有表达它的能力，
   存盘就是销毁它（`MaterialParameters` 丢绑定就是这一形态）。
+  **一个例外（本轮，见 §6.10）**：同一个值在**另一个脚本的 store** 里还在 ⇒ 那一份是重复摆放而不是
+  丢失，放行但报出来（verbose `merged |`）。判据是**值相等 ＋ 去掉脚本标签的地址相同**，不是名字。
 - **规则 3｜范围内事实值变了 ⇒ 只有文本没声明该输入时才拦**：判定取自解析结果，**不猜名字** ——
   设置类取计划要写的那份 JSON 的顶层键（写进去的就是声明的），模块输入取 AST 里那条模块调用的
   实参名 ＋ 该输入的 Niagara 变量名，二者在 `ApplyStack` 里对着**引擎真正分配的节点名**登记
@@ -710,13 +712,52 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
   那正是安全闸 `DFX8017` 拦的东西，而且它比闸更严（闸按规则 1 忽略只在一侧出现的结构）。
   §6.8 记的「原地重建只丢 8 条」在这里得到解释：那些「丢」是值等于模块默认值的常量，重建时被默认值
   补回、fact 相同。
-- **一处只有实测才会发现的口径差（新）。** 表达式 `SetInput`（编辑器的滑条走的是同一条外部编辑 API）
-  会把 EmitterUpdate 模块的常量写进**两份** store（`system-spawn` 与 `system-update`），而 DreamFX
-  的一次重建只materialise `system-update` 那份。于是重建之后 `ri system-spawn ...` 那条 fact 消失了，
-  值本身还在。安全闸按「一个结构里 fact 消失即 drift」会把它算成 drift **并拒绝**（措辞是
-  「one copy fewer」）；语料里的闭环断言把它单独归类为「重建把两份相同常量合成一份」，只报不判失败。
-  两个口径的差别是**已知且仅此一处**，写在这里而不是抹平：它影响的是「编辑器调过的值 + 立刻重建」
-  这条路是否需要 `-Force`，值得单独查（本轮没查）。
+- **一处只有实测才会发现的口径差 —— 已定论（本轮，分支 `feat/collapsed-copy-drift`）。**
+  表达式 `SetInput`（编辑器的滑条走的是同一条外部编辑 API）会把 EmitterUpdate 模块的常量写进**两份**
+  store（`system-spawn` 与 `system-update`），而 DreamFX 的一次重建只 materialise 一份。上一轮把它记成
+  「已知口径差、值得单独查」；本轮查完了，结论与改法如下（探针与全部原始日志在
+  `Saved/DreamFX/CollapseProbe/`，资产是真实系统的导出 `/AtlasFX/Decompiled/Templates/NS_Atlas2D_Mesh`，
+  写的是它 `EmitterState` 的 `Loop Duration`）。
+  1. **会拦，而且措辞就是上一轮猜的那一条。** 滑条写完、同一会话里 pull 把值写进文本、再重建：
+     `build safety: '…' held 187 fact(s), the rebuild produces 195; of the 1 fact(s) it no longer holds
+     exactly, 1 are drift inside a structure the rebuild kept, 9 gained.` ＋
+     `lost | ri system-spawn Constants.Atlas2D_Mesh.EmitterState.Loop Duration (NiagaraFloat) : 0000A040
+     -> one copy fewer` ＋ `error DFX8017: … was not saved …`
+     （原始日志 `CollapseProbe/A3-refusal-before-fix.log`）。
+  2. **但这条差异的触发窗口比上一轮写的窄，而且只有实测看得出来。** 副本只活在**写它的那个会话**里：
+     同一会话里 `SaveSystem` 之后，连会话内的那份 `ri system-spawn` 也没了（实测
+     `before 187 facts / 0 system-spawn` → 写入后 `188 / 1` → 存盘后 `189 / 0`），另一个进程从盘上读
+     同一资产更是只有一份。所以
+     **「滑条 → Ctrl+S → 重建」这条路不会撞上它**（CLI 的 `A1`/`A2` 两次 build 全绿，日志在同一目录）；
+     能撞上的是「**编辑器里调过的值 ＋ 同一会话里文本先与 store 一致（pull 或手改）＋ 不保存就重建**」。
+     这个窗口不小——它就是 §6.9/§6.10 那条写回闭环本身。
+  3. **编辑器的入口不会替它开门。** `FGenerateOptions::bForce`（跳过 provenance）与 `bForceLossyRebuild`
+     （放行闸）是两个 flag，watcher／DreamGUI bridge／Adopt 只设前者（`DreamFXGenerator.h` 写了原因），
+     所以它们跑的是**会拒绝**的闸：滑条写完后，同一会话里由 `.dfs` 保存触发的 watcher 重建就会撞上它，
+     而这条路上没有 CLI 的 `-Force` 可加。
+  4. **改法：规则 2 的一个例外，判据是「值 ＋ 去掉脚本标签的地址」。** `FBuildSafetyGate::Compare`
+     在指控之前查一张「重建还带着哪些 `(地址, 值)`」的表。地址是 fact 里 `Constants.<emitter>.<node>.<input>`
+     那一半——脚本标签只说值**存在哪**：EmitterUpdate 模块的常量存在 system update 脚本里，而滑条另写一份
+     到 system spawn 脚本，重建**必然**只留一份（本轮实测：写入前 0 条 `ri system-spawn`、写入后 1 条、
+     两份字节相同）。同一地址、同一值还在 ⇒ 走掉的那份是这个常量的重复摆放，是**表示层**的合并，不是状态
+     消失，因此**不拦**；但**不静默**：每条一份 verbose `merged | …`，外加汇总旁的
+     `a further N cop(y/ies) of a constant another script's store still carries collapsed into one --
+     not drift`。**例外只认值相等**：两份值不同、或值真的没了 ⇒ 照旧走规则 2/3/4
+     （`(missing)`、`[deterministic drift …]`、`[suspected drift …]` 一个字都没改）。
+     放宽点只有一处判断，就是 `AfterValuesByKey` 那张表——它不是「名字里带 `system-spawn` 就跳过」。
+  5. **语料断言（`DreamFX.Corpus.WriteBack`，新增 `CollapsedCopy`）。** 直接对 `Compare` 断言四组事实对，
+     断言的是**判定**而不是它的第二份实现：两份同值合一 ⇒ 0 拦、1 合并；两份值不同（重建留下的值不是它）
+     ⇒ 1 拦、kind 为 deterministic；同样两份值不同但文本声明了该输入 ⇒ 0 拦（规则 3 不变：文本写的值就是
+     文本的意思）；地址还在而 subject 整个消失 ⇒ 1 拦、`(missing)`。`ModuleInput` 同时从「只报不判」
+     改成断言：就地重建必须报出 `0 lost / 1 collapsed`（实测行：
+     `ModuleInput: rebuilt in place … 172 fact(s) before, 171 after, 0 lost, 1 duplicate copy/copies
+     collapsed, 0 structure(s) the text removed`）。
+  6. **`pull` 侧的对称问题：有，但不需要改，也不会和 build 打架（只报告）。** `pull` 按**名字**合并同名
+     副本：两份值相同 ⇒ 写成一行；两份值**不同** ⇒ 它**拒绝**写回并说明「哪一份是引擎读的 pull 判断不了」
+     （`WriteBack/DreamFXPull.cpp` 的 `FindStored`，`Docs/tools/pull.md` §6）。于是两条路一致：
+     值相同 ⇒ pull 写一行、build 留一份、再 pull 幂等（本轮实测 `DFX7107 … already holds every value …
+     No bytes written` 且文件 SHA256 与 mtime 都不变）；值不同 ⇒ pull 不写、build 按文本改它自己那份
+     store，谁也不会来回覆盖谁。**`pull` 的语义本轮没动。**
 - **端到端实测（探针 `/Game/DreamFXProbe/NS_PullProbe`，验证后已删）**：见 pull.md §5b 的七行原始结论。
   关键三条：结构编辑后 `build` 是 `1 built / 0 error / 0 warning` 且 **`Saved/DreamFX/BuildSafety/`
   根本没被创建**（闸只在报事时才写那个目录）；无操作 `pull -Apply` 的 **SHA256 与 mtime 都不变**；
