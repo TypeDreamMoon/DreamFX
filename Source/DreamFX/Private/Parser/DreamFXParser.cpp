@@ -59,6 +59,8 @@ namespace UE::DreamFX
 
 			// --- values ----------------------------------------------------------------------
 			FValuePtr ParseValue();
+			/** ParseValue without the span bookkeeping; every nested level goes through ParseValue. */
+			FValuePtr ParseValueImpl();
 			FValuePtr ParseAdditive();
 			FValuePtr ParseMultiplicative();
 			FValuePtr ParseUnary();
@@ -223,6 +225,23 @@ namespace UE::DreamFX
 		// -------------------------------------------------------------------------------------
 
 		FValuePtr FParserImpl::ParseValue()
+		{
+			// The value's byte range, taken from the scanner as it goes rather than derived afterwards
+			// from the location: a line and a column say where a value starts and nothing about how
+			// long it is, and a comment inside it would make any re-derivation a guess. Recorded here
+			// because this is the one entry point every value -- an argument, a property, a parameter
+			// default, a curve key -- comes through, nested chain levels included.
+			const int32 Start = Lexer.Peek().Offset;
+			FValuePtr Node = ParseValueImpl();
+			if (Node.IsValid())
+			{
+				Node->StartOffset = Start;
+				Node->EndOffset = Lexer.LastTokenEnd();
+			}
+			return Node;
+		}
+
+		FValuePtr FParserImpl::ParseValueImpl()
 		{
 			return ParseAdditive();
 		}

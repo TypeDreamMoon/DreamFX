@@ -108,6 +108,20 @@ namespace UE::DreamFX
 		EValueKind Kind = EValueKind::Number;
 		FSourceLocation Location;
 
+		/**
+		 * The value's own byte range in the parsed text, `[StartOffset, EndOffset)`.
+		 *
+		 * A location is a line and a column, which is enough to point a reader at a value and not
+		 * enough to rewrite one: the writer has to know exactly which characters the value occupies.
+		 * The end is the end of the value's LAST token rather than the start of the next one, because
+		 * whatever sits between the two -- a trailing comment above all -- belongs to neither and has
+		 * to survive a minimal rewrite.
+		 *
+		 * INDEX_NONE on a node the parser never saw (a synthesized value, or a node built by a test).
+		 */
+		int32 StartOffset = INDEX_NONE;
+		int32 EndOffset = INDEX_NONE;
+
 		/** Number / Bool payload. */
 		double Number = 0.0;
 		bool bBool = false;
