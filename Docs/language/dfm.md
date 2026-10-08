@@ -106,6 +106,10 @@ Each becomes a `Module.<Name>` input with the declared default and description. 
 literals or enum entries, because a module input's default is stored on the asset and cannot reference
 anything outside the module (DFX3044).
 
+An ordinary integer input may use `int(1.9)` as its default: it is evaluated to `1` before storage.
+The argument must be one finite numeric literal whose truncated value fits `int32` (DFX4044).
+For `[StaticSwitch]` defaults, write the resulting literal directly.
+
 Data interfaces (`DI<X>` and shorthands such as `Texture2D`) and instance-only object types
 (actors, components and classes marked `DefaultToInstanced`) cannot declare input defaults
 (DFX4043). Declare the input without `= ...` and supply its instance from the system or a stack input.
@@ -151,6 +155,27 @@ Body = {
 
 `Particles.Color.rgb` resolves to `Particles.Color` with a swizzle: the longest dotted prefix that is a
 known or declared attribute wins.
+
+Whole-value assignments, swizzles and indexed components support `=`, arithmetic compound assignments
+(`+=`, `-=`, `*=`, `/=`, `%=`), integer compound assignments (`&=`, `|=`, `^=`, `<<=`, `>>=`), and
+prefix/postfix `++` and `--`. Comparisons such as `==` and `<=` remain reads. Normal HLSL operand-type
+rules still apply. Comments may separate declarations, attributes and operators.
+The stock CPU VM compiler rejects integer remainder (`int %= int`); use a floating remainder where
+appropriate. An unsupported operation reports a Niagara compilation error instead of dropping its write.
+
+A conditional write to an existing attribute preserves its incoming value when the branch does not
+execute. A new custom attribute must first receive an unconditional whole-value initializer before
+branches, loops, preprocessor conditions or possible early returns (DFX3057); subsequent reads and component writes use that
+initialized value without requiring an incoming attribute. To use a custom attribute supplied by an
+earlier module, declare only its type before the conditional update:
+
+```cpp
+float Particles.Moon.Existing;
+if (bEnabled) { Particles.Moon.Existing = 1.0; }
+```
+
+The generated HLSL pin names are internal: distinct names such as `Particles.Moon.Spin` and
+`Particles.Moon_Spin` stay distinct, including when an input or local variable uses a similar name.
 
 ### Calling a data-interface input
 

@@ -16,7 +16,7 @@ namespace UE::DreamFX::Editor
 		FString SourceRelativePath;
 		/** Absolute source path, for diagnostics and for opening the file from the editor guardrail. */
 		FString SourceFullPath;
-		/** Hash of source text and referenced .dfe contents at generation time. */
+		/** Hash of source text and source dependencies at generation time. */
 		FString SourceHash;
 		/** Generator version. Bumping it forces every asset to regenerate on the next build. */
 		FString GeneratorVersion;
@@ -59,5 +59,8 @@ namespace UE::DreamFX::Editor
 
 		/** True when the asset was generated from this source and the source has not changed since. */
 		static bool IsUpToDate(const UObject* Asset, const FString& SourceHash);
+
+		/** A moved source must refresh the editor's stored path even when its text is unchanged. */
+		static bool IsSourceLocationCurrent(const UObject* Asset, const FString& SourceFilePath);
 	};
 }

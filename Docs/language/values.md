@@ -165,11 +165,16 @@ Arithmetic (`+ - * /`), unary minus, parentheses, and these functions:
 ```
 normalize  saturate  clamp  lerp  frac  min  max
 abs  floor  ceil  pow  sqrt  dot  cross  length
+int
 ```
 
 The whole expression lowers to one HLSL expression dynamic input, with the type inferred from the
 operands. Only namespace-qualified parameters exist inside one — there are no locals (DFX4032). The
 builtins are positional, not named (DFX4033).
+
+`int(expression)` explicitly converts a scalar value to a signed 32-bit integer, truncating toward
+zero. For example, `int(User.CountScale * 3.0)` remains a runtime HLSL conversion. Floating constants
+retain their numeric precision during expression lowering, including small coefficients such as `1e-7`.
 
 **Anything outside the list is an error** (DFX4031), and the list is short on purpose. Widening it is
 the first step toward re-implementing a general expression compiler, which is the ~13k-line component
@@ -191,6 +196,12 @@ block. The round trip is semantic, not textual.
 
 A silently truncated spawn count is among the hardest effect bugs to find, which is the whole reason
 the rule is one-directional.
+
+`int(1.9)` also works for ordinary parameter and module-input defaults, producing the literal `1`.
+The default argument must be one finite numeric literal, and its truncated value must fit `int32`
+(DFX4044). A runtime expression such as `int(User.Scale)` cannot be stored as a literal default;
+put it in a stack assignment or module input call instead. `[StaticSwitch]` defaults require the
+resulting literal directly.
 
 ---
 

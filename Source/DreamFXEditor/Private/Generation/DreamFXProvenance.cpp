@@ -1,6 +1,7 @@
 #include "DreamFXProvenance.h"
 
 #include "DreamFXTypes.h"
+#include "Misc/Paths.h"
 
 #include "UObject/MetaData.h"
 #include "UObject/Object.h"
@@ -39,7 +40,8 @@ namespace UE::DreamFX::Editor
 		// on exactly the assets that predate it.
 		// 1.2 -- dependency-aware source stamps and corrected generation/round-trip semantics.
 		// 1.3 -- native emitter/source system inheritance and verified VM completion.
-		return TEXT("1.3");
+		// 1.4 -- precise expressions and initialized, collision-free attribute writeback.
+		return TEXT("1.4");
 	}
 
 	FString FProvenance::HashWithSourceDependencies(const FString& SourceHash, const TMap<FString, FString>& Dependencies)
@@ -146,5 +148,22 @@ namespace UE::DreamFX::Editor
 		// A generator upgrade invalidates the cache even when the source is byte-identical: the same
 		// text can lower to a different asset after a generator change.
 		return Stamp.SourceHash == SourceHash && Stamp.GeneratorVersion == GetGeneratorVersion();
+	}
+
+	bool FProvenance::IsSourceLocationCurrent(const UObject* Asset, const FString& SourceFilePath)
+	{
+		FProvenanceStamp Stamp;
+		if (SourceFilePath.IsEmpty() || !Read(Asset, Stamp) || Stamp.SourceFullPath.IsEmpty())
+		{
+			return false;
+		}
+		auto Normalize = [](const FString& Path)
+		{
+			FString FullPath = FPaths::ConvertRelativePathToFull(Path);
+			FPaths::NormalizeFilename(FullPath);
+			FPaths::CollapseRelativeDirectories(FullPath);
+			return FullPath;
+		};
+		return Normalize(Stamp.SourceFullPath) == Normalize(SourceFilePath);
 	}
 }

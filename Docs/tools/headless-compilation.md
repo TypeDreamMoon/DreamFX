@@ -7,8 +7,10 @@ results, missing bytecode, and errors from a second compile after renderer-bindi
 the build. A previously successful compile status does not satisfy those checks.
 
 Niagara inlines referenced modules into system executables. After changing and rebuilding a `.dfm`,
-rebuild every consuming `.dfs` with `-Force` (or rebuild the source tree). Updating only the module
-asset does not update a saved system's executable.
+rebuild every consuming `.dfs` (or rebuild the source tree). System stamps include the selected
+modules' compile inputs, including modules reached through native parent emitters, so a module
+content change invalidates an ordinary build even without `-Force`. Updating only the module asset
+does not update a saved system's executable.
 
 The engine's `Compiling System ...` log appears when shader workers actually compiled jobs. A derived
 data cache hit can install current VM data without that log; the absence of the line is not a failure
@@ -19,6 +21,7 @@ Headless Null RHI checks CPU VM compilation and GPU translation data. They do no
 effect renders correctly; run the generated GPU system in an editor with a graphics RHI for that check.
 
 `DreamFX.Regression.Compile.ModuleChangeUpdatesVm` changes an actual referenced module's HLSL,
-rebuilds the same system, and checks the new compiled constant, bytecode/literal data, and source ID.
-It also removes bytecode while preserving the successful status to verify that the completion gate
+rebuilds the same system without `-Force`, and checks the new compiled constant, bytecode/literal
+data, and source ID for direct calls and native inherited stacks. It checks that an unchanged module
+still allows a cache hit, then removes bytecode while preserving the successful status to verify that the completion gate
 rejects an incomplete executable. The test creates unsaved assets under a unique `/Game` path.

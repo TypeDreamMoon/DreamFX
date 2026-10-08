@@ -415,6 +415,11 @@ namespace UE::DreamFX::Editor
 	bool FValueLowering::InferType(const FValue& Value, const FString& TargetName, FDiagnosticSink& Diagnostics,
 		FNiagaraTypeDefinition& OutType)
 	{
+		if (Value.Kind == EValueKind::Call && Value.Text == TEXT("int"))
+		{
+			OutType = FNiagaraTypeDefinition::GetIntDef();
+			return true;
+		}
 		switch (Value.Kind)
 		{
 		case EValueKind::Number:
@@ -492,6 +497,30 @@ namespace UE::DreamFX::Editor
 		// right shape is the correct value for either, and both resolve to the same UScriptStruct, so
 		// the flag is stripped for the kind check and the target's own struct still writes the bytes.
 		const FNiagaraTypeDefinition BaseType = TargetType.IsStatic() ? TargetType.RemoveStaticDef() : TargetType;
+
+		if (Value.Kind == EValueKind::Call && Value.Text == TEXT("int"))
+		{
+			if (Value.Arguments.Num() != 0 || Value.Elements.Num() != 1 || !Value.Elements[0].IsValid()
+				|| Value.Elements[0]->Kind != EValueKind::Number)
+			{
+				Diagnostics.Error(TEXT("DFX4044"), Value.Location,
+					TEXT("An int(...) default requires one numeric literal. Runtime casts belong in a stack expression."));
+				return false;
+			}
+			const double Number = FMath::TruncToDouble(Value.Elements[0]->Number);
+			if (!FMath::IsFinite(Number) || Number < static_cast<double>(MIN_int32) || Number > static_cast<double>(MAX_int32))
+			{
+				Diagnostics.Error(TEXT("DFX4044"), Value.Location,
+					TEXT("The int(...) literal must be finite and its truncated value must fit a signed 32-bit integer."));
+				return false;
+			}
+			FValue Literal;
+			Literal.Kind = EValueKind::Number;
+			Literal.Location = Value.Location;
+			Literal.Number = Number;
+			Literal.bIsIntegerLiteral = true;
+			return Lower(Literal, TargetType, InputDisplayName, Diagnostics, OutValue);
+		}
 
 		switch (Value.Kind)
 		{

@@ -66,6 +66,9 @@ namespace UE::DreamFX::Editor
 		virtual UNiagaraScriptVariable* AddParameter(UNiagaraGraph& Graph, const FNiagaraVariable& Variable,
 			const FNiagaraVariableMetaData& MetaData) = 0;
 
+		/** Completes map parameter metadata/default pins before compiling or saving a newly built graph. */
+		bool FinalizeParameterMapPins(UNiagaraGraph& Graph, FString& OutError);
+
 		/** "direct" or "reflection" -- for the provenance stamp and for diagnostics. */
 		virtual const TCHAR* Describe() const = 0;
 

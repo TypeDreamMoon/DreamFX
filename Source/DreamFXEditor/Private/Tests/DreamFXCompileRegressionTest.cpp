@@ -13,6 +13,7 @@
 #include "NiagaraScriptSource.h"
 #include "NiagaraSystem.h"
 #include "UObject/GCObjectScopeGuard.h"
+#include "UObject/Package.h"
 #include "UObject/UnrealType.h"
 
 namespace UE::DreamFX::Editor::CompileRegression
@@ -76,7 +77,7 @@ bool FDreamFXHeadlessVmRebuildRegression::RunTest(const FString& Parameters)
 		*ModuleName), TEXT("VmModule.dfm"), ModuleDocument)) { return false; }
 	FGenerateOptions Options;
 	Options.bSave = false;
-	Options.bForce = true;
+	Options.bForce = false;
 	FDiagnosticSink Diagnostics;
 	const FModuleGenerateResult Module = FModuleGenerator::Generate(ModuleDocument, Options, Diagnostics);
 	if (!TestTrue(TEXT("module generated"), Module.bSucceeded) || !TestNotNull(TEXT("module script"), Module.Script))
@@ -105,6 +106,34 @@ bool FDreamFXHeadlessVmRebuildRegression::RunTest(const FString& Parameters)
 	TestFalse(TEXT("initial compiled VM has no revised constant"), HasFloatLiteral(FirstVM, 987.5f));
 	const TArray<uint8> FirstConstants = InternalConstantBytes(FirstVM);
 	const FNiagaraVMExecutableDataId FirstId = Spawn->GetVMExecutableDataCompilationId();
+	Diagnostics.Reset();
+	const FGenerateResult Unchanged = FGenerator::Generate(SystemDocument, Options, Diagnostics);
+	TestTrue(TEXT("unchanged module allows the system cache hit"), Unchanged.bSucceeded && Unchanged.bSkipped);
+
+	// The same module can be reached only through a native parent, with no written child stack.
+	const FString ParentName = TEXT("NE_VmParent_") + Suffix;
+	UPackage* ParentPackage = CreatePackage(*(TEXT("/Game/DreamFXAutomation/") + ParentName));
+	UNiagaraEmitter* Parent = DuplicateObject<UNiagaraEmitter>(
+		Initial.System->GetEmitterHandles()[0].GetInstance().Emitter, ParentPackage, *ParentName);
+	if (!TestNotNull(TEXT("native parent fixture"), Parent)) { return false; }
+	Parent->SetFlags(RF_Public | RF_Standalone);
+	Parent->bIsInheritable = true;
+	FGCObjectScopeGuard ParentGuard(Parent);
+	FDocument InheritedDocument;
+	if (!Parse(*this, FString::Printf(TEXT(
+		"System(Name=\"DreamFXAutomation/NS_InheritedVm_%s\",Root=\"Game\") { Emitter E inherits \"%s\" {} }"),
+		*Suffix, *Parent->GetPathName()), TEXT("InheritedVmSystem.dfs"), InheritedDocument)) { return false; }
+	Diagnostics.Reset();
+	const FGenerateResult Inherited = FGenerator::Generate(InheritedDocument, Options, Diagnostics);
+	if (!TestTrue(TEXT("inherited system compiled"), Inherited.bSucceeded) || !Inherited.System)
+	{
+		AddError(Diagnostics.FormatAll()); return false;
+	}
+	FGCObjectScopeGuard InheritedGuard(Inherited.System);
+	Diagnostics.Reset();
+	const FGenerateResult InheritedUnchanged = FGenerator::Generate(InheritedDocument, Options, Diagnostics);
+	TestTrue(TEXT("unchanged inherited system allows a cache hit"), InheritedUnchanged.bSucceeded && InheritedUnchanged.bSkipped);
+	const FGuid ParentChangeId = Parent->GetChangeId();
 
 	// Mutate the actual module asset's HLSL independently of system generation. This is the same
 	// referenced graph a rebuilt .dfm changes; updating the system must install a different VM.
@@ -136,6 +165,7 @@ bool FDreamFXHeadlessVmRebuildRegression::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestTrue(TEXT("rebuild keeps the system identity"), Revised.System == Initial.System);
+	TestFalse(TEXT("module content change rebuilds without Force"), Revised.bSkipped);
 	Spawn = ParticleSpawn(Revised.System);
 	if (!TestNotNull(TEXT("revised spawn executable"), Spawn)) { return false; }
 	const FNiagaraVMExecutableData& RevisedVM = Spawn->GetVMExecutableData();
@@ -148,6 +178,15 @@ bool FDreamFXHeadlessVmRebuildRegression::RunTest(const FString& Parameters)
 		InternalConstantBytes(RevisedVM) != FirstConstants);
 	TestTrue(TEXT("installed executable identifies the revised graph"), Spawn->GetVMExecutableDataCompilationId() != FirstId);
 	TestTrue(TEXT("installed VM is synchronized"), Spawn->AreScriptAndSourceSynchronized());
+	TestTrue(TEXT("module edit did not change parent identity stamp"), Parent->GetChangeId() == ParentChangeId);
+	Diagnostics.Reset();
+	const FGenerateResult InheritedRevised = FGenerator::Generate(InheritedDocument, Options, Diagnostics);
+	TestTrue(TEXT("inherited module edit rebuilds without Force"), InheritedRevised.bSucceeded && !InheritedRevised.bSkipped);
+	if (!InheritedRevised.bSucceeded) { AddError(Diagnostics.FormatAll()); return false; }
+	UNiagaraScript* InheritedSpawn = ParticleSpawn(InheritedRevised.System);
+	if (!TestNotNull(TEXT("inherited spawn executable"), InheritedSpawn)) { return false; }
+	TestTrue(TEXT("inherited VM contains revised module constant"), HasFloatLiteral(InheritedSpawn->GetVMExecutableData(), 987.5f));
+	TestFalse(TEXT("inherited VM no longer contains old module constant"), HasFloatLiteral(InheritedSpawn->GetVMExecutableData(), 123.25f));
 
 	// A historical UpToDate status and matching id alone must not bless missing executable data.
 	const TArray<uint8> SavedByteCode = Spawn->GetVMExecutableData().ExperimentalContextData;
