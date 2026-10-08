@@ -19,6 +19,7 @@
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonReader.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -619,6 +620,39 @@ namespace UE::DreamFX::Editor
 
 			OutJson = Properties->Values.Num() > 0 ? SerializeJsonObject(Properties) : FString();
 			return bOk;
+		}
+
+		/**
+		 * The property names a planned settings JSON will write, which is what the source declared.
+		 *
+		 * The JSON is what the plan applies, so its top-level keys ARE the declaration: reading them
+		 * back is exact, where re-deriving them from the settings table would be a second copy of that
+		 * table with nothing keeping the two in step. A nested path (`Platforms.QualityLevelMask`) is
+		 * filed under its top-level property, which is also the name the fact carries -- the fact walk
+		 * exports the property, not the path.
+		 *
+		 * Used by the build-safety gate: a fact whose value changed is drift only when the source does
+		 * not name it, and this is how "named" is answered for anything the Settings blocks write.
+		 */
+		void CollectDeclaredProperties(const FString& PropertiesJson, const FString& Scope,
+			FDeclaredFacts& Out)
+		{
+			if (PropertiesJson.IsEmpty())
+			{
+				return;
+			}
+
+			TSharedPtr<FJsonObject> Object;
+			const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PropertiesJson);
+			if (!FJsonSerializer::Deserialize(Reader, Object) || !Object.IsValid())
+			{
+				return;
+			}
+
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry : Object->Values)
+			{
+				Out.Add(Scope, Entry.Key);
+			}
 		}
 
 		/** Builds "ModuleName.InputName" for diagnostics. */
@@ -2307,7 +2341,8 @@ namespace UE::DreamFX::Editor
 
 		bool ApplyStack(const FStackAddress& OwnerAddress, const FPlannedStack& Stack,
 			FDiagnosticSink& Diagnostics, TMap<FName, FSourceLocation>& OutModuleLocations,
-			TArray<FDeferredSelfReference>* OutDeferredSelfRefs = nullptr)
+			TArray<FDeferredSelfReference>* OutDeferredSelfRefs = nullptr,
+			FDeclaredFacts* OutDeclared = nullptr)
 		{
 			bool bOk = true;
 
@@ -2424,6 +2459,47 @@ namespace UE::DreamFX::Editor
 				const FPlannedModule& Module = *Entry.Planned;
 				const FStackAddress ModuleAddress = StackAddress.WithModule(Entry.Name);
 				TArray<FString> Errors;
+
+				// The build-safety gate's declaration index: what this source names, addressed the way
+				// the facts are. Recorded HERE because this is the only place a node's name exists --
+				// the engine assigns it when the module is added and `as <name>` may rename it
+				// afterwards, so nothing downstream can recover it, and guessing it (module asset name
+				// plus a count) is exactly the heuristic the gate must not run on.
+				//
+				// The scope is the constant-name prefix the rapid-iteration facts carry:
+				// `Constants.<emitter>.<node>` for an emitter stack, `Constants.<node>` for a
+				// system-scope one (SystemState's own facts are named that way, measured).
+				if (OutDeclared != nullptr)
+				{
+					const FString Constants = StackAddress.EmitterName.IsNone()
+						? FString::Printf(TEXT("Constants.%s"), *Entry.Name.ToString())
+						: FString::Printf(TEXT("Constants.%s.%s"),
+							*StackAddress.EmitterName.ToString(), *Entry.Name.ToString());
+					const FString Scope = TEXT("ri ") + Constants;
+
+					for (const FPlannedInput& Input : Module.Inputs)
+					{
+						// Two spellings of one declaration, both straight out of the parse: the
+						// argument as the author wrote it, and the input's Niagara variable name --
+						// which is the name the rapid-iteration facts are addressed by, and not always
+						// the same string (`Life Cycle Mode` vs `LifeCycleMode`).
+						if (Input.Path.Num() > 0)
+						{
+							OutDeclared->Add(Scope, Input.Path[0].ToString());
+						}
+						if (!Input.NiagaraName.IsNone())
+						{
+							OutDeclared->Add(Scope, Input.NiagaraName.ToString());
+						}
+					}
+
+					// A folded `Set Parameters` entry is a declaration too, and its name is the
+					// parameter it writes.
+					for (const FPlannedSetParameter& Parameter : Module.Parameters)
+					{
+						OutDeclared->Add(Scope, Parameter.Name.ToString());
+					}
+				}
 
 				if (Module.bIsSetParameters)
 				{
@@ -2707,13 +2783,21 @@ namespace UE::DreamFX::Editor
 		}
 
 		bool ApplyPlan(UNiagaraSystem* System, const FPlan& Plan, FDiagnosticSink& Diagnostics,
-			TMap<FName, FSourceLocation>& OutModuleLocations)
+			TMap<FName, FSourceLocation>& OutModuleLocations, FDeclaredFacts& OutDeclared)
 		{
 			// plan-v6 P1. Every write below shares one edit context until something changes the shape
 			// of the stack, at which point the next call builds a fresh one. Without this each write
 			// built an entire system view model of its own, which made the cost of applying a plan
 			// quadratic in its size -- the largest system in this project spent minutes on it.
 			FNiagaraAdapter::FWriteScope WriteScope(System);
+
+			// The build-safety gate's declaration index, plan half. Every write below goes through one
+			// of these three JSON blobs -- the system's settings, an emitter's, a renderer's -- so
+			// their keys ARE what the source declared, and reading them back is exact where
+			// re-deriving them from the settings tables would be a second copy of those tables that
+			// can drift from them. The module half cannot be taken from the plan (the node names do
+			// not exist yet) and is recorded inside ApplyStack instead.
+			CollectDeclaredProperties(Plan.SystemPropertiesJson, TEXT("system"), OutDeclared);
 
 			const FStackAddress SystemAddress(System);
 			TArray<FString> Errors;
@@ -2876,7 +2960,8 @@ namespace UE::DreamFX::Editor
 
 			for (const FPlannedStack& Stack : Plan.SystemStacks)
 			{
-				if (!ApplyStack(SystemAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs))
+				if (!ApplyStack(SystemAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
+					&OutDeclared))
 				{
 					return false;
 				}
@@ -2895,6 +2980,46 @@ namespace UE::DreamFX::Editor
 				}
 
 				const FStackAddress EmitterAddress = SystemAddress.WithEmitter(Emitter.Name);
+
+				// The emitter half of the declaration index: the settings this source writes, and the
+				// renderer properties and `Bind`s it writes. The renderer index is the plan's position
+				// because a rebuild clears an emitter's renderers before adding these back, so the
+				// order the source declares IS the index the facts report.
+				{
+					const FString EmitterName = Emitter.Name.ToString();
+					const FString EmitterScope = FString::Printf(TEXT("emitter %s"), *EmitterName);
+					CollectDeclaredProperties(Emitter.PropertiesJson, EmitterScope, OutDeclared);
+
+					// The adapter reports the handle's enabled flag as the fact `enabled`, while the
+					// source declares it as the setting that writes `bIsEnabled`.
+					if (OutDeclared.Names(EmitterScope, TEXT("bIsEnabled")))
+					{
+						OutDeclared.Add(EmitterScope, TEXT("enabled"));
+					}
+
+					int32 RendererIndex = 0;
+					for (const FPlannedRenderer& Renderer : Emitter.Renderers)
+					{
+						const FString RendererScope = FString::Printf(TEXT("emitter %s renderer %d:%s"),
+							*EmitterName, RendererIndex,
+							Renderer.Class != nullptr ? *Renderer.Class->GetName() : TEXT("?"));
+
+						CollectDeclaredProperties(Renderer.PropertiesJson, RendererScope, OutDeclared);
+
+						for (const FPlannedBinding& Binding : Renderer.Bindings)
+						{
+							// `Bind X -> Y` writes the renderer's `<X>Binding` property -- the adapter
+							// appends the suffix unless the name already carries it -- and the fact is
+							// named for the property, so the declaration has to be spelled that way.
+							const FString Property = Binding.PropertyName.EndsWith(TEXT("Binding"), ESearchCase::IgnoreCase)
+								? Binding.PropertyName
+								: Binding.PropertyName + TEXT("Binding");
+							OutDeclared.Add(RendererScope, Property);
+						}
+
+						++RendererIndex;
+					}
+				}
 
 				// Emitter settings go on before the stacks: SimTarget in particular changes which
 				// modules and data interfaces are legal, so a GPU emitter must know it is one first.
@@ -2926,7 +3051,8 @@ namespace UE::DreamFX::Editor
 
 				for (const FPlannedStack& Stack : Emitter.Stacks)
 				{
-					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs))
+					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
+						&OutDeclared))
 					{
 						return false;
 					}
@@ -3049,7 +3175,7 @@ namespace UE::DreamFX::Editor
 					}
 
 					if (!ApplyStack(EmitterAddress, Handler.Stack, Diagnostics, OutModuleLocations,
-						&DeferredSelfRefs))
+						&DeferredSelfRefs, &OutDeclared))
 					{
 						return false;
 					}
@@ -3138,7 +3264,7 @@ namespace UE::DreamFX::Editor
 
 					TArray<FDeferredSelfReference> StageSelfRefs;
 					if (!ApplyStack(EmitterAddress, Stage.Stack, Diagnostics, OutModuleLocations,
-						&StageSelfRefs))
+						&StageSelfRefs, &OutDeclared))
 					{
 						return false;
 					}
@@ -3377,6 +3503,8 @@ namespace UE::DreamFX::Editor
 
 		/** The asset's facts as they were read, before this build's first write to it. */
 		FBuildSafetySnapshot PreBuildFacts;
+		/** What the source declared, addressed the way those facts are. */
+		FDeclaredFacts Declared;
 		/** `-Force`: the safety gate reports what a rebuild drops instead of refusing it. */
 		bool bForceLossyRebuild = false;
 	};
@@ -3481,7 +3609,7 @@ namespace UE::DreamFX::Editor
 				// compile finished, the provenance stamp set -- and nothing has reached the disk yet.
 				// `Before` was read before the first write, so this is the one comparison in the
 				// pipeline that is not text against text (write-back-coverage.md 6.1).
-				if (!FBuildSafetyGate::CheckBeforeSave(System, Pending.PreBuildFacts,
+				if (!FBuildSafetyGate::CheckBeforeSave(System, Pending.PreBuildFacts, Pending.Declared,
 					Pending.bForceLossyRebuild, Pending.Plan.FullAssetPath, Pending.HeaderLocation,
 					Diagnostics))
 				{
@@ -3691,6 +3819,12 @@ namespace UE::DreamFX::Editor
 			PreBuildFacts = FBuildSafetyGate::Capture(System);
 		}
 
+		// Filled by ApplyPlan below, one entry per thing the source names. Without it the gate can
+		// still tell a structure it must not compare from one it must, but it cannot tell a value the
+		// text meant from a value the text never mentioned -- and that difference is the whole reason
+		// it does not refuse ordinary authoring.
+		FDeclaredFacts Declared;
+
 		TMap<FName, FSourceLocation> ModuleLocations;
 		{
 			// The window holds every structural and value write, and nothing in it needs a compiled
@@ -3698,7 +3832,7 @@ namespace UE::DreamFX::Editor
 			// this records is paid exactly once, by the wait in FinalizeBuild.
 			FNiagaraAdapter::FCompileSuppressionScope SuppressCompiles(System);
 
-			if (!ApplyPlan(System, Plan, Diagnostics, ModuleLocations))
+			if (!ApplyPlan(System, Plan, Diagnostics, ModuleLocations, Declared))
 			{
 				return Result;
 			}
@@ -3742,6 +3876,7 @@ namespace UE::DreamFX::Editor
 		Pending.bHasGpuEmitter = bHasGpuEmitter;
 		Pending.bSave = Options.bSave;
 		Pending.PreBuildFacts = MoveTemp(PreBuildFacts);
+		Pending.Declared = MoveTemp(Declared);
 		Pending.bForceLossyRebuild = Options.bForceLossyRebuild;
 
 		// A rebuild whose writes all landed on values the asset already held raises no change id, and
