@@ -84,6 +84,7 @@
   [write-back-coverage.md](write-back-coverage.md) §3.9；补上之后这一层才算完整。）*
 - **一批编辑只编译一次**：`LogDreamFX Verbose` 数 `PHASE RequestCompile issued` 的次数 —— 打引擎补丁前
   最坏系统 260 次 / 8.3 秒，补丁后应为 1 次。
+
 ## 5. 参考位置
 
 - DreamGUI 源码：`Plugins/DreamGUI/Source/DreamGUIEditor/Private/Text/DreamUITextWriteBack.cpp`
