@@ -118,5 +118,8 @@ namespace UE::DreamFX::Editor
 		 */
 		static bool ResolveSourceReference(const FString& Reference, const FString& ReferencingFile,
 			const TCHAR* Extension, FString& OutFullPath, FString& OutError);
+		/** Ordered resolution candidates, including missing files so watchers can observe their creation. */
+		static void GetSourceReferenceCandidates(const FString& Reference, const FString& ReferencingFile,
+			const TCHAR* Extension, TArray<FString>& OutCandidates);
 	};
 }

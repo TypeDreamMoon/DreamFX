@@ -35,24 +35,36 @@ namespace UE::DreamFX::Editor
 				continue; // The build of this source reports its parse error.
 			}
 			TArray<FString>& Dependencies = DependenciesBySource.FindOrAdd(SourceFile);
-			if (!Document.ParentPath.IsEmpty())
+			auto AddReference = [&](const FString& Reference, const TCHAR* Extension, bool bVisitParent)
 			{
-				FString ParentFile, Error;
-				if (FDreamFXPaths::ResolveSourceReference(Document.ParentPath, SourceFile, TEXT(".dfs"), ParentFile, Error))
+				if (Reference.IsEmpty()) { return; }
+				TArray<FString> Candidates;
+				FDreamFXPaths::GetSourceReferenceCandidates(Reference, SourceFile, Extension, Candidates);
+				// A missing earlier candidate can later take precedence over today's resolution.
+				for (const FString& Candidate : Candidates)
 				{
-					Dependencies.AddUnique(ParentFile);
-					Pending.Add(ParentFile);
+					Dependencies.AddUnique(Candidate);
+					if (FPaths::FileExists(Candidate))
+					{
+						if (bVisitParent) { Pending.Add(Candidate); }
+						break;
+					}
 				}
-			}
+			};
+			AddReference(Document.ParentPath, TEXT(".dfs"), true);
 			for (const FEmitter& Emitter : Document.Emitters)
 			{
-				FString ReferencedFile, Error;
-				if (!Emitter.FromPath.IsEmpty() && FDreamFXPaths::ResolveSourceReference(
-					Emitter.FromPath, SourceFile, TEXT(".dfe"), ReferencedFile, Error))
-				{
-					Dependencies.AddUnique(ReferencedFile);
-				}
+				AddReference(Emitter.FromPath, TEXT(".dfe"), false);
 			}
+		}
+	}
+
+	void FSourceDependencyIndex::GetReferencedFiles(TArray<FString>& OutFiles) const
+	{
+		for (const TPair<FString, TArray<FString>>& Entry : DependenciesBySource)
+		{
+			OutFiles.AddUnique(Entry.Key);
+			for (const FString& File : Entry.Value) { OutFiles.AddUnique(File); }
 		}
 	}
 
