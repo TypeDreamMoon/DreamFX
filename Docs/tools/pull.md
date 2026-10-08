@@ -33,6 +33,12 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Apply -Engine $eng
 
 # 从「另一个资产」读值（导出文本指向的是镜像，值在原资产里）
 pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Asset /Game/FX/NS_Spark -Apply -Engine $eng
+
+# 结构编辑（加/删行）：默认只报告，这个开关才动手，而且只在对应关系唯一时（§4d）
+pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Structure -Apply -Engine $eng
+
+# 无视基线，把所有声明了的值都比一遍（§4c；磁盘上没有基线时本来就是这个行为）
+pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Engine $eng
 ```
 
 | 参数 | 含义 |
@@ -40,6 +46,8 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Asset /Game/FX/NS_Spar
 | `pull <file.dfs>` | 要写回的那份文本。只能是一个 `.dfs`（系统文档） |
 | `-Apply` | 真正写文件。**不带就是 dry run** |
 | `-Asset=<包路径>` | 从**这个**资产读值，而不是文本 `Name=` 指的那个 |
+| `-Structure` | 允许**结构编辑**（加行/删行）。默认只报告 |
+| `-NoBaseline` | 无视上一次 `-Apply` 记的基线，全量比较（§4c） |
 
 `-Asset` 不是可选的便利：**导出文本在结构上不可能指向它被导出的那个资产**
 （plan-v4 V1 把所有导出都写进 `Decompiled/` 命名空间，正是为了让重建碰不到原件）。
@@ -141,6 +149,102 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Asset /Game/FX/NS_Spar
 
 替换只覆盖字面量自己的字节区间（`FValue::StartOffset/EndOffset`，由词法器记录，
 见 §6）。值后面的注释、缩进、行尾风格一律原样保留；写回后还要能解析通过。
+
+---
+
+## 4b. 覆盖面：文本能声明的四类东西（2026-10-09 第二轮）
+
+v1 只寻址「模块调用的字面量实参」。这一轮把它扩到**文本本来就能声明的全部四类**，判定规则不变
+（文本声明了才写、定位不唯一就拒绝、只改字面量自己的字节）：
+
+| 类别 | 编码 | 值从哪儿读 | 值怎么拼 |
+|---|---|---|---|
+| 模块调用的实参 | `Module.Input` | rapid-iteration store（`Constants.<emitter>.<node>.<input>`） | `LiteralToSource` / `EnumEntryToSourceToken` |
+| 渲染器属性 | `MeshRenderer.FacingMode` | `GetRendererProperties`（写侧 `SetRendererProperties` 吃的同一份 JSON） | `RenderJsonPropertyAsSource` |
+| `Bind X -> Y` 的 target | `Bind CustomSorting -> ...` | `GetRendererBindings`（适配器从活结构体上读） | 直接写名字 |
+| `Settings` 键（系统 / 发射器） | `Settings.WarmupTime` | `GetSystemProperties` / `GetEmitterProperties` | `RenderSettingSource` |
+| 折叠赋值（Set Parameters 入口） | `<节点>.<参数名>` | 该 Set Parameters 节点的常量，**按参数名**配对 | 同上 |
+| `Defaults = { }` | `Defaults.Particles.Foo` | `GetParameterDefaults` | 同上（含链接形态） |
+
+三条实现上的选择，都会影响正确性：
+
+1. **`Settings` 读回用的是生成器自己那张表。** `RenderSettingSource` 是 `PlanSettings` 的反函数，
+   和 `SystemSettings` / `EmitterSettings` 住在同一个文件里 —— 第二份表就是第二个会漂的东西，
+   而反编译器那张字段表的漂移正是 `write-back-coverage.md` §3.8 记下来的事故。别名要**反向**跑：
+   写侧 `CPU -> CPUSim`，读回必须 `CPUSim -> CPU`，否则 pull 会写一个表里不认的拼法。
+2. **渲染器属性的「值」只有一份拼写实现**（`WriteBack/DreamFXSourceValue.h`），**反编译器和
+   pull 共用**。读写两侧对同一个值给出不同拼法，等于每次 pull 都把已经写对的那些行再改一遍。
+   这次抽取是纯搬迁，见证是 RoundTrip 那 14 个 fixture —— 它当场抓到一处：委托改造漏删了原
+   `switch` 每个 case 后面的 `break`，于是渲染器只写出第一个属性，5 个 RoundTrip fixture 变红。
+3. **比较按值、不按字符。** `LowerDeclaredPropertyToJson` 用生成器同一段代码把文本的值转成 JSON，
+   再和资产那份比。按字符比会干两件坏事：把 `Material = "Plugin.MoonToon:..."` 改写成资产的绝对
+   路径；以及 —— 属性转换器把 `float` 拓宽成 `double` —— 把每个 `0.1f` 属性每轮都重写一次。
+   数字因此在语言写得出的精度上比：整数精确比，其余按 `float` 比。
+
+「不改」这一栏相应缩短：渲染器属性、`Settings`、赋值、`Defaults` 现在都在范围内（有断言的那种）。
+
+### 4c. 脏集合：只写资产真的动过的那些（`DFX7115`）
+
+上面那套的默认行为是「文本和资产不一致就写」。对**第一次**跑这是对的，对之后每一次都不是：
+文本和资产不一致，也可能是因为**有人改了文本** —— 那资产才是旧的一侧，写回去等于扔掉更新的决定。
+DreamGUI 的做法是只写被动过的；这里给的是同一个答案，但做成可复现的。
+
+方案：**上一次 `-Apply` 记下的基线**，放在 `Saved/DreamFX/Pull/**/<文件>.baseline.txt`，
+格式是排序过的 `scope<TAB>key<TAB>value` 三列（和 build 安全闸给 fact 分档的两半一致）。
+另外两个候选是被**它们能回答什么**否掉的，不是口味问题：
+
+- `UPackage::IsDirty` 是整份资产一位：说不清**哪个**值动了（而「写这一行、不写那一行」正是全部需求），
+  某些加载路径还会把它置脏，而且对一个刚在新进程里打开资产的 commandlet 它什么都不说；
+- 编辑器的修改事件同样只有粒度问题，另外生命周期跨不过进程，而 `pull` 是 commandlet。
+
+规则：
+
+| 情形 | 结果 |
+|---|---|
+| 值不一致，基线里**有**这条且和资产现在读出来的一样 | 文本是新的 ⇒ 文本赢，报 `DFX7115`，不写 |
+| 值不一致，基线里**没有**这条（新加的 / 第一次跑） | 写 |
+| 值不一致，基线里有但和现在不一样（资产又动了） | 写 |
+| 只 `-Apply` 记基线 | 干跑**不记**：它还没把文本和资产对齐，记了就等于告诉下一轮「刚才报的差异都处理过了」 |
+| 磁盘上没有基线（这个功能落地后的第一次） | 退化成「比全部」，并且明说（`DFX7114`）。`-NoBaseline` 是主动要这个行为 |
+
+边界（都在这里写清楚，别当成没问题）：
+
+- 脏集合只覆盖**文本声明了的地址**。文本没声明的值不进基线，也不受它保护。
+- 基线记的是**观察到**的值，不是「写进去」的值：一次 `-Apply` 里被拒（`DFX7111`）的值也会被记成
+  「资产现在是这样」，于是下一轮它就是「没动过」。这是有意为之 —— 否则拒绝等于每轮重问一次。
+- 渲染器属性的地址是**位置**（`emitter X renderer N`）。渲染器顺序变了，基线对不上，会当脏处理。
+- 基线文件删掉就回到全量比较，这条永远可用。
+
+### 4d. 结构编辑：`-Structure`（默认只报告）
+
+v1 遇到结构对不上就整段拒绝（`DFX7109`）。现在多了一条路，**但要显式开开关，而且只在无歧义时动手**。
+
+对应关系先算，因为靠猜的结构编辑是把模块挪了位置，不是换个写法：
+
+1. 两侧按「节点跑的模块资产」对齐；连续赋值算**一个**节点，键是一个哨兵值（两个 Set Parameters 节点
+   靠**条目**区分，不靠位置）。
+2. 对齐取**最长公共子序列**，且只有在它**唯一**时才用：一对 (i,j) 是「被迫」的，当且仅当
+   `LCS(前缀) + 1 + LCS(后缀) == LCS(总长)`；被迫对的数量必须正好等于 LCS 长度，且在两侧都严格递增。
+   同一个模块出现两次、又删掉第三个 —— 那种有多个 LCS，仍然是拒绝。
+3. 节点名（`as <名字>`）是键里没有的那一半，所以配对完成后逐对校验。
+
+能写的东西：
+
+- 资产有、文本没有的模块 ⇒ **插一行**，位置是执行顺序上它前面那条语句之上（它是最后一个就插在
+  stack 的 `}` 之上）。行内容是 `<模块>@<主.次>[ as <节点名>](<输入>);` —— 带版本 pin（那才是
+  让节点留在资产当年的版本上的东西），`as` **只在节点名不等于模块资产名时**才写（名字空着时引擎本来
+  就按模块名命名新节点），输入只写 store 里真存着的那些，顺序按模块自己的声明序。
+- 文本有、资产没有的语句 ⇒ **删它那一行**。前提是那行归它独占：前面只有空白、后面除了空白什么都没有。
+  行尾有注释就不动，并说明原因 —— 删掉一条资产从来没有过的注释不算结构编辑。
+- **格式全部从文件里来**：缩进取同一 stack 里最近那条语句的（没有就退到本文档别的 stack，再退到四个
+  空格），行尾取插入点那一行的。这里不发明任何风格。
+- 其余一律拒绝并说清：输入里有数据接口/对象引用的模块（那行调用重建不出来）、文本没声明的
+  Set Parameters 模块（把一段赋值从折叠里拆出来是另一种编辑，目前没有 fixture 撑）、没有字节区间的
+  语句、和别人共用一行的语句、解析器没记下块尾的 stack。
+
+开关与诊断：不开 `-Structure` 时，能定位的差异**报告**（`DFX7113` 把两侧都列出来并说明开关能应用它），
+**整个 stack 一个字节都不碰** —— stack 里的值是按位置寻址的，形状还在争议里就不动。这也是
+`DFX7109` 与本轮新增码的分工：`DFX7109` 仍然是「根本定位不了」。`DFX7112` 是每条**已应用**的结构编辑一行。
 
 ---
 
@@ -304,7 +408,43 @@ $ Build.bat CrossingVoidEditor Win64 Development -MaxParallelActions=2 -WaitMute
 7. **`GetEmitterInfo` 的 out 参数是追加语义**（不是覆盖）：同一个 `FEmitterInfo` 实例给两个 emitter 用，
    第二个 emitter 会拿到第一个的 stack。`pull` 每个 emitter 新建一个实例；
    这个陷阱值得在适配器里堵掉（本轮没动它，因为它是共享路径）。
-8. **只在六条固定 stack 里寻址**；事件栈/模拟阶段栈、渲染器属性、设置块都不在 v1 范围内（§4）。
+8. **只在六条固定 stack 里寻址**；事件栈/模拟阶段栈不在范围内（要经 focus slice 读，是另一套机制）。
+   渲染器属性、设置块、赋值与 `Defaults` 从第二轮起在范围内（§4b）。
+9. **结构编辑只覆盖模块调用。** Set Parameters 模块的增删被具名拒绝（§4d）：把一段赋值从折叠里
+   拆出来是另一种编辑，边界错了会改掉条目互相可见的顺序，目前没有 fixture 撑它。
+10. **渲染器数量对不上就整段不碰。** 文本 `SpriteRenderer` 块数与资产渲染器数不同、或同一位置换了
+    类型 ⇒ `DFX7109`，该 emitter 的渲染器属性一律不寻址（`-Structure` 也不加渲染器块）。
+11. **基线是位置寻址的，对重新排序的渲染器不成立**（§4c）。文本里调整渲染器顺序之后，那一轮的
+    渲染器属性会被当脏值处理（会写，只是可能多写）。
+12. **结构编辑之后的闭环是「重建不掉 fact」，不是「渲染器重编译后完全一致」。** 语料里的断言是
+    「同一个资产原地重建，没有任何 fact 的地址还在却消失了」（那正是安全闸 `DFX8017` 拦的东西），
+    而且它把三种结果分开报：地址还在（失败）、地址整块没了（文本自己的决定，闸的规则 1 也忽略）、
+    地址没了但同一个值在**去掉脚本标签的同一地址**下还在（重建把两份相同的常量合成一份）。
+    第三种只报不判失败 —— 它没销毁任何东西，而安全闸不区分这一种；这是两个东西**唯一**已知的口径差。
+
+---
+
+## 5b. 实测（第二轮，2026-10-09，探针资产 `/Game/DreamFXProbe/NS_PullProbe`）
+
+探针是两份文本：`DFX/DreamFXProbe/NS_PullProbe_T1.dfs`（3 个模块）与 `_T2.dfs`（4 个，多一行
+`ScaleColor();`），同一个 `Name=`。**T2 建出资产**（=「编辑器加了模块」的状态），再把 **T1** 拿去 pull。
+两条探针源与探针资产验证后已删除。
+
+| # | 命令 | 结果（原始行） |
+|---|---|---|
+| 1 | `pull T1`（干跑，默认不开 `-Structure`） | `warning DFX7113: pull: Motes.ParticleUpdate: the asset has ScaleColor that the text does not ... so -Structure writes that difference ... Nothing in this stack was addressed.` ＋ `info DFX7107: ... (4 compared, 6 not declared, 0 not writable, 0 withheld). No bytes written.`；**T1 的 SHA256 前后不变** |
+| 2 | `pull T1 -Structure -Apply` | `info DFX7112: pull: Motes.ParticleUpdate: +ScaleColor:             ScaleColor@1.1(ScaleRGB = (1.0, 1.0, 1.0), ScaleAlpha = 1.0);`；`=== DreamFX pull: 5 compared, 0 written, 12 not declared, 0 not writable, 0 withheld, 0 stack(s) not addressed, 1 line(s) added, 0 removed, 0 structure(s) refused \| applied \| structure \| baseline recorded ===`；行数 34 → 35，`Compare-Object` **只有这一行** |
+| 3 | `build T1 -Force`（结构编辑之后） | `=== DreamFX done: 1 built, 0 up to date, 0 failed \| 0 error(s), 1 warning(s) ===`，exit 0；**没有任何 `build safety` 行、没有 `DFX8017`**，`Saved/DreamFX/BuildSafety/` **没有被创建**（那个目录只在闸报事时才写）。唯一的 warning 是 `DFX7102`（SpawnRate 没有上限），编辑前那份 fixture 也一样 |
+| 4 | `pull T1 -Apply`（文本已经和资产一致） | `info DFX7107: ... (7 compared, 12 not declared, 0 not writable, 0 withheld). No bytes written.`；**SHA256 相同、mtime 相同**（`32072A08…` / `16:39:41`），基线文件写好 |
+| 5 | 手工把文本里 `WarmupTime = 0.5` 改成 `0.9`，再 `pull T1 -Apply` | `info DFX7115: pull: Settings.WarmupTime differs from this text but the asset has not moved since the last apply, so the text's value stands.` ＋ `(7 compared, 12 not declared, 0 not writable, 1 withheld)`；**SHA256 不变**，文件里仍是 `WarmupTime = 0.9;`（文本赢） |
+| 6 | `lint -All` | `0 error(s), 91 warning(s)`，exit 0（91 是全树既有的 lint 警告；两条来自本轮探针文件） |
+| 7 | `corpus` | `dfx: corpus OK (64 passed)`（本轮之前 55；新增 `DreamFX.Corpus.WriteBack` 9 条） |
+
+语料里那 9 条（`Tests/Corpus/WriteBack/`）覆盖的正是上面 1–5 的每一条，外加：
+**无操作写回逐字节不变**（`NoOp` 用例：四类值各一，`-Apply` 后文本必须逐字节相同 ——
+断言比的是文本，不是「编辑数为 0」，这两件事以前不一样过）、**只改被动到的行**
+（`ModuleInput` / `RendererProperty` / `SystemSetting` / `Assignment` 各自断言「diff 恰好 1 行」＋
+「把 pull 刚写出来的文本再 pull 一次，0 编辑」）、以及结构编辑后的原地重建不掉 fact（三个结构用例）。
 
 ---
 
