@@ -67,12 +67,16 @@
    `DeferRequestCompile`，状态更新用 `if (RequestCompileStatus == None)` 保护、不降级更强的状态；
    债由 `WaitForCompilationComplete` / `PollForCompilationComplete` 兑现。
 
-## 4. 验收标准（两条硬的）
+## 4. 验收标准（两层都要过）
 
-- **无操作写回逐字节不变**：`decompile → build → decompile` 两次结果一致（DFX 的 `mirror-diff` 就是干这个的）。
-- **一批编辑只编译一次**：`LogDreamFX Verbose` 数 `PHASE RequestCompile issued` 的次数 —— 打引擎补丁前
+- **文本层 —— 无操作写回逐字节不变**：`decompile → build → decompile` 两次结果一致（`mirror-diff` 的 L1）。
+- **资产层 —— `asset-diff` 的 fact 集合相等**：**只有文本层会漏**。实测中 3 个资产在文本**逐字节可复现**的同时
+  资产级并不相同（`NS_Effects1_Mesh` 的 `Sprite_Atlas_Size.MeshYaw`：原资产 −90、镜像 0，而 L1/L2 全绿；
+  另两个是 `TR刀光_System` 751→654、`破空灰尘` 444→403）。原因是 L1 比的是「**导出 vs 导出**」，
+  两边都经过同一个丢东西的读侧 ⇒ **对读侧丢失结构性失明**。证据与判据见
+  [write-back-coverage.md](write-back-coverage.md) §3 与 §6.1。
+- **一次批量只编译一次** —— `LogDreamFX Verbose` 数 `PHASE RequestCompile issued` 的次数：打引擎补丁前
   最坏系统 260 次 / 8.3 秒，补丁后应为 1 次。
-
 ## 5. 参考位置
 
 - DreamGUI 源码：`Plugins/DreamGUI/Source/DreamGUIEditor/Private/Text/DreamUITextWriteBack.cpp`
