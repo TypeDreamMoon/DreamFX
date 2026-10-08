@@ -156,6 +156,7 @@ namespace UE::DreamFX::Editor
 		{
 			bool bOk = false;
 			FString Message;
+			FString OutputPath;
 			FDiagnosticSink Diagnostics;
 		};
 
@@ -269,17 +270,13 @@ namespace UE::DreamFX::Editor
 				{
 					return Fail(FString::Printf(TEXT("Could not load '%s'."), *AssetPath));
 				}
-				if (UNiagaraSystem* System = Cast<UNiagaraSystem>(Asset))
-				{
-					FDreamFXCommands::ExportSystem(System);
-					return Succeed(TEXT("Exported."));
-				}
-				if (UNiagaraEmitter* Emitter = Cast<UNiagaraEmitter>(Asset))
-				{
-					FDreamFXCommands::ExportEmitter(Emitter);
-					return Succeed(TEXT("Exported."));
-				}
-				return Fail(TEXT("Only a Niagara system or emitter can be exported."));
+				const FAssetExportResult Exported = FDreamFXCommands::ExportAsset(Asset);
+				FActionResult Result;
+				Result.bOk = Exported.bSucceeded;
+				Result.Message = Exported.Message;
+				Result.OutputPath = Exported.OutputPath;
+				Result.Diagnostics.Append(Exported.Diagnostics);
+				return Result;
 			}
 
 			if (Action == TEXT("adopt"))
@@ -359,7 +356,7 @@ namespace UE::DreamFX::Editor
 				*Action));
 		}
 
-		void RespondTo(const FString& RequestId, const FActionResult& Result, double DurationMs)
+		FString SerializeResponse(const FString& RequestId, const FActionResult& Result, double DurationMs)
 		{
 			FString Text;
 			const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Text);
@@ -369,10 +366,17 @@ namespace UE::DreamFX::Editor
 			Writer->WriteValue(TEXT("ok"), Result.bOk);
 			Writer->WriteValue(TEXT("durationMs"), static_cast<int32>(DurationMs));
 			Writer->WriteValue(TEXT("message"), Result.Message);
+			if (!Result.OutputPath.IsEmpty()) { Writer->WriteValue(TEXT("outputPath"), Result.OutputPath); }
 			WriteDiagnosticsArray(Writer, Result.Diagnostics);
 			Writer->WriteObjectEnd();
 			Writer->Close();
 
+			return Text;
+		}
+
+		void RespondTo(const FString& RequestId, const FActionResult& Result, double DurationMs)
+		{
+			const FString Text = SerializeResponse(RequestId, Result, DurationMs);
 			WriteFileAtomically(FPaths::Combine(ResponsesDir(), RequestId + TEXT(".json")), Text);
 
 			// Also published standalone, so a client that was not the one who asked -- or one that
@@ -520,6 +524,14 @@ namespace UE::DreamFX::Editor
 		return BridgeDir();
 	}
 
+	FString FBridgeService::ExecuteRequest(const TSharedPtr<FJsonObject>& Request)
+	{
+		FString RequestId;
+		if (Request.IsValid()) { Request->TryGetStringField(TEXT("requestId"), RequestId); }
+		const double Start = FPlatformTime::Seconds();
+		const FActionResult Result = Request.IsValid() ? Dispatch(Request) : Fail(TEXT("The request is not valid JSON."));
+		return SerializeResponse(RequestId, Result, (FPlatformTime::Seconds() - Start) * 1000.0);
+	}
 	void FBridgeService::Register()
 	{
 		IFileManager& Files = IFileManager::Get();

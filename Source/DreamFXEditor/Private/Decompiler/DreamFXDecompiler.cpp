@@ -10,6 +10,7 @@
 #include "Dom/JsonObject.h"
 #include "Misc/PackageName.h"
 #include "HAL/PlatformMemory.h"
+#include "JsonObjectConverter.h"
 #include "NiagaraCommon.h"
 #include "NiagaraDataInterfaceCurve.h"
 #include "NiagaraEmitter.h"
@@ -22,6 +23,7 @@
 #include "Serialization/JsonWriter.h"
 #include "UObject/GCObjectScopeGuard.h"
 #include "UObject/StrongObjectPtr.h"
+#include "UObject/StructOnScope.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace UE::DreamFX::Editor
@@ -279,6 +281,16 @@ namespace UE::DreamFX::Editor
 		 * eating the quote that follows. Compacting is not cosmetic: the lexer ends a string at a
 		 * newline, so a pretty-printed blob would not survive being read back.
 		 */
+		FString QuoteSourceString(FString Value)
+		{
+			Value.ReplaceInline(TEXT("\\"), TEXT("\\\\"), ESearchCase::CaseSensitive);
+			Value.ReplaceInline(TEXT("\""), TEXT("\\\""), ESearchCase::CaseSensitive);
+			Value.ReplaceInline(TEXT("\n"), TEXT("\\n"), ESearchCase::CaseSensitive);
+			Value.ReplaceInline(TEXT("\r"), TEXT("\\r"), ESearchCase::CaseSensitive);
+			Value.ReplaceInline(TEXT("\t"), TEXT("\\t"), ESearchCase::CaseSensitive);
+			return FString::Printf(TEXT("\"%s\""), *Value);
+		}
+
 		bool JsonTextToSourceString(const FString& JsonText, FString& OutLiteral)
 		{
 			// Re-serialised rather than passed through, so the same value always produces the same
@@ -319,11 +331,7 @@ namespace UE::DreamFX::Editor
 				return false;
 			}
 
-			FString Escaped = Compact;
-			Escaped.ReplaceInline(TEXT("\\"), TEXT("\\\\"), ESearchCase::CaseSensitive);
-			Escaped.ReplaceInline(TEXT("\""), TEXT("\\\""), ESearchCase::CaseSensitive);
-
-			OutLiteral = FString::Printf(TEXT("\"%s\""), *Escaped);
+			OutLiteral = QuoteSourceString(Compact);
 			return true;
 		}
 
@@ -826,11 +834,10 @@ namespace UE::DreamFX::Editor
 				{
 				case EJson::Object:
 				{
-					// The one struct with a DSL spelling: an FBox as `box(min..., max...)`. Written
-					// only when it is live -- an emitter computes its own bounds unless
-					// CalculateBoundsMode is Fixed, a system unless bFixedBounds is set -- because a
-					// stale authored box under dynamic bounds is inert noise. Everything else
-					// object-shaped still has no spelling and falls through.
+					// The one struct with a DSL spelling: an FBox as `box(min..., max...)`.
+					// A system retains its authored box while fixed bounds are disabled; preserve
+					// that non-default configuration for a later re-enable. Emitters still require
+					// CalculateBoundsMode=Fixed. Other object-shaped settings have no spelling.
 					//
 					// This closes what the field table's old comment called deliberate: the box was
 					// left out because this function only wrote scalars, and the cost surfaced as
@@ -843,11 +850,6 @@ namespace UE::DreamFX::Editor
 					if (!Value->TryGetObject(Box)
 						|| !(*Box)->TryGetObjectField(TEXT("Min"), Min)
 						|| !(*Box)->TryGetObjectField(TEXT("Max"), Max))
-					{
-						continue;
-					}
-					bool bSystemFlag = false;
-					if (Current->TryGetBoolField(TEXT("bFixedBounds"), bSystemFlag) && !bSystemFlag)
 					{
 						continue;
 					}
@@ -1134,8 +1136,8 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
-		bool TryWriteUserParameterBinding(const TSharedPtr<FJsonValue>& Value,
-			const TSharedPtr<FJsonValue>& Default, FString& OutLiteral)
+		bool NormalizeUserParameterBinding(TSharedPtr<FJsonValue>& Value,
+			const TSharedPtr<FJsonValue>& Default)
 		{
 			const TSharedPtr<FJsonObject>* Parameter = nullptr;
 			const TSharedPtr<FJsonObject>* DefaultParameter = nullptr;
@@ -1161,7 +1163,47 @@ namespace UE::DreamFX::Editor
 			StableParameter->SetStringField(TEXT("name"), Name);
 			const TSharedRef<FJsonObject> StableBinding = MakeShared<FJsonObject>();
 			StableBinding->SetObjectField(TEXT("parameter"), StableParameter);
-			return TryWriteJsonBlob(MakeShared<FJsonValueObject>(StableBinding), OutLiteral);
+			Value = MakeShared<FJsonValueObject>(StableBinding);
+			return true;
+		}
+
+		/** Normalize bindings at every struct/array depth, including mesh OverrideMaterials. */
+		bool NormalizeRendererBindings(const FProperty* Property, const void* DefaultData,
+			TSharedPtr<FJsonValue>& Value)
+		{
+			if (Property == nullptr || !Value.IsValid()) { return true; }
+			if (const FStructProperty* Struct = CastField<FStructProperty>(Property))
+			{
+				if (Struct->Struct == FNiagaraUserParameterBinding::StaticStruct())
+				{
+					return DefaultData != nullptr && NormalizeUserParameterBinding(Value,
+						FJsonObjectConverter::UPropertyToJsonValue(const_cast<FProperty*>(Property), DefaultData));
+				}
+				if (Value->Type != EJson::Object) { return true; }
+				for (auto& Field : Value->AsObject()->Values)
+				{
+					const FProperty* Member = FindFProperty<FProperty>(Struct->Struct, FName(*Field.Key));
+					if (!NormalizeRendererBindings(Member,
+						Member != nullptr && DefaultData != nullptr ? Member->ContainerPtrToValuePtr<void>(DefaultData) : nullptr,
+						Field.Value)) { return false; }
+				}
+			}
+			else if (const FArrayProperty* Array = CastField<FArrayProperty>(Property))
+			{
+				const FStructProperty* Inner = CastField<FStructProperty>(Array->Inner);
+				if (Inner != nullptr && Value->Type == EJson::Array)
+				{
+					// Import constructs fresh elements, even when the renderer CDO array is empty.
+					FStructOnScope ElementDefaults(Inner->Struct);
+					TArray<TSharedPtr<FJsonValue>> Elements = Value->AsArray();
+					for (TSharedPtr<FJsonValue>& Element : Elements)
+					{
+						if (!NormalizeRendererBindings(Inner, ElementDefaults.GetStructMemory(), Element)) { return false; }
+					}
+					Value = MakeShared<FJsonValueArray>(MoveTemp(Elements));
+				}
+			}
+			return true;
 		}
 
 		void WriteChangedRendererProperties(const UClass* RendererClass, const FString& Json,
@@ -1192,7 +1234,7 @@ namespace UE::DreamFX::Editor
 
 			for (const FString& Key : Keys)
 			{
-				const TSharedPtr<FJsonValue> Value = Current->TryGetField(Key);
+				TSharedPtr<FJsonValue> Value = Current->TryGetField(Key);
 				if (!Value.IsValid() || Value->IsNull())
 				{
 					continue;
@@ -1214,17 +1256,16 @@ namespace UE::DreamFX::Editor
 				{
 					continue;
 				}
-				if (Property != nullptr && Property->Struct == FNiagaraUserParameterBinding::StaticStruct())
+				if (Value->Type == EJson::Array && TryWriteReferenceArray(RendererClass, Key, Value->AsArray(), OutLines))
 				{
-					FString Blob;
-					if (TryWriteUserParameterBinding(Value, Defaults.IsValid() ? Defaults->TryGetField(Key) : nullptr, Blob))
-					{
-						OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *Blob));
-					}
-					else
-					{
-						OutGaps.AddUnique(FString::Printf(TEXT("renderer user parameter binding '%s' has a non-default or unreadable type"), *Key));
-					}
+					continue;
+				}
+				const FProperty* RendererProperty = FindFProperty<FProperty>(RendererClass, FName(*Key));
+				if (!NormalizeRendererBindings(RendererProperty,
+					RendererProperty != nullptr ? RendererProperty->ContainerPtrToValuePtr<void>(RendererClass->GetDefaultObject()) : nullptr,
+					Value))
+				{
+					OutGaps.AddUnique(FString::Printf(TEXT("renderer property '%s' contains a user parameter binding with a non-default or unreadable type"), *Key));
 					continue;
 				}
 
@@ -1354,7 +1395,7 @@ namespace UE::DreamFX::Editor
 			// birth velocity 2273 (=136500 * 1/60) original vs 4529 (=136500 * 1/30) mirror.
 			{ TEXT("FixedTickDelta"),     TEXT("bFixedTickDelta") },
 			{ TEXT("FixedTickDeltaTime"), TEXT("FixedTickDeltaTime") },
-			// Same story as the emitter's row: the box only writes when bFixedBounds is set.
+			// Preserve non-default authored bounds even while the system flag is disabled.
 			{ TEXT("FixedBounds"),        TEXT("FixedBounds") },
 		};
 
@@ -2870,7 +2911,7 @@ namespace UE::DreamFX::Editor
 
 					if (!Variable.Description.IsEmpty())
 					{
-						Line += FString::Printf(TEXT(" [ Description=\"%s\" ]"), *Variable.Description);
+					Line += FString::Printf(TEXT(" [ Description=%s ]"), *QuoteSourceString(Variable.Description));
 					}
 					Writer.Line(Line + TEXT(";"));
 				}
@@ -2931,6 +2972,17 @@ namespace UE::DreamFX::Editor
 		for (FName EmitterName : EmitterNames)
 		{
 			UE_LOG(LogDreamFX, Verbose, TEXT("emitter %s"), *EmitterName.ToString());
+			const FNiagaraEmitterHandle* Handle = System->GetEmitterHandles().FindByPredicate(
+				[EmitterName](const FNiagaraEmitterHandle& Candidate) { return Candidate.GetName() == EmitterName; });
+			if (Handle != nullptr && Handle->GetEmitterMode() != ENiagaraEmitterMode::Standard)
+			{
+				const FString Gap = FString::Printf(TEXT("emitter '%s' uses unsupported Lightweight/Stateless mode"), *EmitterName.ToString());
+				Result.UnsupportedFeatures.AddUnique(Gap);
+				Diagnostics.Warning(TEXT("DFX8017"), FSourceLocation(), FString::Printf(
+					TEXT("emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in Niagara; DreamFX cannot rebuild its stateless modules and renderers."),
+					*EmitterName.ToString()));
+				continue;
+			}
 
 			const FStackAddress EmitterAddress = SystemAddress.WithEmitter(EmitterName);
 
@@ -2938,6 +2990,7 @@ namespace UE::DreamFX::Editor
 			Errors.Reset();
 			if (!FNiagaraAdapter::GetEmitterInfo(EmitterAddress, Info, Errors))
 			{
+				Result.UnsupportedFeatures.AddUnique(FString::Printf(TEXT("emitter '%s' could not be read"), *EmitterName.ToString()));
 				Diagnostics.Warning(TEXT("DFX8002"), FSourceLocation(),
 					FString::Printf(TEXT("Skipping emitter '%s': %s"),
 						*EmitterName.ToString(), *FString::Join(Errors, TEXT(" | "))));
@@ -3101,8 +3154,11 @@ namespace UE::DreamFX::Editor
 			return Result;
 		}
 
+		// The temporary handle is independent of the output asset name. Niagara's view-model
+		// rename compares FNames without their numeric suffix, so a source named Foo_0 can
+		// otherwise retain a handle named Foo and fail the adapter's stable-name check.
+		const FName EmitterName(TEXT("DreamFXStandaloneEmitter"));
 		// A re-export in the same session would otherwise hit the previous copy's name.
-		const FName EmitterName(*Emitter->GetName());
 		{
 			TArray<FName> Existing;
 			TArray<FString> ReadErrors;
@@ -3121,7 +3177,7 @@ namespace UE::DreamFX::Editor
 		{
 			Diagnostics.Error(TEXT("DFX8005"), FSourceLocation(),
 				FString::Printf(TEXT("Could not copy emitter '%s' into a host system: %s"),
-					*EmitterName.ToString(), *FString::Join(Errors, TEXT(" | "))));
+					*Emitter->GetName(), *FString::Join(Errors, TEXT(" | "))));
 			return Result;
 		}
 

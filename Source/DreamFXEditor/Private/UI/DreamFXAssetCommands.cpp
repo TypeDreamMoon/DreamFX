@@ -16,12 +16,17 @@
 #include "Misc/FileHelper.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "Editor.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Widgets/Notifications/SNotificationList.h"
+
+#if PLATFORM_UNIX || PLATFORM_MAC
+#include <unistd.h>
+#endif
 
 #define LOCTEXT_NAMESPACE "DreamFXAssetCommands"
 
@@ -193,71 +198,16 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		/** Writes an export next to where the asset lives, opens it, and toasts the outcome. */
-		void FinishExport(const FString& AssetName, const FString& PackagePath, const FString& Extension,
-			const FDecompileResult& Result)
+		void PresentExport(const FAssetExportResult& Result)
 		{
-			const FString OutputPath = FDreamFXPaths::DecompiledSourcePathFor(PackagePath, *Extension);
-
-			if (!FFileHelper::SaveStringToFile(Result.Source, *OutputPath,
-				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-			{
-				UE_LOG(LogDreamFX, Error, TEXT("Could not write '%s'."), *OutputPath);
-				Notify(FText::Format(LOCTEXT("ExportWriteFailed", "DreamFX could not write '{0}'."),
-					FText::FromString(OutputPath)), /*bSuccess=*/false);
-				return;
-			}
-
-			UE_LOG(LogDreamFX, Display, TEXT("Exported %s to %s"), *PackagePath, *OutputPath);
+			LogDiagnostics(Result.Diagnostics);
 			for (const FString& Feature : Result.UnsupportedFeatures)
 			{
 				UE_LOG(LogDreamFX, Warning, TEXT("Not represented in the export: %s"), *Feature);
 			}
-
-			FDreamFXLaunchUtils::LaunchTextFileInPreferredEditor(OutputPath);
-
-			if (Result.UnsupportedFeatures.Num() > 0)
-			{
-				NotifyWithFile(FText::Format(
-					LOCTEXT("ExportWithGaps", "Exported '{0}' with {1} feature(s) NOT represented -- they are listed at the top of the file."),
-					FText::FromString(AssetName),
-					FText::AsNumber(Result.UnsupportedFeatures.Num())), /*bSuccess=*/false, OutputPath);
-				return;
-			}
-
-			NotifyWithFile(FText::Format(LOCTEXT("ExportOk", "Exported '{0}' to {1}"),
-				FText::FromString(AssetName), FText::FromString(OutputPath)), /*bSuccess=*/true, OutputPath);
+			NotifyWithFile(FText::FromString(Result.Message), Result.bSucceeded && Result.UnsupportedFeatures.IsEmpty(), Result.OutputPath);
+			if (Result.bSucceeded) { FDreamFXLaunchUtils::LaunchTextFileInPreferredEditor(Result.OutputPath); }
 		}
-
-		/**
-		 * Refuses to export an asset that is itself a mirror, and says where its source is.
-		 *
-		 * Exporting one would write a second file claiming the same asset, under a disk path with
-		 * `Decompiled` in it twice -- two sources for one asset, taking turns overwriting each other
-		 * on alternate builds. The mirror already has a source; that is what the author wants open.
-		 */
-		bool RefuseMirrorExport(UObject* Asset, const FString& PackagePath)
-		{
-			if (!FDreamFXPaths::IsDecompiledNamespaceAsset(PackagePath))
-			{
-				return false;
-			}
-
-			// The stamp, not a path guess: the mirror's source lives at the *original* asset's export
-			// path, which cannot be recovered from the mirror's own path.
-			FProvenanceStamp Stamp;
-			const bool bHasSource = FProvenance::Read(Asset, Stamp)
-				&& !Stamp.SourceFullPath.IsEmpty()
-				&& FPaths::FileExists(Stamp.SourceFullPath);
-
-			NotifyWithFile(FText::Format(
-				LOCTEXT("ExportRefusedMirror",
-					"'{0}' is already a DreamFX mirror, built from a decompiled source. Edit that source instead -- exporting again would leave two sources claiming one asset."),
-				FText::FromString(Asset != nullptr ? Asset->GetName() : PackagePath)), /*bSuccess=*/false,
-				bHasSource ? Stamp.SourceFullPath : FString());
-			return true;
-		}
-
 		/** The stamp, or nothing -- every per-asset command needs it and reports the same way when absent. */
 		bool RequireProvenance(UObject* Asset, FProvenanceStamp& OutStamp)
 		{
@@ -416,89 +366,87 @@ namespace UE::DreamFX::Editor
 		return FProvenance::Read(Asset, Stamp) && !Stamp.SourceFullPath.IsEmpty();
 	}
 
-	void FDreamFXCommands::ExportSystem(UNiagaraSystem* System)
+	FAssetExportResult FDreamFXCommands::ExportAsset(UObject* Asset)
 	{
-		if (System == nullptr)
+		FAssetExportResult Result;
+		UNiagaraSystem* System = Cast<UNiagaraSystem>(Asset);
+		UNiagaraEmitter* Emitter = Cast<UNiagaraEmitter>(Asset);
+		if (!System && !Emitter) { Result.Message = TEXT("Only a Niagara system or emitter can be exported."); return Result; }
+		const FString PackagePath = Asset->GetOutermost()->GetName();
+		if (FDreamFXPaths::IsDecompiledNamespaceAsset(PackagePath))
 		{
-			return;
+			Result.Message = TEXT("This asset is already a DreamFX mirror. Edit its existing source instead of exporting it again.");
+			return Result;
 		}
-
-		const FString PackagePath = System->GetOutermost()->GetName();
-
-		if (RefuseMirrorExport(System, PackagePath))
-		{
-			return;
-		}
-
 		FAssetRoot Root;
-		FString RootError;
-		if (!ResolveAssetRoot(PackagePath, Root, RootError))
+		if (!ResolveAssetRoot(PackagePath, Root, Result.Message)) { return Result; }
+		FDecompileOptions Options;
+		Options.bDecompiledNamespace = true;
+		const FDecompileResult Export = System
+			? FDecompiler::Decompile(System, Root.RootToken, Result.Diagnostics, Options)
+			: FDecompiler::DecompileEmitter(Emitter, Root.RootToken, Result.Diagnostics, Options);
+		Result.UnsupportedFeatures = Export.UnsupportedFeatures;
+		if (!Export.bSucceeded)
 		{
-			UE_LOG(LogDreamFX, Error, TEXT("%s"), *RootError);
-			Notify(FText::FromString(RootError), /*bSuccess=*/false);
-			return;
+			Result.Message = FString::Printf(TEXT("DreamFX could not export '%s'. See the diagnostics."), *Asset->GetName());
+			return Result;
 		}
-
-		// Export names the mirror, not the asset it read: whatever the author does to the file
-		// afterwards, building it cannot reach this asset. Adopt is the command that opts into that.
-		FDecompileOptions DecompileOptions;
-		DecompileOptions.bDecompiledNamespace = true;
-
-		FDiagnosticSink Diagnostics;
-		const FDecompileResult Result = FDecompiler::Decompile(System, Root.RootToken, Diagnostics,
-			DecompileOptions);
-		LogDiagnostics(Diagnostics);
-
-		if (!Result.bSucceeded)
+		const FString OutputPath = FDreamFXPaths::DecompiledSourcePathFor(PackagePath, System ? TEXT(".dfs") : TEXT(".dfe"));
+		if (!FFileHelper::SaveStringToFile(Export.Source, *OutputPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 		{
-			Notify(FText::Format(LOCTEXT("ExportFailed", "DreamFX could not export '{0}'. See the Output Log."),
-				FText::FromString(System->GetName())), /*bSuccess=*/false);
-			return;
+			Result.Message = FString::Printf(TEXT("DreamFX could not write '%s'."), *OutputPath);
+			return Result;
 		}
-
-		FinishExport(System->GetName(), PackagePath, TEXT(".dfs"), Result);
+		Result.bSucceeded = true;
+		Result.OutputPath = OutputPath;
+		Result.Message = FString::Printf(TEXT("Exported '%s' to '%s'."), *Asset->GetName(), *OutputPath);
+		if (!Result.UnsupportedFeatures.IsEmpty())
+		{
+			Result.Message += FString::Printf(TEXT(" %d feature(s) are not represented; see the source header."), Result.UnsupportedFeatures.Num());
+		}
+		return Result;
 	}
 
-	void FDreamFXCommands::ExportEmitter(UNiagaraEmitter* Emitter)
+	void FDreamFXCommands::ExportSystem(UNiagaraSystem* System) { PresentExport(ExportAsset(System)); }
+	void FDreamFXCommands::ExportEmitter(UNiagaraEmitter* Emitter) { PresentExport(ExportAsset(Emitter)); }
+
+	bool FDreamFXCommands::ValidateAdoptDestination(const FString& PackagePath, const FString& SourcePath,
+		FDiagnosticSink& Diagnostics)
 	{
-		if (Emitter == nullptr)
+		FString ConflictFile;
+		if (FPaths::FileExists(SourcePath) || IFileManager::Get().DirectoryExists(*SourcePath)) { ConflictFile = SourcePath; }
+		else if (!FindConflictingSource(PackagePath, FString(), ConflictFile)) { return true; }
+		Diagnostics.SetFile(ConflictFile);
+		Diagnostics.Error(TEXT("DFX8011"), FSourceLocation(), FString::Printf(
+			TEXT("Cannot adopt '%s': source destination or another source already exists at '%s'. Edit that file instead; Adopt never replaces existing source."),
+			*PackagePath, *ConflictFile));
+		return false;
+	}
+	bool FDreamFXCommands::WriteNewAdoptSource(const FString& SourcePath, const FString& Source, FString& OutError)
+	{
+		if (FPaths::FileExists(SourcePath) || IFileManager::Get().DirectoryExists(*SourcePath))
 		{
-			return;
+			OutError = FString::Printf(TEXT("Source already exists: '%s'. Adopt never replaces existing source."), *SourcePath);
+			return false;
 		}
-
-		const FString PackagePath = Emitter->GetOutermost()->GetName();
-
-		if (RefuseMirrorExport(Emitter, PackagePath))
+		const FString Temporary = SourcePath + TEXT(".") + FGuid::NewGuid().ToString(EGuidFormats::Digits) + TEXT(".tmp");
+		if (FPaths::FileExists(Temporary)) { OutError = TEXT("Could not reserve an unused staging path."); return false; }
+		ON_SCOPE_EXIT { IFileManager::Get().Delete(*Temporary, false, false, true); };
+		if (!FFileHelper::SaveStringToFile(Source, *Temporary, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 		{
-			return;
+			OutError = FString::Printf(TEXT("Could not stage source for '%s'."), *SourcePath);
+			return false;
 		}
-
-		FAssetRoot Root;
-		FString RootError;
-		if (!ResolveAssetRoot(PackagePath, Root, RootError))
-		{
-			UE_LOG(LogDreamFX, Error, TEXT("%s"), *RootError);
-			Notify(FText::FromString(RootError), /*bSuccess=*/false);
-			return;
-		}
-
-		FDecompileOptions DecompileOptions;
-		DecompileOptions.bDecompiledNamespace = true;
-
-		FDiagnosticSink Diagnostics;
-		const FDecompileResult Result = FDecompiler::DecompileEmitter(Emitter, Root.RootToken, Diagnostics,
-			DecompileOptions);
-		LogDiagnostics(Diagnostics);
-
-		if (!Result.bSucceeded)
-		{
-			Notify(FText::Format(
-				LOCTEXT("ExportEmitterFailed", "DreamFX could not export emitter '{0}'. See the Output Log."),
-				FText::FromString(Emitter->GetName())), /*bSuccess=*/false);
-			return;
-		}
-
-		FinishExport(Emitter->GetName(), PackagePath, TEXT(".dfe"), Result);
+		// FILEWRITE_NoReplaceExisting is ignored by FileManagerGeneric. Publish using an operation
+		// which refuses an existing target even if it appeared after the confirmation/check above.
+		bool bPublished = false;
+#if PLATFORM_WINDOWS
+		bPublished = IFileManager::Get().Move(*SourcePath, *Temporary, false, false, false, true);
+#elif PLATFORM_UNIX || PLATFORM_MAC
+		bPublished = ::link(TCHAR_TO_UTF8(*Temporary), TCHAR_TO_UTF8(*SourcePath)) == 0;
+#endif
+		if (!bPublished) { OutError = FString::Printf(TEXT("Could not create '%s' without replacing existing source."), *SourcePath); }
+		return bPublished;
 	}
 
 	void FDreamFXCommands::AdoptSystem(UNiagaraSystem* System, const bool bSkipConfirmation)
@@ -516,6 +464,17 @@ namespace UE::DreamFX::Editor
 		{
 			UE_LOG(LogDreamFX, Error, TEXT("%s"), *RootError);
 			Notify(FText::FromString(RootError), /*bSuccess=*/false);
+			return;
+		}
+
+		const FString RelativePath = PackagePathRelativeToMount(PackagePath, Root.MountPoint);
+		const FString SourcePath = FPaths::ConvertRelativePathToFull(
+			FPaths::Combine(Root.SourceRootDirectory, RelativePath + TEXT(".dfs")));
+		FDiagnosticSink DestinationDiagnostics;
+		if (!ValidateAdoptDestination(PackagePath, SourcePath, DestinationDiagnostics))
+		{
+			LogDiagnostics(DestinationDiagnostics);
+			NotifyWithFile(FText::FromString(DestinationDiagnostics.FormatAll()), false, SourcePath);
 			return;
 		}
 
@@ -571,41 +530,6 @@ namespace UE::DreamFX::Editor
 			return;
 		}
 
-		// --- 2. where the source has to live ---------------------------------------------------
-		const FString RelativePath = PackagePathRelativeToMount(PackagePath, Root.MountPoint);
-		const FString SourcePath = FPaths::ConvertRelativePathToFull(
-			FPaths::Combine(Root.SourceRootDirectory, RelativePath + TEXT(".dfs")));
-
-		// --- 3. refuse a second source for one asset -------------------------------------------
-		FString ConflictFile;
-		if (FindConflictingSource(PackagePath, SourcePath, ConflictFile))
-		{
-			{
-				FDiagnosticSink Diagnostics;
-				Diagnostics.SetFile(ConflictFile);
-				Diagnostics.Error(TEXT("DFX8011"), FSourceLocation(), FString::Printf(
-					TEXT("'%s' is already generated by an existing source, so a second one would silently overwrite it on alternate builds. Edit that file instead."),
-					*PackagePath));
-				LogDiagnostics(Diagnostics);
-			}
-
-			const FText Refusal = FText::Format(
-				LOCTEXT("AdoptRefusedConflict",
-					"DreamFX cannot adopt '{0}'.\n\nIt is already declared by an existing source:\n\n{1}\n\n"
-					"Two sources generating one asset take turns overwriting each other. Edit that file instead."),
-				FText::FromString(PackagePath), FText::FromString(ConflictFile));
-
-			if (bSkipConfirmation)
-			{
-				NotifyWithFile(Refusal, /*bSuccess=*/false, ConflictFile);
-			}
-			else
-			{
-				FMessageDialog::Open(EAppMsgType::Ok, Refusal);
-			}
-			return;
-		}
-
 		// --- 4. confirm ------------------------------------------------------------------------
 		const FText Confirmation = FText::Format(
 			LOCTEXT("AdoptConfirm",
@@ -623,12 +547,19 @@ namespace UE::DreamFX::Editor
 		}
 
 		// --- 5. write ---------------------------------------------------------------------------
-		if (!FFileHelper::SaveStringToFile(Export.Source, *SourcePath,
-			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		// The author can leave the confirmation open while another process creates a source.
+		DestinationDiagnostics.Reset();
+		if (!ValidateAdoptDestination(PackagePath, SourcePath, DestinationDiagnostics))
 		{
-			UE_LOG(LogDreamFX, Error, TEXT("Could not write '%s'."), *SourcePath);
-			Notify(FText::Format(LOCTEXT("AdoptWriteFailed", "DreamFX could not write '{0}'."),
-				FText::FromString(SourcePath)), /*bSuccess=*/false);
+			LogDiagnostics(DestinationDiagnostics);
+			NotifyWithFile(FText::FromString(DestinationDiagnostics.FormatAll()), false, SourcePath);
+			return;
+		}
+		FString WriteError;
+		if (!WriteNewAdoptSource(SourcePath, Export.Source, WriteError))
+		{
+			UE_LOG(LogDreamFX, Error, TEXT("%s"), *WriteError);
+			Notify(FText::FromString(WriteError), /*bSuccess=*/false);
 			return;
 		}
 
