@@ -1,0 +1,46 @@
+// Write-back fixture: the editor moved the STRUCTURE, not a number.
+//
+// The test adds a module to this emitter's ParticleUpdate stack on the asset -- which is what dragging
+// a module out of the palette does -- and then asks pull what it thinks. Without -Structure that has
+// to be a report and a refusal: adding or removing a line changes the execution order, and a
+// write-back does not do that behind a switch that is off. With -Structure the line has to appear,
+// with the indentation and the line ending the statements around it already use, and rebuilding from
+// the rewritten text has to reproduce the asset the edit produced.
+//
+// Two different modules carry the two directions, and deliberately: `ScaleColor` is what gets ADDED
+// (it is in neither this text nor the built asset) and `Drag` is what gets REMOVED (it is here and
+// nothing depends on it). Using one module for both would make the alignment itself ambiguous -- two
+// nodes running the same asset cannot be told apart by their asset -- which is a refusal this fixture
+// is not about.
+//
+// `GravityForce` keeps its `SolveForcesAndVelocity` beside it so that removing `Drag` still leaves a
+// stack Niagara is willing to compile; a fixture that only built in one of its two states could not
+// check the closure at all.
+System(Name="Corpus/NS_WriteBackStructure", Root="Plugin.DreamFX")
+{
+    Emitter Motes
+    {
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode = DirectSet,
+                Lifetime     = 2.0
+            );
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            GravityForce(Gravity = (0, 0, -100));
+            Drag(Drag = 1.4);
+            SolveForcesAndVelocity();
+            Particles.Drag = 0.5;
+        }
+
+        SpriteRenderer Body
+        {
+        }
+    }
+}

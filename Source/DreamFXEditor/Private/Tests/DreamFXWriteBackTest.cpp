@@ -101,6 +101,31 @@ namespace UE::DreamFX::Editor::WriteBackTests
 	}
 
 	/**
+	 * The first non-comment line holding a needle.
+	 *
+	 * A fixture's own header comment names the module its structural case moves -- that is what the
+	 * comment is for -- so a search that took the first match would compare the comment against the
+	 * statement and report a pull that wrote nothing as a pass.
+	 */
+	FString StatementLineContaining(const FString& Text, const FString& Needle)
+	{
+		TArray<FString> Lines;
+		Text.ParseIntoArrayLines(Lines, /*InCullEmpty=*/false);
+		for (const FString& Line : Lines)
+		{
+			if (Line.TrimStartAndEnd().StartsWith(TEXT("//")))
+			{
+				continue;
+			}
+			if (Line.Contains(Needle))
+			{
+				return Line;
+			}
+		}
+		return FString();
+	}
+
+	/**
 	 * Everything the pull said, for a failure message.
 	 *
 	 * The commandlet logs these through `LogDiagnostics`, whose Info severity is below the default log
@@ -363,6 +388,7 @@ namespace UE::DreamFX::Editor::WriteBackTests
 		IFileManager::Get().MakeDirectory(*DumpDir, /*Tree=*/true);
 		FFileHelper::SaveStringArrayToFile(BeforeRaw, *(DumpDir / CaseName + TEXT(".before.facts")));
 		FFileHelper::SaveStringArrayToFile(AfterRaw, *(DumpDir / CaseName + TEXT(".after.facts")));
+		FFileHelper::SaveStringToFile(NewText, *(DumpDir / CaseName + TEXT(".pulled.dfs")));
 
 		if (Lost.Num() > 0)
 		{
@@ -491,6 +517,9 @@ void FDreamFXWriteBackTest::GetTests(TArray<FString>& OutBeautifiedNames, TArray
 		TEXT("SystemSetting"),
 		TEXT("Assignment"),
 		TEXT("DirtySet"),
+		TEXT("StructureAdd"),
+		TEXT("StructureRemove"),
+		TEXT("StructureRefusedWithoutSwitch"),
 	};
 
 	for (const TCHAR* Case : Cases)
@@ -974,6 +1003,269 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 
 		AddInfo(FString::Printf(TEXT("dirty set: first apply %d written / %d compared, then %d withheld, then %d written again."),
 			First.Changed, First.Compared, Second.Withheld, Third.Changed));
+		return true;
+	}
+
+	// -------------------------------------------------------------------------------------------
+	// StructureAdd / StructureRemove: the editor moved the structure.
+	// -------------------------------------------------------------------------------------------
+	if (Parameters == TEXT("StructureAdd") || Parameters == TEXT("StructureRemove"))
+	{
+		const bool bAdd = Parameters == TEXT("StructureAdd");
+
+		FString SourceText;
+		const FString Path = LoadFixture(TEXT("Structure"), SourceText);
+		if (Path.IsEmpty())
+		{
+			return false;
+		}
+
+		FDiagnosticSink BuildDiagnostics;
+		UNiagaraSystem* System = BuildFixture(*this, Path, SourceText, BuildDiagnostics);
+		if (System == nullptr)
+		{
+			return false;
+		}
+
+		const FStackAddress StackAddress = StackAddressOf(System, TEXT("Motes"), EStackKind::ParticleUpdate);
+		const TCHAR* const ModuleName = bAdd ? TEXT("ScaleColor") : TEXT("Drag");
+
+		TArray<FString> Errors;
+		{
+			FNiagaraAdapter::FWriteScope WriteScope(System);
+			if (bAdd)
+			{
+				FModuleLibrary Library;
+				FString ModuleError;
+				UNiagaraScript* ModuleAsset = Library.FindModule(ModuleName, ModuleError);
+				if (ModuleAsset == nullptr)
+				{
+					AddError(FString::Printf(TEXT("the fixture's module '%s' does not resolve: %s"),
+						ModuleName, *ModuleError));
+					return false;
+				}
+
+				FName AddedName;
+				if (!FNiagaraAdapter::AddModule(StackAddress, ModuleAsset, AddedName, Errors,
+					/*bDeferStackRefresh=*/false))
+				{
+					AddError(FString::Printf(TEXT("the module could not be added to the asset: %s"),
+						*FString::Join(Errors, TEXT(" | "))));
+					return false;
+				}
+			}
+			else
+			{
+				// The node to delete: the one whose module asset is `SolveForcesAndVelocity`.
+				FScriptStackInfo StackInfo;
+				Errors.Reset();
+				if (!FNiagaraAdapter::GetScriptStackInfo(StackAddress, StackInfo, Errors))
+				{
+					AddError(FString::Printf(TEXT("the fixture's ParticleUpdate stack could not be read: %s"),
+						*FString::Join(Errors, TEXT(" | "))));
+					return false;
+				}
+
+				FName Target = NAME_None;
+				for (const FModuleInfo& Module : StackInfo.Modules)
+				{
+					if (!Module.bIsSetParameters && Module.ModuleName.ToString() == ModuleName)
+					{
+						Target = Module.ModuleName;
+						break;
+					}
+				}
+				if (Target.IsNone())
+				{
+					AddError(FString::Printf(TEXT("the fixture's asset has no '%s' node to remove."), ModuleName));
+					return false;
+				}
+
+				Errors.Reset();
+				if (!FNiagaraAdapter::RemoveModule(StackAddress.WithModule(Target), Errors))
+				{
+					AddError(FString::Printf(TEXT("the module could not be removed from the asset: %s"),
+						*FString::Join(Errors, TEXT(" | "))));
+					return false;
+				}
+
+				// Deleting a node does not delete the rapid-iteration constants it had materialised --
+				// that is the generator's CleanUpStaleParameters, and a rebuild runs it before the stack
+				// is re-applied. Without it the asset would still hold the dead node's constants and the
+				// fact comparison at the end of this case would report them as a loss the pull caused,
+				// which is exactly the kind of measurement error the rest of this suite exists to avoid.
+				Errors.Reset();
+				if (!FNiagaraAdapter::CleanUpStaleParameters(StackAddress, Errors))
+				{
+					AddError(FString::Printf(TEXT("the asset's stale parameters could not be cleaned up: %s"),
+						*FString::Join(Errors, TEXT(" | "))));
+					return false;
+				}
+			}
+		}
+
+		FPullOptions Options;
+		Options.bApply = true;
+		Options.bStructure = true; // this case is the switch's whole reason for existing
+		FPullBaseline Baseline;
+		FPullResult Result;
+		FString NewText;
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, Result, NewText))
+		{
+			return false;
+		}
+
+		if (Result.StructureRefused != 0)
+		{
+			AddError(FString::Printf(TEXT("the structural difference was refused (%d stack(s)); every structural case here is unambiguous by construction."),
+				Result.StructureRefused));
+			return false;
+		}
+
+		// An insertion ADDS a line, so every line below it shifts: the count of positions that differ is
+		// not the number of edits, and the assertion has to be about the file's line count and the
+		// statement that appeared.
+		TArray<FString> BeforeLines;
+		TArray<FString> AfterLines;
+		SourceText.ParseIntoArrayLines(BeforeLines, /*InCullEmpty=*/false);
+		NewText.ParseIntoArrayLines(AfterLines, /*InCullEmpty=*/false);
+		const int32 Delta = AfterLines.Num() - BeforeLines.Num();
+
+		if (bAdd && (Result.Added != 1 || Result.Removed != 0 || Delta != 1))
+		{
+			AddError(FString::Printf(TEXT("expected one added line; the run reported %d added, %d removed and the file went from %d to %d line(s).\n%s%s"),
+				Result.Added, Result.Removed, BeforeLines.Num(), AfterLines.Num(),
+				*DiffFirstLines(SourceText, NewText), *ReportOf(Result)));
+		}
+		if (!bAdd && (Result.Removed != 1 || Result.Added != 0 || Delta != -1))
+		{
+			AddError(FString::Printf(TEXT("expected exactly one removed line and no additions; the run reported %d removed, %d added and the file went from %d to %d line(s).\n%s"),
+				Result.Removed, Result.Added, BeforeLines.Num(), AfterLines.Num(),
+				*ReportOf(Result)));
+		}
+
+		if (bAdd)
+		{
+			// The STATEMENT, not the first line that mentions the module: this fixture's own header
+			// comment names it too, and a test that matched the comment would pass on a pull that wrote
+			// nothing at all.
+			const FString AddedLine = StatementLineContaining(NewText, FString(ModuleName));
+			if (AddedLine.IsEmpty() || !AddedLine.TrimStartAndEnd().EndsWith(TEXT(";")))
+			{
+				AddError(FString::Printf(TEXT("the added line is not a statement: '%s'"), *AddedLine));
+			}
+			else
+			{
+				// The indentation has to come from the file, not from this code.
+				const FString NeighbourIndent = TEXT("            ");
+				if (!AddedLine.StartsWith(NeighbourIndent))
+				{
+					AddError(FString::Printf(
+						TEXT("the added line does not carry the indentation of the statements around it: '%s'"),
+						*AddedLine));
+				}
+				// A whole line, not a fragment glued onto another statement: what follows the added
+				// text on its line has to be a line ending. (`AddedLine` came out of the file already,
+				// so this is about what is next to it -- and the check cannot be `Contains(AddedLine +
+				// "\n")`, because the file's lines end with `\r\n` and that substring is not in one.)
+				const int32 At = NewText.Find(AddedLine, ESearchCase::CaseSensitive);
+				const bool bEndsItsOwnLine = At != INDEX_NONE && At + AddedLine.Len() < NewText.Len()
+					&& (NewText[At + AddedLine.Len()] == TEXT('\n') || NewText[At + AddedLine.Len()] == TEXT('\r'));
+				if (!bEndsItsOwnLine)
+				{
+					AddError(TEXT("the added line is not a line of the file: it has no newline after it."));
+				}
+			}
+		}
+		else if (!LineContaining(NewText, FString(ModuleName) + TEXT("(")).IsEmpty())
+		{
+			AddError(FString::Printf(TEXT("the line the asset no longer has is still there: '%s'"),
+				*LineContaining(NewText, FString(ModuleName) + TEXT("("))));
+		}
+
+		// The closure: rebuild the same asset, in place, from the text the structural edit produced, and
+		// check that the rebuild destroyed nothing. That is the claim the acceptance makes -- pull, then
+		// build, then the safety gate stays quiet -- and it is made here on the asset the editor left
+		// behind rather than on a second object built from scratch.
+		RebuildInPlaceAndCheckForLosses(*this, Parameters, Path, NewText, SourceText, System,
+			bAdd ? TEXT("the rebuild after a module was added to the text")
+			     : TEXT("the rebuild after a module was removed from the text"));
+		return true;
+	}
+
+	// -------------------------------------------------------------------------------------------
+	// StructureRefusedWithoutSwitch: the default is the report.
+	// -------------------------------------------------------------------------------------------
+	if (Parameters == TEXT("StructureRefusedWithoutSwitch"))
+	{
+		FString SourceText;
+		const FString Path = LoadFixture(TEXT("Structure"), SourceText);
+		if (Path.IsEmpty())
+		{
+			return false;
+		}
+
+		FDiagnosticSink BuildDiagnostics;
+		UNiagaraSystem* System = BuildFixture(*this, Path, SourceText, BuildDiagnostics);
+		if (System == nullptr)
+		{
+			return false;
+		}
+
+		TArray<FString> Errors;
+		{
+			FNiagaraAdapter::FWriteScope WriteScope(System);
+			FModuleLibrary Library;
+			FString ModuleError;
+			UNiagaraScript* ModuleAsset = Library.FindModule(TEXT("ScaleColor"), ModuleError);
+			if (ModuleAsset == nullptr)
+			{
+				AddError(FString::Printf(TEXT("the fixture's module does not resolve: %s"), *ModuleError));
+				return false;
+			}
+
+			FName AddedName;
+			if (!FNiagaraAdapter::AddModule(StackAddressOf(System, TEXT("Motes"), EStackKind::ParticleUpdate),
+				ModuleAsset, AddedName, Errors, /*bDeferStackRefresh=*/false))
+			{
+				AddError(FString::Printf(TEXT("the module could not be added to the asset: %s"),
+					*FString::Join(Errors, TEXT(" | "))));
+				return false;
+			}
+		}
+
+		FPullOptions Options;
+		Options.bApply = true; // -Apply and no -Structure: values yes, lines no
+		FPullBaseline Baseline;
+		FPullResult Result;
+		FString NewText;
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, Result, NewText))
+		{
+			return false;
+		}
+
+		if (Result.Added != 0 || Result.Removed != 0)
+		{
+			AddError(FString::Printf(TEXT("without -Structure nothing may be added or removed; the run reported %d added, %d removed."),
+				Result.Added, Result.Removed));
+		}
+		if (Result.StructureRefused != 1)
+		{
+			AddError(FString::Printf(TEXT("the structural difference should have been reported once; it was reported %d time(s)."),
+				Result.StructureRefused));
+		}
+
+		// The run must not have written ANY of the stack: the node positions it would address values
+		// through are exactly what could not be pinned down.
+		if (CountDifferingLines(SourceText, NewText) != 0)
+		{
+			AddError(FString::Printf(
+				TEXT("without -Structure the text must be untouched, and it is not.\n%s"),
+				*DiffFirstLines(SourceText, NewText)));
+		}
+
+		AddInfo(FString::Printf(TEXT("structure refused: %d refused, %d added, %d removed, %d unaddressable."),
+			Result.StructureRefused, Result.Added, Result.Removed, Result.Unaddressable));
 		return true;
 	}
 

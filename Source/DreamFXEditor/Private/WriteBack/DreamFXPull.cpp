@@ -98,6 +98,119 @@ namespace UE::DreamFX::Editor
 			FSourceLocation Location;
 		};
 
+		/**
+		 * Where every line starts, so a structural edit can talk about whole lines.
+		 *
+		 * A statement carries its own token extent, and an edit that removes one has to remove the line
+		 * it sits on -- indentation, and the newline. Whether it may is a question about the rest of
+		 * that line, and this is what can answer it.
+		 */
+		struct FSourceLines
+		{
+			explicit FSourceLines(const FString& InText) : Text(InText)
+			{
+				Starts.Add(0);
+				for (int32 Index = 0; Index < Text.Len(); ++Index)
+				{
+					if (Text[Index] == TEXT('\n'))
+					{
+						Starts.Add(Index + 1);
+					}
+				}
+			}
+
+			/** The offset of the first character of the line holding Offset. */
+			int32 LineStartOf(int32 Offset) const
+			{
+				int32 Low = 0;
+				int32 High = Starts.Num() - 1;
+				while (Low < High)
+				{
+					const int32 Mid = (Low + High + 1) / 2;
+					if (Starts[Mid] <= Offset)
+					{
+						Low = Mid;
+					}
+					else
+					{
+						High = Mid - 1;
+					}
+				}
+				return Starts[Low];
+			}
+
+			/** One past the newline that ends the line holding Offset, or the end of the text. */
+			int32 LineEndOf(int32 Offset) const
+			{
+				int32 At = FMath::Clamp(Offset, 0, Text.Len());
+				while (At < Text.Len() && Text[At] != TEXT('\n'))
+				{
+					++At;
+				}
+				return At < Text.Len() ? At + 1 : Text.Len();
+			}
+
+			/** The line's own ending, so an inserted line matches the file it joins. */
+			FString NewlineAt(int32 Offset) const
+			{
+				const int32 LineStart = LineStartOf(Offset);
+				const int32 LineEnd = LineEndOf(LineStart);
+				if (LineEnd > LineStart && Text[LineEnd - 1] == TEXT('\n'))
+				{
+					return LineEnd >= 2 && Text[LineEnd - 2] == TEXT('\r') ? TEXT("\r\n") : TEXT("\n");
+				}
+				return TEXT("\n");
+			}
+
+			/** True when nothing but whitespace precedes Offset on its line. */
+			bool StartsLine(int32 Offset) const
+			{
+				for (int32 At = LineStartOf(Offset); At < Offset; ++At)
+				{
+					if (Text[At] != TEXT(' ') && Text[At] != TEXT('\t'))
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+
+			/** True when nothing but whitespace follows Offset on its line -- no trailing comment. */
+			bool EndsLine(int32 Offset) const
+			{
+				const int32 LineEnd = LineEndOf(Offset);
+				for (int32 At = Offset; At < LineEnd; ++At)
+				{
+					if (Text[At] != TEXT(' ') && Text[At] != TEXT('\t')
+						&& Text[At] != TEXT('\n') && Text[At] != TEXT('\r'))
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+
+			/** The indentation the line holding Offset carries; empty when it carries none. */
+			FString IndentAt(int32 Offset) const
+			{
+				FString Indent;
+				for (int32 At = LineStartOf(Offset); At < Offset; ++At)
+				{
+					if (Text[At] != TEXT(' ') && Text[At] != TEXT('\t'))
+					{
+						return FString();
+					}
+					Indent.AppendChar(Text[At]);
+				}
+				return Indent;
+			}
+
+			const FString& Text;
+
+		private:
+			TArray<int32> Starts;
+		};
+
 		/** The six stacks pull addresses. The event and stage stacks are read through focus slices. */
 		bool IsFixedStack(EStackKind Kind)
 		{
@@ -837,6 +950,7 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
+		const FSourceLines Lines(SourceText);
 
 		// Every message this run produces, in order, so the report on disk is the same list.
 		//
@@ -1108,16 +1222,14 @@ namespace UE::DreamFX::Editor
 			// The alignment is unique. Whether the two lists are the SAME is now just a count: the
 			// matching is injective, so the text has a node the asset lacks exactly when fewer pairs
 			// came out than the text has nodes, and the other way round for the asset.
-			const bool bShapesDiffer = Correspondence.Matched != Nodes.Num()
+			const bool bStructureNeeded = Correspondence.Matched != Nodes.Num()
 				|| Correspondence.Matched != AssetStack.Modules.Num();
 
-			if (bShapesDiffer)
+			if (bStructureNeeded && !Options.bStructure)
 			{
-				// The difference is located -- the alignment is unique, so there is exactly one way
-				// to line the two lists up -- and that is what makes the message worth printing. It
-				// is not applied: pull rewrites the literals a text already declares and adds no
-				// structure of its own, so a stack whose shape the two sides disagree on is left
-				// entirely alone.
+				// The difference is located -- that is what makes the message worth printing -- and it
+				// is not applied, because adding or removing a line moves modules in the execution
+				// order and that is not something a write-back does behind a switch that is off.
 				TArray<FString> Missing;
 				TArray<FString> Extra;
 				for (int32 Index = 0; Index < AssetStack.Modules.Num(); ++Index)
@@ -1144,10 +1256,12 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
-				Refuse(FString::Printf(
-					TEXT("the asset has %s that the text does not, and the text has %s that the asset does not"),
+				++Result.StructureRefused;
+				Diagnostics.Warning(TEXT("DFX7113"), Stack.Location, Note(FString::Printf(
+					TEXT("pull: %s: the asset has %s that the text does not, and the text has %s that the asset does not. The two lists line up uniquely, so -Structure writes that difference; it adds and removes lines, so it does not happen without the switch. Nothing in this stack was addressed."),
+					*StackLabel,
 					Missing.Num() > 0 ? *FString::Join(Missing, TEXT(", ")) : TEXT("no module"),
-					Extra.Num() > 0 ? *FString::Join(Extra, TEXT(", ")) : TEXT("no statement")));
+					Extra.Num() > 0 ? *FString::Join(Extra, TEXT(", ")) : TEXT("no statement"))));
 				return;
 			}
 
@@ -1184,6 +1298,284 @@ namespace UE::DreamFX::Editor
 						*Node.Call->InstanceName, *Module.ModuleName.ToString()));
 					return;
 				}
+			}
+
+			// --- structure -----------------------------------------------------------------------
+			if (bStructureNeeded)
+			{
+				TArray<FEdit> StructuralEdits;
+				int32 AddedLocally = 0;
+				int32 RemovedLocally = 0;
+				bool bRefused = false;
+				FString RefusalDetail;
+
+				auto RefuseStructure = [&](const FString& Detail)
+				{
+					bRefused = true;
+					RefusalDetail = Detail;
+				};
+
+				const FString StackPrefix = EmitterName.IsNone()
+					? FString(TEXT("Constants."))
+					: FString::Printf(TEXT("Constants.%s."), *EmitterName.ToString());
+
+				// Where a new line goes: above the statement it precedes, or above the block's closing
+				// brace when it is last. Both are line starts, because an inserted statement is a line.
+				auto InsertionOffsetFor = [&](int32 AssetIndex) -> int32
+				{
+					for (int32 Next = AssetIndex + 1; Next < AssetStack.Modules.Num(); ++Next)
+					{
+						const int32 TextIndex = Correspondence.AssetToText[Next];
+						if (TextIndex != INDEX_NONE && Nodes[TextIndex].StartOffset != INDEX_NONE)
+						{
+							return Lines.LineStartOf(Nodes[TextIndex].StartOffset);
+						}
+					}
+					if (Stack.EndOffset == INDEX_NONE || Stack.EndOffset <= 0)
+					{
+						return INDEX_NONE;
+					}
+					return Lines.LineStartOf(Stack.EndOffset - 1);
+				};
+
+				// The indentation an inserted statement gets: the file's own, taken from the nearest
+				// statement that is already there rather than invented. A stack with no statements at
+				// all falls back to the document's other stacks, and only then to four spaces.
+				auto IndentFor = [&](int32 AssetIndex) -> FString
+				{
+					for (int32 Next = AssetIndex + 1; Next < AssetStack.Modules.Num(); ++Next)
+					{
+						const int32 TextIndex = Correspondence.AssetToText[Next];
+						if (TextIndex != INDEX_NONE && Nodes[TextIndex].StartOffset != INDEX_NONE)
+						{
+							return Lines.IndentAt(Nodes[TextIndex].StartOffset);
+						}
+					}
+					for (int32 Previous = AssetIndex - 1; Previous >= 0; --Previous)
+					{
+						const int32 TextIndex = Correspondence.AssetToText[Previous];
+						if (TextIndex != INDEX_NONE && Nodes[TextIndex].StartOffset != INDEX_NONE)
+						{
+							return Lines.IndentAt(Nodes[TextIndex].StartOffset);
+						}
+					}
+					for (const FStack& Sibling : Document.Stacks)
+					{
+						for (const FStatement& Statement : Sibling.Statements)
+						{
+							if (Statement.StartOffset != INDEX_NONE && Lines.StartsLine(Statement.StartOffset))
+							{
+								return Lines.IndentAt(Statement.StartOffset);
+							}
+						}
+					}
+					return TEXT("    ");
+				};
+
+				// Removals first: they depend on nothing the insertions compute.
+				{
+					TSet<int32> Matched;
+					for (const int32 Index : Correspondence.AssetToText)
+					{
+						if (Index != INDEX_NONE)
+						{
+							Matched.Add(Index);
+						}
+					}
+
+					for (int32 Index = 0; Index < Nodes.Num() && !bRefused; ++Index)
+					{
+						if (Matched.Contains(Index))
+						{
+							continue;
+						}
+
+						const FTextNode& Node = Nodes[Index];
+						const FString NodeLabel = Node.bSetParameters
+							? FString(TEXT("<folding assignments>")) : Node.Call->Name;
+
+						if (Node.StartOffset == INDEX_NONE || Node.EndOffset == INDEX_NONE
+							|| Node.StartOffset > SourceText.Len() || Node.EndOffset > SourceText.Len())
+						{
+							RefuseStructure(FString::Printf(
+								TEXT("the text declares '%s' and the asset's stack does not, but the parser recorded no byte range for it"),
+								*NodeLabel));
+							break;
+						}
+
+						const int32 LineStart = Lines.LineStartOf(Node.StartOffset);
+						const int32 LineEnd = Lines.LineEndOf(FMath::Max(Node.StartOffset, Node.EndOffset - 1));
+
+						// The statement has to own its lines, comment included. An edit that ate a
+						// trailing comment would take something the asset never held.
+						if (!Lines.StartsLine(Node.StartOffset) || !Lines.EndsLine(Node.EndOffset))
+						{
+							RefuseStructure(FString::Printf(
+								TEXT("'%s' is not alone on its line, so removing it would take something else with it"),
+								*NodeLabel));
+							break;
+						}
+
+						FEdit Edit;
+						Edit.Kind = EEditKind::Replace;
+						Edit.Start = LineStart;
+						Edit.End = LineEnd;
+						Edit.Old = SourceText.Mid(LineStart, LineEnd - LineStart);
+						Edit.Text = FString(); // a removal replaces the line with nothing
+						Edit.Address = FString::Printf(TEXT("%s: -%s"), *StackLabel, *NodeLabel);
+						Edit.Location = Node.Location;
+						StructuralEdits.Add(MoveTemp(Edit));
+						++RemovedLocally;
+					}
+				}
+
+				// Insertions, in asset order, so the text ends up in execution order.
+				for (int32 Index = 0; Index < AssetStack.Modules.Num() && !bRefused; ++Index)
+				{
+					if (Correspondence.AssetToText[Index] != INDEX_NONE)
+					{
+						continue;
+					}
+
+					const FModuleInfo& Module = AssetStack.Modules[Index];
+					if (Module.bIsSetParameters)
+					{
+						// A Set Parameters module is the fold of a run of assignments, and rebuilding one
+						// means writing that run -- a different edit from adding a module call, and one
+						// with no fixture behind it yet. Refused by name rather than approximated: the
+						// boundary of a fold decides which entries can see each other.
+						RefuseStructure(FString::Printf(
+							TEXT("the asset holds a Set Parameters module ('%s') the text does not declare, and pulling a run of assignments out of one is not something this writes"),
+							*Module.ModuleName.ToString()));
+						break;
+					}
+
+					const int32 InsertAt = InsertionOffsetFor(Index);
+					if (InsertAt == INDEX_NONE)
+					{
+						RefuseStructure(TEXT("the parser did not record where this stack's block ends, so there is nowhere to add a line"));
+						break;
+					}
+
+					// The module's name as the file would write it: the asset's short name when that
+					// resolves back to the same asset, and the full content path when it does not.
+					// Verified rather than assumed, because "FindModule answers the same script" is the
+					// only thing that makes the name a name.
+					const FString ShortName = Module.Script != nullptr ? Module.Script->GetName() : FString();
+					FString ModuleName = ShortName;
+					if (!ModuleName.IsEmpty())
+					{
+						FString ModuleError;
+						UNiagaraScript* Resolved = Modules.FindModule(ModuleName, ModuleError);
+						if (Resolved == nullptr || Module.Script == nullptr
+							|| Resolved->GetPathName() != Module.Script->GetPathName())
+						{
+							ModuleName.Reset();
+						}
+					}
+					if (ModuleName.IsEmpty() && Module.Script != nullptr)
+					{
+						ModuleName = Module.Script->GetOutermost()->GetName();
+					}
+					if (ModuleName.IsEmpty())
+					{
+						RefuseStructure(TEXT("the asset's node runs no module asset, so there is no call to write"));
+						break;
+					}
+
+					// The version pin, when the module has one: it is what keeps the node on the version
+					// the asset was built against instead of whatever the project has today.
+					FString VersionPin;
+					{
+						FScriptVersion Version;
+						Errors.Reset();
+						const FStackAddress ModuleAddress = SystemAddress.WithEmitter(EmitterName)
+							.WithScript(FNiagaraAdapter::ScriptNameForStack(Stack.Kind))
+							.WithModule(Module.ModuleName);
+						if (FNiagaraAdapter::GetModuleScriptVersion(ModuleAddress, Version, Errors) && Version.IsValid())
+						{
+							VersionPin = FString::Printf(TEXT("@%s"), *Version.ToLabel());
+						}
+					}
+
+					// `as <name>` only when the node's name is not the module asset's: a build names a
+					// fresh node after the module when the name is free, so writing the pin where it
+					// agrees is noise, and omitting it where it disagrees is a node with the wrong name.
+					const FString Alias = !ShortName.IsEmpty() && Module.ModuleName.ToString() != ShortName
+						? FString::Printf(TEXT(" as %s"), *Module.ModuleName.ToString())
+						: FString();
+
+					const FString Prefix = StackPrefix + Module.ModuleName.ToString() + TEXT(".");
+
+					TArray<FString> Arguments;
+					for (const FInputInfo& Input : Module.Inputs)
+					{
+						FString Why;
+						const FStoredValue* Value = FindStored(Stored, Prefix + Input.Name.ToString(), Why);
+						if (Value == nullptr)
+						{
+							// No stored constant for this input: the module's own default is what the
+							// asset holds there too, so there is no argument to write.
+							continue;
+						}
+
+						FInputValue AsValue;
+						FString Rendered;
+						if (!MakeStoredInputValue(*Value, AsValue, Why)
+							|| !RenderStoredInputValue(AsValue, *Value, Rendered, Why))
+						{
+							RefuseStructure(FString::Printf(TEXT("the node's input '%s' %s"),
+								*Input.Name.ToString(),
+								Why.IsEmpty() ? TEXT("cannot be written as a literal") : *Why));
+							break;
+						}
+						Arguments.Add(FString::Printf(TEXT("%s = %s"), *ToInputIdentifier(Input.Name), *Rendered));
+					}
+					if (bRefused)
+					{
+						break;
+					}
+
+					const FString Indent = IndentFor(Index);
+					const FString Newline = Lines.NewlineAt(InsertAt);
+					const FString Statement = FString::Printf(TEXT("%s%s%s%s%s(%s);"),
+						*Indent,
+						Module.bEnabled ? TEXT("") : TEXT("disabled "),
+						*ModuleName, *VersionPin, *Alias,
+						*FString::Join(Arguments, TEXT(", ")));
+
+					FEdit Edit;
+					Edit.Kind = EEditKind::Insert;
+					Edit.Start = InsertAt;
+					Edit.End = InsertAt;
+					Edit.Text = Statement + Newline;
+					Edit.Address = FString::Printf(TEXT("%s: +%s"), *StackLabel, *ModuleName);
+					Edit.Location = Stack.Location;
+					StructuralEdits.Add(MoveTemp(Edit));
+					++AddedLocally;
+				}
+
+				if (bRefused)
+				{
+					// A refusal anywhere in this stack's structure means the stack is left alone
+					// entirely: the value writes below address nodes by their position in a list whose
+					// shape is exactly what could not be decided.
+					++Result.StructureRefused;
+					Diagnostics.Warning(TEXT("DFX7113"), Stack.Location, Note(FString::Printf(
+						TEXT("pull: %s: %s. A structural edit is only made where the whole of it is unambiguous, so this stack was left as it is."),
+						*StackLabel, *RefusalDetail)));
+					return;
+				}
+
+				for (const FEdit& Edit : StructuralEdits)
+				{
+					Diagnostics.Info(TEXT("DFX7112"), Edit.Location, Note(FString::Printf(
+						TEXT("pull: %s: %s"), *Edit.Address, *Edit.Text.TrimEnd())));
+				}
+
+				Result.Added += AddedLocally;
+				Result.Removed += RemovedLocally;
+				Edits.Append(StructuralEdits);
 			}
 
 			// --- values --------------------------------------------------------------------------

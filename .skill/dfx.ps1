@@ -174,9 +174,14 @@ param(
     # original's values into that export has no other spelling.
     [string]$Asset,
 
-    # pull: ignore the baseline the last -Apply recorded and compare every declared value from
-    # scratch. The baseline is what makes pull write only what the asset has moved since; without
-    # one on disk pull already behaves this way, and says so (DFX7114).
+    # pull: write the structural differences a stack shows, when they can be located without ambiguity.
+    # Off by default, and off means report: a module the editor has and the text does not is named, and
+    # nothing is written. It adds and removes LINES, where everything else only rewrites characters a
+    # literal already occupies.
+    [switch]$Structure,
+
+    # pull: ignore the baseline the last -Apply recorded and compare every declared value from scratch.
+    # Without one on disk pull already behaves this way, and says so (DFX7114).
     [switch]$NoBaseline
 )
 
@@ -444,6 +449,7 @@ switch ($Command) {
         $arguments += "-Pull=$((Resolve-Path -LiteralPath $Target).Path)"
         if ($Asset) { $arguments += "-Asset=$Asset" }
         if ($Apply) { $arguments += '-Apply' }
+        if ($Structure) { $arguments += '-Structure' }
         if ($NoBaseline) { $arguments += '-NoBaseline' }
     }
 }

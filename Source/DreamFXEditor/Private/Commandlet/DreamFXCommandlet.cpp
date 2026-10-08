@@ -1038,11 +1038,11 @@ namespace
 	 *
 	 * Writes no asset at all, and without -Apply writes no text either: the thing being changed is a
 	 * hand-maintained source file, so the default is the report that says which line would change and
-	 * from what to what. -NoBaseline is the other switch, and it is about which values are candidates
-	 * rather than about what may be written: without it pull writes only what the asset has moved since
-	 * the last apply.
+	 * from what to what. -Structure is the second switch, and it is separate because it is the bigger
+	 * one: it adds and removes LINES, where everything else only rewrites characters a literal already
+	 * occupies.
 	 */
-	int32 RunPull(const FString& FilePath, bool bApply, const FString& AssetOverride,
+	int32 RunPull(const FString& FilePath, bool bApply, const FString& AssetOverride, bool bStructure,
 		bool bNoBaseline)
 	{
 		FString Full = FilePath;
@@ -1059,6 +1059,7 @@ namespace
 		FPullOptions Options;
 		Options.bApply = bApply;
 		Options.AssetOverride = AssetOverride;
+		Options.bStructure = bStructure;
 		Options.bUseBaseline = !bNoBaseline;
 
 		FDiagnosticSink Diagnostics;
@@ -1076,11 +1077,13 @@ namespace
 		// that was given, not what happened inside it: `-Apply` on a file that needed nothing reports
 		// "0 written ... | applied", which is the truth and is what DFX7107 above says in words.
 		UE_LOG(LogDreamFX, Display,
-			TEXT("=== DreamFX pull: %d compared, %d %s, %d not declared, %d not writable, %d withheld, %d stack(s) not addressed | %s%s ==="),
+			TEXT("=== DreamFX pull: %d compared, %d %s, %d not declared, %d not writable, %d withheld, %d stack(s) not addressed, %d line(s) added, %d removed, %d structure(s) refused | %s%s%s ==="),
 			Result.Compared, Result.Changed,
 			Result.bWroteFile ? TEXT("written") : TEXT("to write"),
 			Result.Undeclared, Result.Unwritable, Result.Withheld, Result.Unaddressable,
+			Result.Added, Result.Removed, Result.StructureRefused,
 			bApply ? TEXT("applied") : TEXT("dry run"),
+			Options.bStructure ? TEXT(" | structure") : TEXT(""),
 			bApply && Result.bBaselineWritten ? TEXT(" | baseline recorded") : TEXT(""));
 
 		return Diagnostics.NumErrors();
@@ -1199,7 +1202,8 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 		FString AssetOverride;
 		FParse::Value(*Params, TEXT("Asset="), AssetOverride);
 		return RunPull(PullTarget, FParse::Param(*Params, TEXT("Apply")),
-			AssetOverride, FParse::Param(*Params, TEXT("NoBaseline")));
+			AssetOverride, FParse::Param(*Params, TEXT("Structure")),
+			FParse::Param(*Params, TEXT("NoBaseline")));
 	}
 
 	const bool bLintOnly = FParse::Param(*Params, TEXT("Lint"));

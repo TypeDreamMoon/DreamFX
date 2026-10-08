@@ -27,6 +27,17 @@ namespace UE::DreamFX::Editor
 		FString AssetOverride;
 
 		/**
+		 * Write the structural differences a stack shows, when they can be located without ambiguity
+		 * (write-back ③; `Docs/tools/pull.md`).
+		 *
+		 * Off by default, and off means REPORT: a module the editor has and the text does not is named,
+		 * with the line that would be inserted, and nothing is written. Structure is the one thing a
+		 * text file cannot be wrong about quietly -- a misplaced line moves a module in the execution
+		 * order -- so the switch is explicit and the default is the refusal.
+		 */
+		bool bStructure = false;
+
+		/**
 		 * Compare against the baseline the last `-Apply` recorded (write-back ③'s dirty set).
 		 *
 		 * On by default. A value the text disagrees with but the asset has not changed since that last
@@ -98,6 +109,13 @@ namespace UE::DreamFX::Editor
 
 		/** Values that differ but that the asset has not moved since the baseline: the text's, then. */
 		int32 Withheld = 0;
+
+		/** Statements the structural pass added to the text (`-Structure`). */
+		int32 Added = 0;
+		/** Statements it removed from the text. */
+		int32 Removed = 0;
+		/** Stacks whose structural difference was refused: no unique correspondence, or no switch. */
+		int32 StructureRefused = 0;
 
 		bool bWroteFile = false;
 		FString BackupPath;
