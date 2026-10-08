@@ -1072,7 +1072,7 @@ namespace
 		// that was given, not what happened inside it: `-Apply` on a file that needed nothing reports
 		// "0 written ... | applied", which is the truth and is what DFX7107 above says in words.
 		UE_LOG(LogDreamFX, Display,
-			TEXT("=== DreamFX pull: %d value(s) compared, %d %s, %d not declared, %d not writable, %d stack(s) not addressed | %s ==="),
+			TEXT("=== DreamFX pull: %d compared, %d %s, %d not declared, %d not writable, %d stack(s) not addressed | %s ==="),
 			Result.Compared, Result.Changed,
 			Result.bWroteFile ? TEXT("written") : TEXT("to write"),
 			Result.Undeclared, Result.Unwritable, Result.Unaddressable,

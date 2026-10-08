@@ -1,0 +1,47 @@
+// Write-back fixture: the no-op.
+//
+// The whole point of this file is that pulling it must not change it. It declares one value per kind
+// of thing pull can write back -- a module input, a renderer property, a system setting, a folded
+// assignment -- each of them at the value the build will put in the asset. A pull that produces one
+// byte of difference here has rewritten a line that already said what the asset holds, and that is
+// the failure mode write-back can least afford: it turns a read-only inspection into a diff in
+// somebody's commit.
+//
+// Its four keys are deliberately values a re-rendering would spell differently if the comparison were
+// done on characters: `20.0` against `20`, and a float the engine round-trips through a double.
+System(Name="Corpus/NS_WriteBackNoOp", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime = 0.5;
+        FixedTickDeltaTime = 0.016666668;
+    }
+
+    Emitter Motes
+    {
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 20.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode = DirectSet,
+                Lifetime     = 2.0
+            );
+            SystemLocation();
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            GravityForce(Gravity = (0, 0, -100));
+            SolveForcesAndVelocity();
+            Particles.Drag = 0.5;
+        }
+
+        SpriteRenderer Body
+        {
+            SortOrderHint = 0;
+            FacingMode    = FaceCamera;
+        }
+    }
+}

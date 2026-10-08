@@ -3,6 +3,8 @@
 #include "CoreMinimal.h"
 #include "DreamFXDiagnostics.h"
 
+class UNiagaraSystem;
+
 namespace UE::DreamFX::Editor
 {
 	/** How one pull run is allowed to behave. */
@@ -23,8 +25,8 @@ namespace UE::DreamFX::Editor
 		 * text's own `Name=` still decides what a build writes; this decides only what pull reads.
 		 */
 		FString AssetOverride;
-	};
 
+	};
 	/** What one pull run did, for the summary the caller prints. */
 	struct FPullResult
 	{
@@ -46,6 +48,12 @@ namespace UE::DreamFX::Editor
 		bool bWroteFile = false;
 		FString BackupPath;
 		FString ReportPath;
+
+		/** How many edits of every kind the run produced; the splice count, not the report's. */
+		int32 Edits = 0;
+
+		/** The messages the run produced, in order; the caller writes them beside the diagnostics. */
+		TArray<FString> Report;
 	};
 
 	/**
@@ -59,13 +67,14 @@ namespace UE::DreamFX::Editor
 	 *
 	 * What it may touch is deliberately narrow, and every rule is a refusal rather than a guess:
 	 *
-	 *   * only the ARGUMENT of a module call the text already writes. A value the text does not
-	 *     declare is reported and skipped -- pull never adds or removes structure, so a build's safety
-	 *     gate (DFX8017) stays the thing that decides what a rebuild would drop;
-	 *   * only where the call can be addressed exactly: the asset's own node name, matched to the
-	 *     text's statement at the SAME position in the same stack, with the module asset and the node
-	 *     name verified first. Any disagreement and the whole stack is refused, because rewriting a
-	 *     value through a correspondence that might be off by one is worse than not rewriting it;
+	 *   * the three things a text can already say about an asset -- a module call's arguments, a
+	 *     settings block, a renderer's properties and bindings -- and nothing else. A value the text
+	 *     does not declare is reported and skipped (`DFX7106`), and structure is never added or
+	 *     removed: a module the editor has and the text does not is named, and nothing is written;
+	 *   * only where the address is exact: the asset's own node name, matched to the text's statement
+	 *     at the same position in the same stack, with the module asset and the node name verified
+	 *     first. Any disagreement and the whole stack is refused, because rewriting a value through a
+	 *     correspondence that might be off by one is worse than not rewriting it;
 	 *   * only a literal. A link, a dynamic input, an hlsl block or a curve is a different value MODE,
 	 *     and changing a mode is an edit, not a write-back;
 	 *   * only the value's own characters. The replacement is spliced over the byte range the parser
@@ -75,6 +84,12 @@ namespace UE::DreamFX::Editor
 	 * safety gate compare -- and not the resolved pin. That distinction is the whole reason this exists:
 	 * `NS_Effects1_Mesh` stores `Sprite_Atlas_Size.MeshYaw` = -90 while every read of the pin returns
 	 * 0.0 (write-back-coverage.md 3.5), so a pull that asked the pin would find nothing to write.
+	 *
+	 * A `Settings` key and a renderer property are read through the SAME JSON the plan side writes
+	 * (`GetSystemProperties` / `GetEmitterProperties` / `GetRendererProperties`, the inverse of
+	 * `SetSystemProperties` and friends), and spelled by the one value renderer the decompiler uses as
+	 * well (`WriteBack/DreamFXSourceValue.h`). Reading the property is what keeps the two directions
+	 * from disagreeing about what a setting is; there is no second table.
 	 */
 	class FPuller
 	{
@@ -86,5 +101,19 @@ namespace UE::DreamFX::Editor
 		 */
 		static FPullResult PullFile(const FString& FilePath, const FPullOptions& Options,
 			FDiagnosticSink& Diagnostics);
+
+		/**
+		 * The same write-back over text that is already in memory, which is what makes it testable
+		 * without a file on disk and what lets a caller drive it against a system it built itself.
+		 *
+		 * `SystemOverride` null means "the one the text names, resolved the way a build resolves it".
+		 *
+		 * @param OutNewText  the text with every edit applied. Equal to the input, byte for byte, when
+		 *                    there was nothing to do -- which is the invariant the caller checks.
+		 * @return false only when the run could not proceed at all; diagnostics say why.
+		 */
+		static bool PullText(const FString& SourceText, const FString& FilePath,
+			UNiagaraSystem* SystemOverride, const FPullOptions& Options,
+			FDiagnosticSink& Diagnostics, FPullResult& OutResult, FString& OutNewText);
 	};
 }

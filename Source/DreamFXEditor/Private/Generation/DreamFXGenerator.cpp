@@ -11,6 +11,7 @@
 #include "Lint/DreamFXLint.h"
 #include "Schema/DreamFXModuleLibrary.h"
 #include "SourceFiles/DreamFXPaths.h"
+#include "WriteBack/DreamFXSourceValue.h"
 
 #include "Dom/JsonObject.h"
 #include "Misc/PackageName.h"
@@ -448,6 +449,105 @@ namespace UE::DreamFX::Editor
 			return Name.Equals(TEXT("ModulePaths"), ESearchCase::IgnoreCase);
 		}
 
+		/**
+		 * The alias a value came from, or the value unchanged.
+		 *
+		 * The inverse of `ApplyValueAlias`, and it has to be a real inverse: the setting table's pairs
+		 * are {written, actual}, so reading back means matching the SECOND half and answering the
+		 * first. `SimTarget = CPU` is the case that makes this load-bearing -- a pull that answered
+		 * `CPUSim` would write a spelling the table does not accept, and the next build would reject
+		 * the file it had just been given.
+		 */
+		FString RevertValueAlias(const TCHAR* const* Aliases, const FString& Actual)
+		{
+			if (Aliases == nullptr)
+			{
+				return Actual;
+			}
+			for (int32 Index = 0; Aliases[Index] != nullptr; Index += 2)
+			{
+				if (Actual.Equals(Aliases[Index + 1], ESearchCase::IgnoreCase))
+				{
+					return Aliases[Index];
+				}
+			}
+			return Actual;
+		}
+
+		/**
+		 * One settings value as the source spelling, from the JSON the property writer takes.
+		 *
+		 * The value half of `PlanSettings` run backwards, sharing its spelling rules with the
+		 * decompiler's `WriteChangedSettings` deliberately: those two must agree, and the only way to
+		 * guarantee that is for one implementation to answer both.
+		 */
+		bool RenderSettingValue(const TCHAR* const* ValueAliases, const TSharedPtr<FJsonValue>& Value,
+			FString& OutSource, FString& OutWhy)
+		{
+			if (!Value.IsValid() || Value->IsNull())
+			{
+				OutWhy = TEXT("the asset holds nothing there");
+				return false;
+			}
+
+			switch (Value->Type)
+			{
+			case EJson::Boolean:
+				OutSource = Value->AsBool() ? TEXT("true") : TEXT("false");
+				return true;
+
+			case EJson::Number:
+			{
+				const double Number = Value->AsNumber();
+				OutSource = FMath::IsNearlyEqual(Number, FMath::RoundToDouble(Number))
+					? FString::Printf(TEXT("%lld"), static_cast<int64>(FMath::RoundToDouble(Number)))
+					: FormatFloatLossless(static_cast<float>(Number));
+				return true;
+			}
+
+			case EJson::String:
+			{
+				const FString Spelled = RevertValueAlias(ValueAliases, Value->AsString());
+				OutSource = Spelled.StartsWith(TEXT("/"))
+					? FString::Printf(TEXT("\"%s\""), *Spelled)
+					: Spelled;
+				return true;
+			}
+
+			case EJson::Object:
+			{
+				// The one struct with a spelling: an FBox as `box(min..., max...)`. Written whenever it
+				// is asked for, because the ask is the source declaring `FixedBounds` -- the companion
+				// override flag is what the plan writes to make that declaration live, so a declared box
+				// is by construction a live one.
+				const TSharedPtr<FJsonObject>* Box = nullptr;
+				const TSharedPtr<FJsonObject>* Min = nullptr;
+				const TSharedPtr<FJsonObject>* Max = nullptr;
+				if (!Value->TryGetObject(Box)
+					|| !(*Box)->TryGetObjectField(TEXT("Min"), Min)
+					|| !(*Box)->TryGetObjectField(TEXT("Max"), Max))
+				{
+					OutWhy = TEXT("it is a structured value with no settled spelling of its own");
+					return false;
+				}
+
+				auto Axis = [](const TSharedPtr<FJsonObject>& Corner, const TCHAR* Name)
+				{
+					return FormatFloatLossless(static_cast<float>(Corner->GetNumberField(Name)));
+				};
+
+				OutSource = FString::Printf(TEXT("box(%s, %s, %s, %s, %s, %s)"),
+					*Axis(*Min, TEXT("X")), *Axis(*Min, TEXT("Y")), *Axis(*Min, TEXT("Z")),
+					*Axis(*Max, TEXT("X")), *Axis(*Max, TEXT("Y")), *Axis(*Max, TEXT("Z")));
+				return true;
+			}
+
+			default:
+				OutWhy = TEXT("it is a value type this language does not spell as a setting");
+				return false;
+			}
+		}
+
 		FString ApplyValueAlias(const TCHAR* const* Aliases, const FString& Written)
 		{
 			if (Aliases == nullptr)
@@ -462,6 +562,19 @@ namespace UE::DreamFX::Editor
 				}
 			}
 			return Written;
+		}
+
+		/** The table row a `Settings` key writes through, or null when the key is not one. */
+		const FSettingMapping* FindSettingMapping(const FString& SettingName, bool bSystemScope)
+		{
+			const TArrayView<const FSettingMapping> Mappings = bSystemScope
+				? TArrayView<const FSettingMapping>(SystemSettings)
+				: TArrayView<const FSettingMapping>(EmitterSettings);
+
+			return Mappings.FindByPredicate([&SettingName](const FSettingMapping& Candidate)
+			{
+				return SettingName.Equals(Candidate.SourceName, ESearchCase::IgnoreCase);
+			});
 		}
 
 		/** `box(minX, minY, minZ, maxX, maxY, maxZ)` -> the JSON shape FBox serialises to. */
@@ -3480,6 +3593,135 @@ namespace UE::DreamFX::Editor
 				*Document.Name, *(MountPoint / Relative), FDreamFXPaths::DecompiledNamespace));
 			return false;
 		}
+	}
+
+	bool RenderSettingSource(const FString& SettingName, bool bSystemScope, const FString& PropertiesJson,
+		FString& OutSource, FString& OutWhy)
+	{
+		OutSource.Reset();
+		OutWhy.Reset();
+
+		// The same two tables the plan side writes through. A settings key that is not in them is one
+		// the build would reject as unknown (DFX3020), so refusing here is not a limitation of the
+		// read path -- it is the same contract.
+		const FSettingMapping* Mapping = FindSettingMapping(SettingName, bSystemScope);
+		if (Mapping == nullptr)
+		{
+			TArray<FString> Available;
+			const TArrayView<const FSettingMapping> Mappings = bSystemScope
+				? TArrayView<const FSettingMapping>(SystemSettings)
+				: TArrayView<const FSettingMapping>(EmitterSettings);
+			for (const FSettingMapping& Candidate : Mappings)
+			{
+				Available.Add(Candidate.SourceName);
+			}
+			OutWhy = FString::Printf(TEXT("'%s' is not a setting the %s block writes (it writes: %s)"),
+				*SettingName, bSystemScope ? TEXT("system") : TEXT("emitter"),
+				*FString::Join(Available, TEXT(", ")));
+			return false;
+		}
+
+		TSharedPtr<FJsonObject> Properties;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PropertiesJson);
+		if (!FJsonSerializer::Deserialize(Reader, Properties) || !Properties.IsValid())
+		{
+			OutWhy = TEXT("the asset's settings could not be read");
+			return false;
+		}
+
+		const TSharedPtr<FJsonValue> Value = FindJsonPropertyByPath(Properties, Mapping->PropertyName);
+		if (!Value.IsValid())
+		{
+			OutWhy = FString::Printf(TEXT("the asset holds no '%s' property"), Mapping->PropertyName);
+			return false;
+		}
+
+		return RenderSettingValue(Mapping->ValueAliases, Value, OutSource, OutWhy);
+	}
+
+	bool LowerDeclaredPropertyToJson(const FPropertyEntry& Property, bool bSystemScope,
+		const FString& DefaultRoot, const UClass* RendererClass, TSharedPtr<FJsonValue>& OutJson)
+	{
+		OutJson.Reset();
+		if (!Property.Value.IsValid())
+		{
+			return false;
+		}
+
+		// A scratch sink, and deliberately: the caller has already parsed and planned this file, so a
+		// failure here is not news -- it is this function saying "not a value I can put in JSON".
+		FDiagnosticSink Scratch;
+
+		if (RendererClass != nullptr)
+		{
+			TSharedPtr<FJsonValue> Json;
+			if (!ValueToJson(*Property.Value, DefaultRoot, Property.Name, Scratch, Json) || !Json.IsValid())
+			{
+				return false;
+			}
+
+			// The same wrapping `PlanRenderer` applies: `Meshes = ["/Engine/..."]` is an array of
+			// strings in source and an array of element structs in the asset, and the comparison has
+			// to happen on the asset's side of that conversion or every mesh renderer reads as
+			// changed forever.
+			if (Json->Type == EJson::Array)
+			{
+				FString ReferenceField;
+				FString ElementDefaultsJson;
+				TArray<FString> ReferenceErrors;
+				if (FNiagaraAdapter::GetArrayElementReferenceField(
+					RendererClass, Property.Name, ReferenceField, ElementDefaultsJson, ReferenceErrors))
+				{
+					TArray<TSharedPtr<FJsonValue>> Wrapped;
+					bool bAllStrings = true;
+					for (const TSharedPtr<FJsonValue>& Element : Json->AsArray())
+					{
+						if (!Element.IsValid() || Element->Type != EJson::String)
+						{
+							bAllStrings = false;
+							break;
+						}
+						const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+						Object->SetField(ReferenceField, Element);
+						Wrapped.Add(MakeShared<FJsonValueObject>(Object));
+					}
+					if (bAllStrings && Wrapped.Num() > 0)
+					{
+						Json = MakeShared<FJsonValueArray>(Wrapped);
+					}
+				}
+			}
+
+			OutJson = Json;
+			return true;
+		}
+
+		const FSettingMapping* Mapping = FindSettingMapping(Property.Name, bSystemScope);
+		if (Mapping == nullptr)
+		{
+			return false;
+		}
+
+		TSharedPtr<FJsonValue> Json;
+		if (Property.Value->Kind == EValueKind::Call && Property.Value->Text.Equals(TEXT("box"), ESearchCase::IgnoreCase))
+		{
+			if (!BoxCallToJson(*Property.Value, Property.Name, Scratch, Json))
+			{
+				return false;
+			}
+		}
+		else if (!ValueToJson(*Property.Value, DefaultRoot, Property.Name, Scratch, Json) || !Json.IsValid())
+		{
+			return false;
+		}
+
+		if (Mapping->ValueAliases != nullptr && Json->Type == EJson::String)
+		{
+			Json = MakeShared<FJsonValueString>(ApplyValueAlias(Mapping->ValueAliases, Json->AsString()));
+		}
+
+		OutJson = Json;
+		return true;
 	}
 
 	/**

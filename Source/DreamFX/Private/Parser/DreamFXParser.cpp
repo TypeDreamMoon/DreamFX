@@ -782,6 +782,18 @@ namespace UE::DreamFX
 		{
 			const FToken& Token = Lexer.Peek();
 
+			// The statement's byte range, taken from the scanner as it goes the same way a value's is:
+			// the first token here is the statement's first character (`disabled` included), and the
+			// end is whatever the scanner last consumed -- the `;` when there is one. Long enough to
+			// delete the line a statement owns, and short enough to leave its indentation and its
+			// trailing newline to the writer that knows which it is changing.
+			const int32 StatementStart = Token.Offset;
+			auto CloseStatement = [&](FStatement& InStatement)
+			{
+				InStatement.StartOffset = StatementStart;
+				InStatement.EndOffset = FMath::Max(Lexer.LastTokenEnd(), StatementStart);
+			};
+
 			// `#Region "label"` / `#EndRegion`. v1 keeps these as text only (L5).
 			if (Token.IsSymbol(TEXT("#")))
 			{
@@ -953,6 +965,7 @@ namespace UE::DreamFX
 			}
 
 			Lexer.TryConsumeSymbol(TEXT(";"));
+			CloseStatement(Statement);
 			OutStack.Statements.Add(MoveTemp(Statement));
 			return true;
 		}
@@ -983,7 +996,15 @@ namespace UE::DreamFX
 					FString::Printf(TEXT("'#Region \"%s\"' was never closed with '#EndRegion'."), *RegionStack.Last()));
 			}
 
-			return Expect(TEXT("}"));
+			if (!Expect(TEXT("}")))
+			{
+				return false;
+			}
+
+			// The block's end, past the `}`: what an appending writer aims at, and the only place in
+			// the tree that knows where the stack stops.
+			OutStack.EndOffset = Lexer.LastTokenEnd();
+			return true;
 		}
 
 		bool FParserImpl::ParseRendererDeclaration(FRenderer& OutRenderer)
@@ -1018,11 +1039,13 @@ namespace UE::DreamFX
 						continue;
 					}
 					FSourceLocation TargetLocation;
+					Binding.TargetStartOffset = Lexer.Peek().Offset;
 					if (!ParseQualifiedName(Binding.Target, TargetLocation))
 					{
 						SkipToStatementEnd();
 						continue;
 					}
+					Binding.TargetEndOffset = Lexer.LastTokenEnd();
 					Lexer.TryConsumeSymbol(TEXT(";"));
 					OutRenderer.Bindings.Add(MoveTemp(Binding));
 				}

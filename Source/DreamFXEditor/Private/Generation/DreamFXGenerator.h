@@ -76,6 +76,38 @@ namespace UE::DreamFX::Editor
 	};
 
 	/**
+	 * One `Settings` key, read back out of the asset's properties JSON in its source spelling.
+	 *
+	 * The inverse of the plan side's `PlanSettings`, and it lives here rather than in the reader
+	 * because the two settings tables above it are the contract: a key the plan writes and a key this
+	 * recognises are the same list, and a second copy of that list would drift from it exactly the way
+	 * the decompiler's own field table was measured to (write-back-coverage.md 3.8).
+	 *
+	 * @param bSystemScope  system settings when true, emitter settings when false.
+	 * @return false with a reason when the key is not a setting, or the value has no spelling.
+	 */
+	bool RenderSettingSource(const FString& SettingName, bool bSystemScope,
+		const FString& PropertiesJson, FString& OutSource, FString& OutWhy);
+
+	/**
+	 * The JSON one declared property writes, taken from the same code path the plan writes through.
+	 *
+	 * This is how a reader decides whether a text already MEANS what the asset holds, which is not a
+	 * question about spelling: `Material = "Plugin.MoonToon:Materials/FX/M_Chunk"` and the asset's
+	 * absolute `/MoonToon/Materials/FX/M_Chunk` are the same value written two ways, and a comparison
+	 * on characters would rewrite the line -- breaking, on its own, the invariant that a pull with
+	 * nothing to do does not touch a byte. Converting the text's value with the generator's own
+	 * converter and comparing the JSON is the only comparison that cannot disagree with the build.
+	 *
+	 * @param bSystemScope  which settings table the key belongs to; ignored for a renderer property.
+	 * @param RendererClass non-null for a renderer property block, whose keys are property names and
+	 *                      whose array-valued keys need the element-struct wrapping the plan applies.
+	 * @return false when the value cannot be put in JSON at all -- the caller reports and skips.
+	 */
+	bool LowerDeclaredPropertyToJson(const FPropertyEntry& Property, bool bSystemScope,
+		const FString& DefaultRoot, const UClass* RendererClass, TSharedPtr<FJsonValue>& OutJson);
+
+	/**
 	 * Text to Niagara asset.
 	 *
 	 * Failure ordering matters (plan 4.5): everything that can fail -- parsing, module resolution,
