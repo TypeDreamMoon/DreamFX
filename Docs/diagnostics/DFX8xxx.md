@@ -293,7 +293,7 @@ keep authoring that emitter in the Niagara editor; a rebuilt mirror will not run
 '%s' was not saved: rebuilding it would drop %d fact(s) this source cannot express, and a save would destroy them. They are listed above, and the asset still holds every one of them. -Force writes anyway; full lists in %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:449`, `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:455`
+**Raised by** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:537`, `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:543`
 <!-- generated:end DFX8017 -->
 
 **Cause.** A rebuild would leave the asset holding less than it holds now, so the save was refused. One line is
