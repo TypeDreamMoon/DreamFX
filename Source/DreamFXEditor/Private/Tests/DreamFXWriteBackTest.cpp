@@ -4,6 +4,7 @@
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
 #include "Diff/DreamFXAssetFacts.h"
+#include "Diff/DreamFXBuildSafetyGate.h"
 #include "DreamFXDiagnostics.h"
 #include "DreamFXParser.h"
 #include "DreamFXTypes.h"
@@ -262,6 +263,17 @@ namespace UE::DreamFX::Editor::WriteBackTests
 		return Out;
 	}
 
+	/** What one in-place rebuild did to the facts the asset held: the three outcomes, counted. */
+	struct FRebuildLosses
+	{
+		/** The address the fact spells is still there: the gate's rules 2 to 4 (a real loss). */
+		int32 Lost = 0;
+		/** The address went, but another script still stores the same value: a collapse, not drift. */
+		int32 Merged = 0;
+		/** The address went with the structure: the text's doing (the gate's rule 1). */
+		int32 StructuresGone = 0;
+	};
+
 	/**
 	 * Rebuilds the SAME asset from the text a pull just produced, and reports what the rebuild lost.
 	 *
@@ -276,20 +288,22 @@ namespace UE::DreamFX::Editor::WriteBackTests
 	 *   * the ADDRESS is gone -- a module the text removed, or a node the structural edit dropped. The
 	 *     text's doing, and the gate's own rule 1 ignores it too;
 	 *   * the address is gone but the same address WITHOUT its script label survives, with the same
-	 *     value. Nothing was destroyed: the rebuild collapsed two identical copies into one. Reported,
-	 *     not failed on, because the copy count is not state -- but reported, because the gate does not
-	 *     make that distinction and a reader should know where the two disagree.
+	 *     value. Nothing was destroyed: the rebuild collapsed two identical copies into one — and this
+	 *     is the case the gate now agrees about (`FBuildSafetyGate::Compare` calls it a collapse and
+	 *     does not refuse), which is why it is reported WITHOUT failing the case. Counted separately
+	 *     so a case can assert the collapse really happened rather than merely not fail.
 	 *
 	 * `compiled` facts are left out entirely: they are the compiler's own view of a script, a recompile
 	 * rewrites the line, and the gate treats that family as self-scoped for the same reason.
 	 */
-	void RebuildInPlaceAndCheckForLosses(FAutomationTestBase& Test, const FString& CaseName,
+	FRebuildLosses RebuildInPlaceAndCheckForLosses(FAutomationTestBase& Test, const FString& CaseName,
 		const FString& Path, const FString& NewText, const FString& SourceText, UNiagaraSystem* System,
 		const FString& Context)
 	{
+		FRebuildLosses Losses;
 		if (System == nullptr)
 		{
-			return;
+			return Losses;
 		}
 
 		TArray<FString> BeforeRaw;
@@ -309,7 +323,7 @@ namespace UE::DreamFX::Editor::WriteBackTests
 		{
 			Test.AddError(FString::Printf(TEXT("%s: the rewritten text does not parse.\n%s"),
 				*CaseName, *FormatDiagnostics(RebuildDiagnostics)));
-			return;
+			return Losses;
 		}
 
 		FGenerateOptions RebuildOptions;
@@ -320,14 +334,14 @@ namespace UE::DreamFX::Editor::WriteBackTests
 		{
 			Test.AddError(FString::Printf(TEXT("%s: the rewritten text does not build.\n%s"),
 				*CaseName, *FormatDiagnostics(RebuildDiagnostics)));
-			return;
+			return Losses;
 		}
 		if (Result.System != System)
 		{
 			Test.AddError(FString::Printf(
 				TEXT("%s: the rebuild produced a different asset object, so this comparison measured two assets rather than one rebuild."),
 				*CaseName));
-			return;
+			return Losses;
 		}
 
 		TArray<FString> AfterRaw;
@@ -378,7 +392,11 @@ namespace UE::DreamFX::Editor::WriteBackTests
 			if (AfterStoreValues.Contains(
 				Addressed.Store + TEXT("\x1f") + Addressed.Subject + TEXT("\x1f") + Addressed.Value))
 			{
-				Collapsed.Add(Fact); // the same value, one copy fewer: nothing was destroyed
+				// The same value is still stored, under the address without its script label: a
+				// collapse of two identical copies into one. FBuildSafetyGate::Compare treats it as a
+				// collapse too (write-back-coverage.md 6.8, rule 2's exception) and does not refuse a
+				// save over it, so a case that expects one asserts `Merged`, not merely "no failure".
+				Collapsed.Add(Fact);
 				continue;
 			}
 			StructuresGone.Add(Fact); // the text removed the structure this lived in
@@ -405,10 +423,15 @@ namespace UE::DreamFX::Editor::WriteBackTests
 				*Report));
 		}
 
+		Losses.Lost = Lost.Num();
+		Losses.Merged = Collapsed.Num();
+		Losses.StructuresGone = StructuresGone.Num();
+
 		Test.AddInfo(FString::Printf(
 			TEXT("%s: rebuilt in place from the pulled text -- %d fact(s) before, %d after, %d lost, %d duplicate copy/copies collapsed, %d structure(s) the text removed (the %d-line text diff is above)."),
 			*CaseName, Before.Num(), After.Num(), Lost.Num(), Collapsed.Num(), StructuresGone.Num(),
 			CountDifferingLines(SourceText, NewText)));
+		return Losses;
 	}
 
 	/** The stack address of one emitter stack. */
@@ -513,6 +536,7 @@ void FDreamFXWriteBackTest::GetTests(TArray<FString>& OutBeautifiedNames, TArray
 	{
 		TEXT("NoOp"),
 		TEXT("ModuleInput"),
+		TEXT("CollapsedCopy"),
 		TEXT("RendererProperty"),
 		TEXT("SystemSetting"),
 		TEXT("Assignment"),
@@ -700,8 +724,116 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 		// an asset's own state, and the state that matters is the one a following `dfx build` leaves
 		// behind: that is what the build safety gate (DFX8017) looks at, one capture on either side of
 		// its own rebuild. So this is that comparison, made directly.
-		RebuildInPlaceAndCheckForLosses(*this, Parameters, Path, NewText, SourceText, System,
-			TEXT("the rebuild pull's text asked for"));
+		const FRebuildLosses Losses = RebuildInPlaceAndCheckForLosses(*this, Parameters, Path, NewText,
+			SourceText, System, TEXT("the rebuild pull's text asked for"));
+
+		// The assertion this case exists for, and it is about the CLASSIFICATION rather than about
+		// surviving: `SetInput` left the constant in two scripts' stores, the rebuild keeps one, and
+		// the case has to say so. A change that turns the collapse back into drift fails here, and so
+		// does one that makes the fact disappear from the report entirely.
+		if (Losses.Lost != 0 || Losses.Merged != 1)
+		{
+			AddError(FString::Printf(
+				TEXT("the editor's own write put one constant in two scripts' stores and the rebuild materialises one, so this case is one collapse and no loss; the run reported %d lost, %d collapsed."),
+				Losses.Lost, Losses.Merged));
+		}
+		return true;
+	}
+
+	// -------------------------------------------------------------------------------------------
+	// CollapsedCopy: rule 2's exception, on the pairs of fact sets it has to tell apart.
+	// -------------------------------------------------------------------------------------------
+	if (Parameters == TEXT("CollapsedCopy"))
+	{
+		using namespace UE::DreamFX::Editor;
+
+		// The shape the editor's own write produces: an emitter update module's constant lives in the
+		// system update script, `SetInput` (the slider) also writes a copy into the system spawn
+		// script, and a rebuild materialises exactly one. Measured on a real asset -- see
+		// write-back-coverage.md 6.10 for the raw log.
+		const FString SpawnCopy = TEXT("ri system-spawn Constants.Motes.SpawnRate.SpawnRate (NiagaraFloat) = 00002842");
+		const FString UpdateCopy = TEXT("ri system-update Constants.Motes.SpawnRate.SpawnRate (NiagaraFloat) = 00002842");
+		const FString Address = TEXT("ri Constants.Motes.SpawnRate");
+		const FString Subject = TEXT("SpawnRate");
+
+		// The two answers the source can give about that address: the input is named, or the module is
+		// named and this input is not one of its arguments.
+		FDeclaredFacts NamesTheInput;
+		NamesTheInput.Add(Address, Subject);
+		FDeclaredFacts NamesTheModuleOnly;
+		NamesTheModuleOnly.Add(Address, TEXT("Spawn Probability"));
+
+		// 1. Two copies of one value, and the rebuild keeps one: a collapse. The case that used to
+		//    refuse a save -- and that the write-back loop reaches every time somebody drags a slider
+		//    and then pulls.
+		{
+			const FBuildSafetyGate::FComparison Comparison = FBuildSafetyGate::Compare(
+				{ SpawnCopy, UpdateCopy }, { UpdateCopy }, NamesTheInput);
+
+			if (Comparison.NumRefused() != 0 || Comparison.NumCollapsed() != 1 || Comparison.Candidates != 1)
+			{
+				AddError(FString::Printf(
+					TEXT("two identical copies becoming one is a collapse and not a loss: expected 0 refused, 1 collapsed, 1 candidate; got %d refused, %d collapsed, %d candidate(s)."),
+					Comparison.NumRefused(), Comparison.NumCollapsed(), Comparison.Candidates));
+			}
+		}
+
+		// 2. The two stores DISAGREE, and the rebuild keeps the copy it owns: the value the other copy
+		//    held is gone, nothing holds it, and the gate refuses exactly as it did before the exception
+		//    existed. This is the assertion that keeps the exception from being "a copy went, never
+		//    mind" -- and the state pull's own reader refuses to write back from (Docs/tools/pull.md 6).
+		{
+			const FString OtherValue = TEXT("ri system-update Constants.Motes.SpawnRate.SpawnRate (NiagaraFloat) = 0000A040");
+			const FBuildSafetyGate::FComparison Comparison = FBuildSafetyGate::Compare(
+				{ SpawnCopy, OtherValue }, { OtherValue }, NamesTheModuleOnly);
+
+			if (Comparison.NumRefused() != 1 || Comparison.NumCollapsed() != 0)
+			{
+				AddError(FString::Printf(
+					TEXT("a copy whose value nothing holds any more is drift: expected 1 refused, 0 collapsed; got %d refused, %d collapsed."),
+					Comparison.NumRefused(), Comparison.NumCollapsed()));
+			}
+			else if (Comparison.Verdicts[0].Kind != FBuildSafetyGate::FVerdict::EKind::Deterministic)
+			{
+				AddError(TEXT("the refusal above should be the actionable one: the module is declared and this input is not."));
+			}
+		}
+
+		// 3. The same pair, with the source naming the input: rule 3, and this round did not touch it.
+		//    A value the text writes is a value the text meant, so the change is allowed through -- the
+		//    exception is narrow (a value that is still stored somewhere), not a general amnesty.
+		{
+			const FString Changed = TEXT("ri system-update Constants.Motes.SpawnRate.SpawnRate (NiagaraFloat) = 0000A040");
+			const FBuildSafetyGate::FComparison Comparison = FBuildSafetyGate::Compare(
+				{ SpawnCopy, UpdateCopy }, { Changed }, NamesTheInput);
+
+			if (Comparison.NumRefused() != 0 || Comparison.NumCollapsed() != 0)
+			{
+				AddError(FString::Printf(
+					TEXT("a changed value the text names is the text's own edit (rule 3): expected 0 refused, 0 collapsed; got %d refused, %d collapsed."),
+					Comparison.NumRefused(), Comparison.NumCollapsed()));
+			}
+		}
+
+		// 4. Rule 2 unchanged: the address stays and the subject is gone entirely. (This is the shape
+		//    破空灰尘's eight losses have -- `-> (missing)`.)
+		{
+			const FString OtherInput = TEXT("ri system-update Constants.Motes.SpawnRate.Spawn Probability (NiagaraFloat) = 0000803F");
+			const FBuildSafetyGate::FComparison Comparison = FBuildSafetyGate::Compare(
+				{ SpawnCopy }, { OtherInput }, NamesTheModuleOnly);
+
+			if (Comparison.NumRefused() != 1 || Comparison.NumCollapsed() != 0
+				|| Comparison.Verdicts[0].NewValue != TEXT("(missing)"))
+			{
+				AddError(FString::Printf(
+					TEXT("a fact that vanished with nothing left holding it is (missing) and drift: got %d refused, %d collapsed, new value '%s'."),
+					Comparison.NumRefused(), Comparison.NumCollapsed(), *Comparison.Verdicts[0].NewValue));
+			}
+		}
+
+		AddInfo(FString::Printf(
+			TEXT("collapsed copy: the pair with one value collapses (%s, twice in the asset, once after a rebuild); the pair whose value is gone is refused as drift."),
+			*Subject));
 		return true;
 	}
 
