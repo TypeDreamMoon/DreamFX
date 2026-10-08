@@ -127,6 +127,9 @@ namespace UE::DreamFX::Editor
 		struct FComparison
 		{
 			TArray<FVerdict> Verdicts;
+			/** Comparable facts on each side after canonicalisation: what the report counts. */
+			int32 BeforeCount = 0;
+			int32 AfterCount = 0;
 			/** Leftover facts inside a structure the rebuild kept. */
 			int32 Candidates = 0;
 			/** Facts the rebuild added. */

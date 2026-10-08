@@ -256,6 +256,9 @@ namespace UE::DreamFX::Editor
 		TArray<FString> AfterFacts;
 		CollectComparableFacts(AfterFactsRaw, AfterFacts);
 
+		Out.BeforeCount = BeforeFacts.Num();
+		Out.AfterCount = AfterFacts.Num();
+
 		// The multiset difference of the two sets: a fact both sides carry the same number of times is
 		// agreement however the facts are ordered, so what is left over on the before side is every
 		// fact the rebuild no longer holds. The same comparison asset-diff makes, for the same reason.
@@ -402,17 +405,6 @@ namespace UE::DreamFX::Editor
 		TArray<FVerdict> Reported;
 		TArray<FString> ReportedFacts;
 		TArray<FString> Collapsed;
-		int32 BeforeCount = 0;
-		int32 AfterCount = 0;
-		{
-			TArray<FString> BeforeFacts;
-			CollectComparableFacts(Before.Facts, BeforeFacts);
-			BeforeCount = BeforeFacts.Num();
-
-			TArray<FString> AfterFacts;
-			CollectComparableFacts(RawAfter, AfterFacts);
-			AfterCount = AfterFacts.Num();
-		}
 
 		for (const FVerdict& Verdict : Comparison.Verdicts)
 		{
@@ -445,7 +437,7 @@ namespace UE::DreamFX::Editor
 			{
 				UE_LOG(LogDreamFX, Verbose,
 					TEXT("build safety: '%s' still holds every one of its %d fact(s) after the rebuild; %d duplicate cop(y/ies) of a constant another script's store also carries collapsed into one."),
-					*AssetPath, BeforeCount, Collapsed.Num());
+					*AssetPath, Comparison.BeforeCount, Collapsed.Num());
 				ReportCollapsed();
 			}
 			else
@@ -454,7 +446,7 @@ namespace UE::DreamFX::Editor
 				// build checked?" has an answer in the log rather than an absence of evidence.
 				UE_LOG(LogDreamFX, Verbose,
 					TEXT("build safety: '%s' still holds all %d fact(s) after the rebuild."),
-					*AssetPath, BeforeCount);
+					*AssetPath, Comparison.BeforeCount);
 			}
 			return true;
 		}
@@ -488,7 +480,7 @@ namespace UE::DreamFX::Editor
 
 		Report(FString::Printf(
 			TEXT("build safety: '%s' held %d fact(s), the rebuild produces %d; of the %d fact(s) it no longer holds exactly, %d are drift inside a structure the rebuild kept, %d gained."),
-			*AssetPath, BeforeCount, AfterCount, Comparison.Candidates, Reported.Num(), Comparison.Gained));
+			*AssetPath, Comparison.BeforeCount, Comparison.AfterCount, Comparison.Candidates, Reported.Num(), Comparison.Gained));
 
 		// Beside the refusals rather than folded into their count: the two are different answers, and a
 		// reader who has to reach for -Force should be able to see how much of what went was not drift
