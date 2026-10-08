@@ -73,6 +73,35 @@ namespace UE::DreamFX::Editor
 			return Kind != EStackKind::EventHandler && Kind != EStackKind::SimulationStage;
 		}
 
+		/**
+		 * A stack's name without its enum qualification.
+		 *
+		 * The external edit API is not consistent about which spelling it uses: every ADDRESSING call
+		 * takes the qualified enum name (`ENiagaraScriptUsage::ParticleSpawnScript`, which is what
+		 * ScriptNameForStack answers and what the writes want), while the topology READ reports the
+		 * short one (`ParticleSpawnScript`). Matching a read against a write therefore has to compare
+		 * the unqualified halves, or every emitter stack looks absent from its own asset.
+		 */
+		FString ShortScriptName(const FString& Name)
+		{
+			int32 Colon = INDEX_NONE;
+			return Name.FindLastChar(TEXT(':'), Colon) ? Name.RightChop(Colon + 1) : Name;
+		}
+
+		/** The asset's stack for one stack kind, matched on the unqualified name. */
+		const FScriptStackInfo* FindAssetStack(const FEmitterInfo& Info, EStackKind Kind)
+		{
+			const FString Wanted = ShortScriptName(FNiagaraAdapter::ScriptNameForStack(Kind).ToString());
+			for (const FScriptStackInfo& Candidate : Info.Stacks)
+			{
+				if (ShortScriptName(Candidate.ScriptName.ToString()) == Wanted)
+				{
+					return &Candidate;
+				}
+			}
+			return nullptr;
+		}
+
 		/** Reads one parameter store into the index, keeping every copy of a name. */
 		void CollectStore(const FString& ScriptLabel, const FNiagaraParameterStore& Store,
 			TMap<FString, TArray<FStoredValue>>& Out)
@@ -378,13 +407,17 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
-		// Every message this run produces, in order, so the -Apply report on disk is the same list.
+		// Every message this run produces, in order, so the report on disk is the same list.
+		//
+		// `Note` records a line and hands the same string back, which keeps every diagnostic a literal
+		// `Diagnostics.<Severity>(TEXT("DFXnnnn"), ...)` with its message in the same statement:
+		// `.skill/gen-diagnostics.ps1` finds codes by that spelling, and a code it cannot find is a code
+		// that quietly stops being documented.
 		TArray<FString> ReportLines;
-		auto Report = [&Diagnostics, &ReportLines](EDiagnosticSeverity Severity, const TCHAR* Code,
-			const FSourceLocation& Location, const FString& Message)
+		auto Note = [&ReportLines](const FString& Message)
 		{
-			Diagnostics.Add(Severity, Code, Location, Message);
 			ReportLines.Add(Message);
+			return Message;
 		};
 
 		TArray<FEdit> Edits;
@@ -429,15 +462,30 @@ namespace UE::DreamFX::Editor
 			auto Refuse = [&](const FString& Detail)
 			{
 				++Result.Unaddressable;
-				Report(EDiagnosticSeverity::Warning, TEXT("DFX7109"), Stack.Location, FString::Printf(
+				Diagnostics.Warning(TEXT("DFX7109"), Stack.Location, Note(FString::Printf(
 					TEXT("pull: %s: %s. pull rewrites literals inside a structure both sides agree on, so nothing in this stack was addressed."),
-					*StackLabel, *Detail));
+					*StackLabel, *Detail)));
 			};
 
 			if (Nodes.Num() != AssetStack.Modules.Num())
 			{
-				Refuse(FString::Printf(TEXT("the text declares %d node(s) and the asset's stack holds %d"),
-					Nodes.Num(), AssetStack.Modules.Num()));
+				// Both lists, because the difference between them IS the diagnosis: an off-by-one
+				// between two lists of module names says which statement has no node under it.
+				TArray<FString> AssetModules;
+				for (const FModuleInfo& Module : AssetStack.Modules)
+				{
+					AssetModules.Add(Module.ModuleName.ToString());
+				}
+				TArray<FString> TextModules;
+				for (const FTextNode& Node : Nodes)
+				{
+					TextModules.Add(Node.bSetParameters ? TEXT("<folding assignments>") : Node.Call->Name);
+				}
+
+				Refuse(FString::Printf(
+					TEXT("the text declares %d node(s) (%s) and the asset's stack holds %d (%s)"),
+					Nodes.Num(), *FString::Join(TextModules, TEXT(", ")),
+					AssetStack.Modules.Num(), *FString::Join(AssetModules, TEXT(", "))));
 				return;
 			}
 
@@ -538,14 +586,13 @@ namespace UE::DreamFX::Editor
 					auto CannotWrite = [&](const FString& Why)
 					{
 						++Result.Unwritable;
-						Report(EDiagnosticSeverity::Info, TEXT("DFX7111"), Node.Call->Location,
-							FString::Printf(TEXT("pull: %s.%s is declared but was not written back: %s"),
-								*Module.ModuleName.ToString(), *Address, *Why));
+						Diagnostics.Info(TEXT("DFX7111"), Node.Call->Location, Note(FString::Printf(
+							TEXT("pull: %s is declared but was not written back: %s"), *Address, *Why)));
 					};
 
 					// The argument the text wrote for it, matched the way the generator matches input
-					// names. More than one match, on either side, is refused: `Scale RGB` and the inline
-					// condition `ScaleRGB` are one identifier to this language.
+					// names: normalization drops spaces, hyphens and case, so `Scale RGB` and the inline
+					// edit condition `ScaleRGB` that gates it are ONE identifier here.
 					TArray<const FNamedArgument*> Arguments;
 					for (const FNamedArgument& Argument : Node.Call->Arguments)
 					{
@@ -560,12 +607,71 @@ namespace UE::DreamFX::Editor
 							TEXT("the call writes %d arguments that name this input"), Arguments.Num()));
 						continue;
 					}
+
+					// And so are the live inputs. Which one the written value MEANS is decided by its
+					// type, the way the generator decides it -- so an argument that means a different
+					// input than this stored value's is that input's business, not drift, and says
+					// nothing here. Without this, `ScaleRGB = true` (the bool edit condition) reads as a
+					// bool written into `Scale RGB` (a Vector3) and every call to that module reports a
+					// type error that has nothing to do with the asset.
+					bool bMeansAnotherInput = false;
+					if (Arguments.Num() == 1 && Arguments[0]->Value.IsValid())
+					{
+						TArray<const FInputInfo*> Candidates;
+						for (const FInputInfo& Candidate : Module.Inputs)
+						{
+							if (NormalizeInputIdentifier(Candidate.Name.ToString()) == Identifier)
+							{
+								Candidates.Add(&Candidate);
+							}
+						}
+
+						if (Candidates.Num() > 1)
+						{
+							TArray<const FInputInfo*> Accepting;
+							for (const FInputInfo* Candidate : Candidates)
+							{
+								FInputValue ScratchValue;
+								FDiagnosticSink ScratchSink;
+								if (FValueLowering::Lower(*Arguments[0]->Value, Candidate->Type, Address,
+									ScratchSink, ScratchValue))
+								{
+									Accepting.Add(Candidate);
+								}
+							}
+
+							if (Accepting.Num() == 1)
+							{
+								bMeansAnotherInput = !Accepting[0]->Name.IsEqual(FName(*InputName));
+							}
+							else if (Accepting.Num() > 1)
+							{
+								CannotWrite(FString::Printf(
+									TEXT("%d inputs share this name and more than one of them accepts the written value, so which one it means is not something pull can tell"),
+									Candidates.Num()));
+								continue;
+							}
+						}
+					}
+
+					if (bMeansAnotherInput)
+					{
+						UE_LOG(LogDreamFX, Verbose,
+							TEXT("pull: '%s' writes a value for an input other than the stored '%s.%s'; nothing to write back for that one."),
+							*Address, *Module.ModuleName.ToString(), *InputName);
+						continue;
+					}
+
 					if (Arguments.Num() == 0)
 					{
 						++Result.Undeclared;
-						Report(EDiagnosticSeverity::Info, TEXT("DFX7106"), Node.Call->Location, FString::Printf(
-							TEXT("pull: '%s' holds a value for %s, which this text does not declare. pull rewrites the literals a call already has and never adds structure -- write the input into the text first, or let the build safety gate (DFX8017) handle what a rebuild would drop."),
-							*Result.AssetPath, *Address));
+						// One short line per stored value, however many there are. A real asset
+						// materialises a constant for every input of every module, so this list is long
+						// by nature; the paragraph explaining what pull will not do about it is printed
+						// once, in the summary, rather than ninety times here.
+						Diagnostics.Info(TEXT("DFX7106"), Node.Call->Location, Note(FString::Printf(
+							TEXT("pull: %s is stored on the asset and not declared in this text -- skipped. pull adds no structure."),
+							*Address)));
 						continue;
 					}
 
@@ -657,9 +763,9 @@ namespace UE::DreamFX::Editor
 			if (!IsFixedStack(Stack.Kind))
 			{
 				++Result.Unwritable;
-				Report(EDiagnosticSeverity::Info, TEXT("DFX7111"), Stack.Location, FString::Printf(
+				Diagnostics.Info(TEXT("DFX7111"), Stack.Location, Note(FString::Printf(
 					TEXT("pull: the %s stack is not addressed in v1 (an event or stage stack is read through a focus slice, which is a different mechanism); nothing in it was written back."),
-					LexStackKind(Stack.Kind)));
+					LexStackKind(Stack.Kind))));
 				continue;
 			}
 
@@ -669,9 +775,9 @@ namespace UE::DreamFX::Editor
 			if (!FNiagaraAdapter::GetScriptStackInfo(SystemAddress.WithScript(ScriptName), Info, Errors))
 			{
 				++Result.Unaddressable;
-				Report(EDiagnosticSeverity::Warning, TEXT("DFX7109"), Stack.Location, FString::Printf(
+				Diagnostics.Warning(TEXT("DFX7109"), Stack.Location, Note(FString::Printf(
 					TEXT("pull: the asset's %s could not be read (%s), so nothing in it was addressed."),
-					*ScriptName.ToString(), *FString::Join(Errors, TEXT(" | "))));
+					*ScriptName.ToString(), *FString::Join(Errors, TEXT(" | ")))));
 				continue;
 			}
 
@@ -679,9 +785,15 @@ namespace UE::DreamFX::Editor
 		}
 
 		// --- the emitters ----------------------------------------------------------------------
-		FEmitterInfo EmitterInfo;
 		for (const FEmitter& Emitter : Document.Emitters)
 		{
+			// A FRESH struct per emitter, and that is not a style choice: GetEmitterInfo APPENDS its
+			// four stacks to whatever the out-parameter already holds, so one instance reused across
+			// emitters answers the second emitter with the FIRST one's stacks. Measured here -- it made
+			// `Fountain001.ParticleUpdate` compare against `Fountain`'s stack and refuse a structure
+			// that was in fact identical to its own.
+			FEmitterInfo EmitterInfo;
+
 			// `Emitter Foo` is a display name in the text and an FName key in the asset; the two are
 			// the same string and different types.
 			const FName EmitterName(*Emitter.Name);
@@ -690,9 +802,9 @@ namespace UE::DreamFX::Editor
 			if (!FNiagaraAdapter::GetEmitterInfo(SystemAddress.WithEmitter(EmitterName), EmitterInfo, Errors))
 			{
 				++Result.Unaddressable;
-				Report(EDiagnosticSeverity::Warning, TEXT("DFX7109"), Emitter.Location, FString::Printf(
+				Diagnostics.Warning(TEXT("DFX7109"), Emitter.Location, Note(FString::Printf(
 					TEXT("pull: emitter '%s' could not be read from '%s' (%s), so nothing in it was addressed."),
-					*Emitter.Name, *Result.AssetPath, *FString::Join(Errors, TEXT(" | "))));
+					*Emitter.Name, *Result.AssetPath, *FString::Join(Errors, TEXT(" | ")))));
 				continue;
 			}
 
@@ -710,20 +822,27 @@ namespace UE::DreamFX::Editor
 				if (!IsFixedStack(Stack.Kind))
 				{
 					++Result.Unwritable;
-					Report(EDiagnosticSeverity::Info, TEXT("DFX7111"), Stack.Location, FString::Printf(
+					Diagnostics.Info(TEXT("DFX7111"), Stack.Location, Note(FString::Printf(
 						TEXT("pull: the %s stack of emitter '%s' is not addressed in v1; nothing in it was written back."),
-						LexStackKind(Stack.Kind), *Emitter.Name));
+						LexStackKind(Stack.Kind), *Emitter.Name)));
 					continue;
 				}
 
 				const FName ScriptName = FNiagaraAdapter::ScriptNameForStack(Stack.Kind);
-				const FScriptStackInfo* AssetStack = EmitterInfo.FindStack(ScriptName);
+				const FScriptStackInfo* AssetStack = FindAssetStack(EmitterInfo, Stack.Kind);
 				if (AssetStack == nullptr)
 				{
+					TArray<FString> Available;
+					for (const FScriptStackInfo& Candidate : EmitterInfo.Stacks)
+					{
+						Available.Add(Candidate.ScriptName.ToString());
+					}
+
 					++Result.Unaddressable;
-					Report(EDiagnosticSeverity::Warning, TEXT("DFX7109"), Stack.Location, FString::Printf(
-						TEXT("pull: emitter '%s' has no %s in the asset, so the stack this text declares there was not addressed."),
-						*Emitter.Name, *ScriptName.ToString()));
+					Diagnostics.Warning(TEXT("DFX7109"), Stack.Location, Note(FString::Printf(
+						TEXT("pull: emitter '%s' has no %s in the asset (it holds: %s), so the stack this text declares there was not addressed."),
+						*Emitter.Name, *ShortScriptName(ScriptName.ToString()),
+						Available.Num() > 0 ? *FString::Join(Available, TEXT(", ")) : TEXT("(no stacks)"))));
 					continue;
 				}
 
@@ -732,11 +851,39 @@ namespace UE::DreamFX::Editor
 		}
 
 		// --- report and, with -Apply, write ------------------------------------------------------
+		const FString ReportPath = FPaths::ChangeExtension(BackupPathFor(FilePath), TEXT("report.txt"));
+
+		// Written on a dry run too. The console list is capped and a dry run is the mode that produces
+		// the list in the first place, so a cap with the full text nowhere would be a report nobody can
+		// act on. It lives under Saved/ and never in the source tree.
+		auto WriteReport = [&]()
+		{
+			IFileManager::Get().MakeDirectory(*FPaths::GetPath(ReportPath), /*Tree=*/true);
+
+			TArray<FString> Lines;
+			Lines.Add(FString::Printf(TEXT("pull: %s -> %s (%s)"),
+				*FilePath, *Result.AssetPath, Options.bApply ? TEXT("-Apply") : TEXT("dry run")));
+			Lines.Append(ReportLines);
+
+			if (FFileHelper::SaveStringArrayToFile(Lines, *ReportPath))
+			{
+				Result.ReportPath = ReportPath;
+			}
+		};
+
+		if (Result.Undeclared > 0)
+		{
+			UE_LOG(LogDreamFX, Display,
+				TEXT("pull: %d stored value(s) are not declared in this text, so nothing was written for them. pull rewrites the literals a call already has and never adds structure -- write them into the text (decompile -NoDefaults prints every input a module has), or let the build safety gate (DFX8017) decide which of them a rebuild would actually drop. The list above is in '%s' as well."),
+				Result.Undeclared, *ReportPath);
+		}
+
 		if (Edits.Num() == 0)
 		{
-			Report(EDiagnosticSeverity::Info, TEXT("DFX7107"), Document.HeaderLocation, FString::Printf(
+			Diagnostics.Info(TEXT("DFX7107"), Document.HeaderLocation, Note(FString::Printf(
 				TEXT("pull: '%s' already holds every value '%s' stores for the input(s) it declares (%d compared, %d not declared, %d not writable). No bytes written."),
-				*FilePath, *Result.AssetPath, Result.Compared, Result.Undeclared, Result.Unwritable));
+				*FilePath, *Result.AssetPath, Result.Compared, Result.Undeclared, Result.Unwritable)));
+			WriteReport();
 			Result.bSucceeded = true;
 			return Result;
 		}
@@ -746,8 +893,8 @@ namespace UE::DreamFX::Editor
 
 		for (const FEdit& Edit : Edits)
 		{
-			Report(EDiagnosticSeverity::Info, TEXT("DFX7105"), Edit.Location,
-				FString::Printf(TEXT("pull: %s: %s -> %s"), *Edit.Address, *Edit.Old, *Edit.New));
+			Diagnostics.Info(TEXT("DFX7105"), Edit.Location, Note(
+				FString::Printf(TEXT("pull: %s: %s -> %s"), *Edit.Address, *Edit.Old, *Edit.New)));
 		}
 
 		if (!Options.bApply)
@@ -755,6 +902,7 @@ namespace UE::DreamFX::Editor
 			UE_LOG(LogDreamFX, Display,
 				TEXT("pull: %d literal(s) would be written and nothing was: this is a dry run. Pass -Apply to write them into '%s'."),
 				Edits.Num(), *FilePath);
+			WriteReport();
 			Result.bSucceeded = true;
 			return Result;
 		}
@@ -808,10 +956,8 @@ namespace UE::DreamFX::Editor
 			TEXT("pull: wrote %d literal(s) into '%s'. The file it was is at '%s'."),
 			Edits.Num(), *FilePath, *Result.BackupPath);
 
-		// The report beside the backup: the log scrolls away and this is what says what changed.
-		Result.ReportPath = FPaths::ChangeExtension(Result.BackupPath, TEXT("report.txt"));
-		ReportLines.Insert(FString::Printf(TEXT("pull: %d literal(s) written into %s"), Edits.Num(), *FilePath), 0);
-		FFileHelper::SaveStringArrayToFile(ReportLines, *Result.ReportPath);
+		// The log scrolls away; this is what says what changed.
+		WriteReport();
 
 		Result.bSucceeded = true;
 		return Result;

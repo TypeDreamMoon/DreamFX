@@ -1068,13 +1068,15 @@ namespace
 		}
 
 		// One grep-able verdict, the way the build reports, and the only line that says whether the
-		// file on disk is still the one that was there when the run started.
+		// file on disk is still the one that was there when the run started. The mode is the argument
+		// that was given, not what happened inside it: `-Apply` on a file that needed nothing reports
+		// "0 written ... | applied", which is the truth and is what DFX7107 above says in words.
 		UE_LOG(LogDreamFX, Display,
 			TEXT("=== DreamFX pull: %d value(s) compared, %d %s, %d not declared, %d not writable, %d stack(s) not addressed | %s ==="),
 			Result.Compared, Result.Changed,
 			Result.bWroteFile ? TEXT("written") : TEXT("to write"),
 			Result.Undeclared, Result.Unwritable, Result.Unaddressable,
-			Result.bWroteFile ? TEXT("applied") : TEXT("dry run"));
+			bApply ? TEXT("applied") : TEXT("dry run"));
 
 		return Diagnostics.NumErrors();
 	}
