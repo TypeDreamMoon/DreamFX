@@ -26,7 +26,58 @@ namespace UE::DreamFX::Editor
 		 */
 		FString AssetOverride;
 
+		/**
+		 * Compare against the baseline the last `-Apply` recorded (write-back ③'s dirty set).
+		 *
+		 * On by default. A value the text disagrees with but the asset has not changed since that last
+		 * apply is a value the TEXT moved, so the text is right and pull has nothing to say about it.
+		 * With no baseline to read there is nothing to compare against and pull falls back to comparing
+		 * every declared value, which it announces (DFX7114).
+		 */
+		bool bUseBaseline = true;
 	};
+
+	/**
+	 * What the asset held the last time a pull applied, so this one can tell what changed since.
+	 *
+	 * A recorded baseline rather than `UPackage::IsDirty` or an editor event, and the reason is what
+	 * each of them can answer. The package's dirty flag is one bit for the whole asset: it is set by
+	 * loading in some paths, it cannot say WHICH value moved, and it says nothing at all to a
+	 * commandlet that has just opened the asset in a fresh process -- so it cannot decide "write this
+	 * line and not that one", which is the entire requirement. An editor event carries the same
+	 * problem plus a lifetime that does not survive the process. A baseline is a file: it can be read,
+	 * diffed and argued with, and "why was this line written?" has an answer that is still there
+	 * tomorrow.
+	 *
+	 * `Records` is addressed exactly the way the diagnostics address a value -- `scope` + `key`, the
+	 * same two halves the build safety gate files a fact under -- and holds the value's SOURCE
+	 * SPELLING, not its bytes, so the record can be read by a human and compared against what pull
+	 * would write.
+	 */
+	struct FPullBaseline
+	{
+		bool bLoaded = false;
+		FString Path;
+		TMap<FString, FString> Records;
+
+		/** Look up one recorded value. False when the baseline says nothing about this address. */
+		bool Find(const FString& Scope, const FString& Key, FString& OutValue) const;
+		void Set(const FString& Scope, const FString& Key, const FString& Value);
+
+		/**
+		 * True when this address is not something the last apply saw, or has moved since.
+		 *
+		 * With no baseline loaded everything is dirty, which is the documented degradation: the first
+		 * run after this feature arrives compares every declared value exactly as it did before.
+		 */
+		bool IsDirty(const FString& Scope, const FString& Key, const FString& Now) const;
+
+		/** Reads a baseline file. A missing file is not an error -- it is the first run. */
+		bool Load(const FString& InPath, FString& OutWhy);
+		/** Writes the baseline, sorted, so two runs of the same asset produce the same file. */
+		bool Save(FString& OutWhy) const;
+	};
+
 	/** What one pull run did, for the summary the caller prints. */
 	struct FPullResult
 	{
@@ -45,12 +96,30 @@ namespace UE::DreamFX::Editor
 		/** Stacks the text and the asset describe differently, so nothing in them was addressed. */
 		int32 Unaddressable = 0;
 
+		/** Values that differ but that the asset has not moved since the baseline: the text's, then. */
+		int32 Withheld = 0;
+
 		bool bWroteFile = false;
 		FString BackupPath;
 		FString ReportPath;
 
+		/** True when a baseline was read and used to decide which values to write. */
+		bool bBaselineUsed = false;
+		FString BaselinePath;
+		bool bBaselineWritten = false;
+
 		/** How many edits of every kind the run produced; the splice count, not the report's. */
 		int32 Edits = 0;
+
+		/**
+		 * Every address this run looked at and what the asset holds for it.
+		 *
+		 * Handed back so the caller can make it the next baseline, and kept in the result rather than
+		 * written from here because "leave a record on disk" is the caller's decision -- a dry run must
+		 * not leave one, or the next run would treat the very differences it just reported as dealt
+		 * with.
+		 */
+		TMap<FString, FString> ObservedRecords;
 
 		/** The messages the run produced, in order; the caller writes them beside the diagnostics. */
 		TArray<FString> Report;
@@ -69,8 +138,8 @@ namespace UE::DreamFX::Editor
 	 *
 	 *   * the three things a text can already say about an asset -- a module call's arguments, a
 	 *     settings block, a renderer's properties and bindings -- and nothing else. A value the text
-	 *     does not declare is reported and skipped (`DFX7106`), and structure is never added or
-	 *     removed: a module the editor has and the text does not is named, and nothing is written;
+	 *     does not declare is reported and skipped (`DFX7106`); structure is added or removed only
+	 *     under `-Structure`, and only at a correspondence that is provably unique;
 	 *   * only where the address is exact: the asset's own node name, matched to the text's statement
 	 *     at the same position in the same stack, with the module asset and the node name verified
 	 *     first. Any disagreement and the whole stack is refused, because rewriting a value through a
@@ -107,13 +176,15 @@ namespace UE::DreamFX::Editor
 		 * without a file on disk and what lets a caller drive it against a system it built itself.
 		 *
 		 * `SystemOverride` null means "the one the text names, resolved the way a build resolves it".
+		 * `Baseline` is read and, on a successful apply, refilled with what the asset holds now; it is
+		 * NOT written to disk here, because whether a run leaves a record is the caller's decision.
 		 *
 		 * @param OutNewText  the text with every edit applied. Equal to the input, byte for byte, when
 		 *                    there was nothing to do -- which is the invariant the caller checks.
 		 * @return false only when the run could not proceed at all; diagnostics say why.
 		 */
 		static bool PullText(const FString& SourceText, const FString& FilePath,
-			UNiagaraSystem* SystemOverride, const FPullOptions& Options,
+			UNiagaraSystem* SystemOverride, const FPullOptions& Options, FPullBaseline& Baseline,
 			FDiagnosticSink& Diagnostics, FPullResult& OutResult, FString& OutNewText);
 	};
 }

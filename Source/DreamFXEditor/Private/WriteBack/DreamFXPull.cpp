@@ -26,6 +26,9 @@ namespace UE::DreamFX::Editor
 {
 	namespace
 	{
+		/** Separates the two halves of a baseline key; no scope or key text can contain it. */
+		const TCHAR* const BaselineSeparator = TEXT("\x1f");
+
 		/** The alignment key of a folded run of assignments; no asset path can contain it. */
 		const TCHAR* const SetParametersKey = TEXT("\x1fset");
 
@@ -343,6 +346,92 @@ namespace UE::DreamFX::Editor
 			return FPaths::ProjectSavedDir() / TEXT("DreamFX/Pull") / Tail;
 		}
 
+		/**
+		 * One stored value as the baseline spells it: the type, then hex bytes or a reference marker.
+		 *
+		 * Bytes rather than the rendered source, because this half of the baseline exists precisely so
+		 * that two runs compare the SAME quantity the store holds -- the source spelling is a rendering
+		 * of it, and comparing one rendering against another is a comparison of a spelling rule.
+		 */
+		FString BytesToBaseline(const FStoredValue& Stored)
+		{
+			if (Stored.bObject)
+			{
+				return FString::Printf(TEXT("obj:%s"), *Stored.Type.GetName());
+			}
+
+			FString Hex;
+			Hex.Reserve(Stored.Bytes.Num() * 2);
+			for (const uint8 Byte : Stored.Bytes)
+			{
+				Hex += FString::Printf(TEXT("%02X"), Byte);
+			}
+			return FString::Printf(TEXT("%s:%s"), *Stored.Type.GetName(), *Hex);
+		}
+
+		/**
+		 * One JSON value as a baseline record: canonical, one line, and the same on every run.
+		 *
+		 * Not `FJsonValue::ToString` and not a serializer call for the scalars, because the record has
+		 * to be comparable byte for byte across runs and across engine versions; `%.17g` is the exact
+		 * round-trip form of a double, so a value that has not moved cannot read as moved.
+		 */
+		FString JsonToBaseline(const TSharedPtr<FJsonValue>& Value)
+		{
+			if (!Value.IsValid() || Value->IsNull())
+			{
+				return TEXT("json:none");
+			}
+
+			switch (Value->Type)
+			{
+			case EJson::Number:  return FString::Printf(TEXT("num:%.17g"), Value->AsNumber());
+			case EJson::Boolean: return Value->AsBool() ? TEXT("bool:true") : TEXT("bool:false");
+			case EJson::String:  return FString::Printf(TEXT("str:%s"), *Value->AsString());
+			default: break;
+			}
+
+			FString Json;
+			const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+				TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
+			const bool bSerialized = Value->Type == EJson::Object
+				? FJsonSerializer::Serialize(Value->AsObject().ToSharedRef(), Writer)
+				: FJsonSerializer::Serialize(Value->AsArray(), Writer);
+			return bSerialized ? FString::Printf(TEXT("json:%s"), *Json) : TEXT("json:?");
+		}
+
+		/** A record's field in the baseline file: one line, no tabs, escaped where it must be. */
+		FString EscapeBaselineField(const FString& Text)
+		{
+			FString Out = Text;
+			Out.ReplaceInline(TEXT("\\"), TEXT("\\\\"), ESearchCase::CaseSensitive);
+			Out.ReplaceInline(TEXT("\t"), TEXT("\\t"), ESearchCase::CaseSensitive);
+			Out.ReplaceInline(TEXT("\r"), TEXT("\\r"), ESearchCase::CaseSensitive);
+			Out.ReplaceInline(TEXT("\n"), TEXT("\\n"), ESearchCase::CaseSensitive);
+			return Out;
+		}
+
+		void UnescapeBaselineField(FString& Text)
+		{
+			// One pass, left to right: a second pass over the result would turn the `\\n` that an
+			// escaped backslash followed by an `n` produces back into a newline.
+			FString Out;
+			Out.Reserve(Text.Len());
+			for (int32 Index = 0; Index < Text.Len(); ++Index)
+			{
+				if (Text[Index] == TEXT('\\') && Index + 1 < Text.Len())
+				{
+					const TCHAR Next = Text[++Index];
+					Out.AppendChar(Next == TEXT('t') ? TEXT('\t')
+						: Next == TEXT('r') ? TEXT('\r')
+						: Next == TEXT('n') ? TEXT('\n')
+						: Next);
+					continue;
+				}
+				Out.AppendChar(Text[Index]);
+			}
+			Text = MoveTemp(Out);
+		}
 
 		/**
 		 * True when the two JSON values mean the same thing to this language.
@@ -553,8 +642,111 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	bool FPullBaseline::Find(const FString& Scope, const FString& Key, FString& OutValue) const
+	{
+		const FString* Found = Records.Find(Scope + BaselineSeparator + Key);
+		if (Found == nullptr)
+		{
+			return false;
+		}
+		OutValue = *Found;
+		return true;
+	}
+
+	void FPullBaseline::Set(const FString& Scope, const FString& Key, const FString& Value)
+	{
+		Records.Add(Scope + BaselineSeparator + Key, Value);
+	}
+
+	bool FPullBaseline::IsDirty(const FString& Scope, const FString& Key, const FString& Now) const
+	{
+		FString Recorded;
+		return !Find(Scope, Key, Recorded) || Recorded != Now;
+	}
+
+	bool FPullBaseline::Load(const FString& InPath, FString& OutWhy)
+	{
+		Path = InPath;
+		bLoaded = false;
+		Records.Reset();
+
+		if (!FPaths::FileExists(InPath))
+		{
+			OutWhy = FString::Printf(TEXT("there is no baseline at '%s' yet"), *InPath);
+			return true; // not an error: a first run has nothing to compare against
+		}
+
+		FString Text;
+		if (!FFileHelper::LoadFileToString(Text, *InPath))
+		{
+			OutWhy = FString::Printf(TEXT("'%s' could not be read"), *InPath);
+			return false;
+		}
+
+		TArray<FString> Lines;
+		Text.ParseIntoArrayLines(Lines, /*InCullEmpty=*/true);
+		int32 LineNumber = 0;
+		for (FString& Line : Lines)
+		{
+			++LineNumber;
+			if (Line.StartsWith(TEXT("#")))
+			{
+				continue;
+			}
+			TArray<FString> Fields;
+			Line.ParseIntoArray(Fields, TEXT("\t"));
+			if (Fields.Num() != 3)
+			{
+				OutWhy = FString::Printf(TEXT("'%s' line %d is not a record"), *InPath, LineNumber);
+				return false;
+			}
+			UnescapeBaselineField(Fields[1]);
+			UnescapeBaselineField(Fields[2]);
+			Records.Add(Fields[0] + BaselineSeparator + Fields[1], Fields[2]);
+		}
+
+		bLoaded = true;
+		return true;
+	}
+
+	bool FPullBaseline::Save(FString& OutWhy) const
+	{
+		TArray<FString> Lines;
+		Lines.Add(TEXT("# DreamFX pull baseline -- what the asset held at the last -Apply."));
+		Lines.Add(TEXT("# scope<TAB>key<TAB>value. Delete this file to make the next pull compare every declared value."));
+
+		// Sorted, because an unsorted file diffs as a change every time it is written, and being able to
+		// diff two runs is the whole point of keeping it.
+		TArray<FString> Keys;
+		Records.GetKeys(Keys);
+		Keys.Sort();
+		for (const FString& Key : Keys)
+		{
+			int32 At = INDEX_NONE;
+			if (!Key.FindChar(BaselineSeparator[0], At))
+			{
+				continue;
+			}
+			Lines.Add(FString::Printf(TEXT("%s\t%s\t%s"),
+				*Key.Left(At), *EscapeBaselineField(Key.Mid(At + 1)), *EscapeBaselineField(Records[Key])));
+		}
+
+		if (Path.IsEmpty())
+		{
+			OutWhy = TEXT("the baseline has no path");
+			return false;
+		}
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree=*/true);
+		if (!FFileHelper::SaveStringArrayToFile(Lines, *Path))
+		{
+			OutWhy = FString::Printf(TEXT("'%s' could not be written"), *Path);
+			return false;
+		}
+		return true;
+	}
+
 	bool FPuller::PullText(const FString& SourceText, const FString& FilePath, UNiagaraSystem* SystemOverride,
-		const FPullOptions& Options, FDiagnosticSink& Diagnostics,
+		const FPullOptions& Options, FPullBaseline& Baseline, FDiagnosticSink& Diagnostics,
 		FPullResult& Result, FString& OutNewText)
 	{
 		OutNewText = SourceText;
@@ -664,6 +856,38 @@ namespace UE::DreamFX::Editor
 		TArray<FString> Errors;
 
 		// What this run SEES, gathered as it goes and handed back to the caller. Only addresses pull
+		// actually considered are in it, which is the honest scope: a value the text does not declare is
+		// not something pull has an opinion about.
+		TMap<FString, FString>& Observed = Result.ObservedRecords;
+
+		/**
+		 * The dirty-set test every write goes through, so that "only what the user moved" is one rule
+		 * in one place rather than a condition repeated at each of the four write paths.
+		 *
+		 * Every address pull COMPARES is recorded, dirty or not: a value it declines to write is still a
+		 * value the asset holds now, and the next run has to be able to tell that it has not moved
+		 * since. Without that, declining would mean "ask again next time", forever.
+		 */
+		auto Record = [&](const FString& Scope, const FString& Key, const FString& Now)
+		{
+			Observed.Add(Scope + BaselineSeparator + Key, Now);
+		};
+
+		auto ShouldWrite = [&](const FString& Scope, const FString& Key, const FString& Now,
+			const FSourceLocation& Location, const FString& Address) -> bool
+		{
+			Record(Scope, Key, Now);
+			if (!Options.bUseBaseline || Baseline.IsDirty(Scope, Key, Now))
+			{
+				return true;
+			}
+
+			++Result.Withheld;
+			Diagnostics.Info(TEXT("DFX7115"), Location, Note(FString::Printf(
+				TEXT("pull: %s differs from this text but the asset has not moved since the last apply, so the text's value stands."),
+				*Address)));
+			return false;
+		};
 
 		/** An edit that replaces the characters a literal already occupies. */
 		auto AddReplacement = [&](const FValue& Value, const FString& NewText, const FString& Address) -> bool
@@ -695,6 +919,7 @@ namespace UE::DreamFX::Editor
 		 * between them is how a key becomes JSON and how the asset's value is spelled -- and both of
 		 * those are the generator's and the decompiler's answers, not this function's.
 		 *
+		 * @param Scope         the address prefix the baseline files these values under.
 		 * @param bSystemScope  which settings table the keys are looked up in; ignored for a renderer.
 		 * @param PropertyClass for a renderer block; null for a Settings block.
 		 */
@@ -756,10 +981,17 @@ namespace UE::DreamFX::Editor
 				}
 
 				++Result.Compared;
+				const FString BaselineValue = JsonToBaseline(StoredValue);
 
 				if (JsonValuesEquivalent(TextValue, StoredValue))
 				{
+					Record(Scope, Property.Name, BaselineValue);
 					continue; // the text already says it
+				}
+
+				if (!ShouldWrite(Scope, Property.Name, BaselineValue, Property.Value->Location, Address))
+				{
+					continue;
 				}
 
 				if (!AddReplacement(*Property.Value, NewText, Address))
@@ -876,10 +1108,10 @@ namespace UE::DreamFX::Editor
 			// The alignment is unique. Whether the two lists are the SAME is now just a count: the
 			// matching is injective, so the text has a node the asset lacks exactly when fewer pairs
 			// came out than the text has nodes, and the other way round for the asset.
-			const bool bStructureNeeded = Correspondence.Matched != Nodes.Num()
+			const bool bShapesDiffer = Correspondence.Matched != Nodes.Num()
 				|| Correspondence.Matched != AssetStack.Modules.Num();
 
-			if (bStructureNeeded)
+			if (bShapesDiffer)
 			{
 				// The difference is located -- the alignment is unique, so there is exactly one way
 				// to line the two lists up -- and that is what makes the message worth printing. It
@@ -953,7 +1185,6 @@ namespace UE::DreamFX::Editor
 					return;
 				}
 			}
-
 
 			// --- values --------------------------------------------------------------------------
 			for (int32 Index = 0; Index < AssetStack.Modules.Num(); ++Index)
@@ -1044,7 +1275,16 @@ namespace UE::DreamFX::Editor
 							continue;
 						}
 
+						const FString BaselineValue = BytesToBaseline(*Value);
+						const FString StoreScope = TEXT("ri ") + Prefix;
 						if (Existing.Equals(StoredInput))
+						{
+							Record(StoreScope, Statement->Name, BaselineValue);
+							continue;
+						}
+
+						if (!ShouldWrite(StoreScope, Statement->Name, BaselineValue,
+							Statement->Value->Location, Address))
 						{
 							continue;
 						}
@@ -1262,9 +1502,18 @@ namespace UE::DreamFX::Editor
 						continue;
 					}
 
+					const FString BaselineValue = BytesToBaseline(*StoredValue);
+					const FString StoreScope = TEXT("ri ") + Prefix;
 					if (Existing.Equals(StoredInputValue))
 					{
+						Record(StoreScope, InputName, BaselineValue);
 						continue; // the text already holds it
+					}
+
+					if (!ShouldWrite(StoreScope, InputName, BaselineValue,
+						Argument.Value->Location, Address))
+					{
+						continue;
 					}
 
 					if (!AddReplacement(*Argument.Value, NewText, Address))
@@ -1428,6 +1677,7 @@ namespace UE::DreamFX::Editor
 				}
 				else
 				{
+					const FString DefaultsScope = EmitterLabel + TEXT(" Defaults");
 					for (const FStatement& Statement : Emitter.Defaults)
 					{
 						const FString Address = FString::Printf(TEXT("Defaults.%s"), *Statement.Name);
@@ -1499,12 +1749,22 @@ namespace UE::DreamFX::Editor
 							continue;
 						}
 
+						const FString BaselineValue = FString::Printf(TEXT("default:%s:%s"),
+							*Found->Variable.GetType().GetName(), *NewText);
+
 						const bool bSame = Found->Mode == FParameterDefault::EMode::Binding
 							? (Existing.Mode == EInputValueMode::Linked
 								&& Existing.LinkedVariable.GetName().ToString() == Found->Binding.ToString())
 							: Existing.Equals(Found->Value);
 
 						if (bSame)
+						{
+							Record(DefaultsScope, Statement.Name, BaselineValue);
+							continue;
+						}
+
+						if (!ShouldWrite(DefaultsScope, Statement.Name, BaselineValue,
+							Statement.Value->Location, Address))
 						{
 							continue;
 						}
@@ -1583,6 +1843,7 @@ namespace UE::DreamFX::Editor
 						}
 						else
 						{
+							const FString BindingScope = RendererLabel + TEXT(" bindings");
 							for (const FRendererBinding& Binding : Renderer.Bindings)
 							{
 								const FString Address = FString::Printf(TEXT("Bind %s -> %s"),
@@ -1607,9 +1868,17 @@ namespace UE::DreamFX::Editor
 								}
 
 								const FString StoredTarget = Found->Value.ToString();
+								const FString BaselineValue = FString::Printf(TEXT("bind:%s"), *StoredTarget);
 								++Result.Compared;
 
 								if (StoredTarget == Binding.Target)
+								{
+									Record(BindingScope, Binding.PropertyName, BaselineValue);
+									continue;
+								}
+
+								if (!ShouldWrite(BindingScope, Binding.PropertyName, BaselineValue,
+									Binding.Location, Address))
 								{
 									continue;
 								}
@@ -1650,8 +1919,9 @@ namespace UE::DreamFX::Editor
 		if (Edits.Num() == 0)
 		{
 			Diagnostics.Info(TEXT("DFX7107"), Document.HeaderLocation, Note(FString::Printf(
-				TEXT("pull: '%s' already holds every value '%s' stores for the input(s) it declares (%d compared, %d not declared, %d not writable). No bytes written."),
-				*FilePath, *Result.AssetPath, Result.Compared, Result.Undeclared, Result.Unwritable)));
+				TEXT("pull: '%s' already holds every value '%s' stores for the input(s) it declares (%d compared, %d not declared, %d not writable, %d withheld). No bytes written."),
+				*FilePath, *Result.AssetPath, Result.Compared, Result.Undeclared, Result.Unwritable,
+				Result.Withheld)));
 			Result.bSucceeded = true;
 			return true;
 		}
@@ -1730,8 +2000,30 @@ namespace UE::DreamFX::Editor
 			return Result;
 		}
 
+		// The baseline: what the asset held the last time this file was pulled into. Read here rather
+		// than inside the core because it is a file, and the core is about values.
+		FPullBaseline Baseline;
+		Baseline.Path = FPaths::ChangeExtension(BackupPathFor(FilePath), TEXT("baseline.txt"));
+		Result.BaselinePath = Baseline.Path;
+		{
+			FString Why;
+			if (!Baseline.Load(Baseline.Path, Why))
+			{
+				Diagnostics.Warning(TEXT("DFX7114"), FSourceLocation(), FString::Printf(
+					TEXT("pull: the baseline could not be used (%s), so every value this text declares was compared from scratch."),
+					*Why));
+			}
+			else if (!Baseline.bLoaded)
+			{
+				Diagnostics.Info(TEXT("DFX7114"), FSourceLocation(), FString::Printf(
+					TEXT("pull: %s, so this run compares every value the text declares. A following -Apply records one, and after that pull only writes what the asset has moved since."),
+					*Why));
+			}
+		}
+		Result.bBaselineUsed = Baseline.bLoaded && Options.bUseBaseline;
+
 		FString NewSource;
-		if (!PullText(SourceText, FilePath, nullptr, Options, Diagnostics, Result, NewSource))
+		if (!PullText(SourceText, FilePath, nullptr, Options, Baseline, Diagnostics, Result, NewSource))
 		{
 			return Result;
 		}
@@ -1764,6 +2056,25 @@ namespace UE::DreamFX::Editor
 			UE_LOG(LogDreamFX, Display,
 				TEXT("pull: wrote %d edit(s) into '%s'. The file it was is at '%s'."),
 				Result.Edits, *FilePath, *Result.BackupPath);
+		}
+
+		// The baseline records the asset as it stands, and only an apply records one: a dry run has
+		// not brought the text into step with anything, so a baseline from it would tell the next run
+		// that the very differences it just reported have already been dealt with.
+		if (Options.bApply)
+		{
+			Baseline.Records = MoveTemp(Result.ObservedRecords);
+			FString Why;
+			if (!Baseline.Save(Why))
+			{
+				Diagnostics.Warning(TEXT("DFX7114"), FSourceLocation(), FString::Printf(
+					TEXT("pull: %s. The values were still written; only the record of what the asset held is missing, so the next run compares everything again."),
+					*Why));
+			}
+			else
+			{
+				Result.bBaselineWritten = true;
+			}
 		}
 
 		// The log scrolls away; this is what says what changed. Written on a dry run too: the console

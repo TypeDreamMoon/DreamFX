@@ -100,7 +100,6 @@ namespace UE::DreamFX::Editor::WriteBackTests
 		return FString();
 	}
 
-
 	/**
 	 * Everything the pull said, for a failure message.
 	 *
@@ -164,12 +163,12 @@ namespace UE::DreamFX::Editor::WriteBackTests
 
 	/** One `-Apply`-style pull over text in memory, with the baseline the caller hands in. */
 	bool PullInMemory(FAutomationTestBase& Test, const FString& Fixture, const FString& SourceText,
-		UNiagaraSystem* System, const FPullOptions& Options,
+		UNiagaraSystem* System, const FPullOptions& Options, FPullBaseline& Baseline,
 		FPullResult& OutResult, FString& OutNewText)
 	{
 		FDiagnosticSink Diagnostics;
 		Diagnostics.SetFile(Fixture);
-		const bool bOk = FPuller::PullText(SourceText, Fixture, System, Options,
+		const bool bOk = FPuller::PullText(SourceText, Fixture, System, Options, Baseline,
 			Diagnostics, OutResult, OutNewText);
 		if (!bOk)
 		{
@@ -491,6 +490,7 @@ void FDreamFXWriteBackTest::GetTests(TArray<FString>& OutBeautifiedNames, TArray
 		TEXT("RendererProperty"),
 		TEXT("SystemSetting"),
 		TEXT("Assignment"),
+		TEXT("DirtySet"),
 	};
 
 	for (const TCHAR* Case : Cases)
@@ -542,9 +542,10 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 		}
 
 		FPullOptions Options;
+		FPullBaseline Baseline;
 		FPullResult Result;
 		FString NewText;
-		if (!PullInMemory(*this, Path, SourceText, System, Options, Result, NewText))
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, Result, NewText))
 		{
 			return false;
 		}
@@ -559,7 +560,7 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 		Options.bApply = true;
 		FPullResult Applied;
 		FString AppliedText;
-		if (!PullInMemory(*this, Path, SourceText, System, Options, Applied, AppliedText))
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, Applied, AppliedText))
 		{
 			return false;
 		}
@@ -578,8 +579,8 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 				CountDifferingLines(SourceText, AppliedText)));
 		}
 
-		AddInfo(FString::Printf(TEXT("no-op: %d compared, %d changed, %d not declared, %d edit(s)."),
-			Applied.Compared, Applied.Changed, Applied.Undeclared, Applied.Edits));
+		AddInfo(FString::Printf(TEXT("no-op: %d compared, %d changed, %d not declared, %d withheld, %d edit(s)."),
+			Applied.Compared, Applied.Changed, Applied.Undeclared, Applied.Withheld, Applied.Edits));
 		return true;
 	}
 
@@ -612,9 +613,10 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 
 		FPullOptions Options;
 		Options.bApply = true; // the rewritten text is what this case is about
+		FPullBaseline Baseline;
 		FPullResult Result;
 		FString NewText;
-		if (!PullInMemory(*this, Path, SourceText, System, Options, Result, NewText))
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, Result, NewText))
 		{
 			return false;
 		}
@@ -650,9 +652,10 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 		// Idempotence, and the only real proof that the comparison is by value: a second pull over the
 		// text it just produced must find nothing.
 		{
+			FPullBaseline Second;
 			FPullResult SecondResult;
 			FString SecondText;
-			if (PullInMemory(*this, Path, NewText, System, Options, SecondResult, SecondText)
+			if (PullInMemory(*this, Path, NewText, System, Options, Second, SecondResult, SecondText)
 				&& SecondResult.Edits != 0)
 			{
 				AddError(FString::Printf(TEXT("pulling the text pull had just written produced %d more edit(s).\n%s"),
@@ -705,9 +708,10 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 
 		FPullOptions Options;
 		Options.bApply = true; // the rewritten text is what this case is about
+		FPullBaseline Baseline;
 		FPullResult Result;
 		FString NewText;
-		if (!PullInMemory(*this, Path, SourceText, System, Options, Result, NewText))
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, Result, NewText))
 		{
 			return false;
 		}
@@ -760,9 +764,10 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 
 		FPullOptions Options;
 		Options.bApply = true; // the rewritten text is what this case is about
+		FPullBaseline Baseline;
 		FPullResult Result;
 		FString NewText;
-		if (!PullInMemory(*this, Path, SourceText, System, Options, Result, NewText))
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, Result, NewText))
 		{
 			return false;
 		}
@@ -844,9 +849,10 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 
 		FPullOptions Options;
 		Options.bApply = true; // the rewritten text is what this case is about
+		FPullBaseline Baseline;
 		FPullResult Result;
 		FString NewText;
-		if (!PullInMemory(*this, Path, SourceText, System, Options, Result, NewText))
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, Result, NewText))
 		{
 			return false;
 		}
@@ -869,6 +875,109 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 			DifferingLines, Result.Compared, *SetParametersNode));
 		return true;
 	}
+
+	// -------------------------------------------------------------------------------------------
+	// DirtySet: only what the asset actually moved.
+	// -------------------------------------------------------------------------------------------
+	if (Parameters == TEXT("DirtySet"))
+	{
+		FString SourceText;
+		const FString Path = LoadFixture(TEXT("Tuning"), SourceText);
+		if (Path.IsEmpty())
+		{
+			return false;
+		}
+
+		FDiagnosticSink BuildDiagnostics;
+		UNiagaraSystem* System = BuildFixture(*this, Path, SourceText, BuildDiagnostics);
+		if (System == nullptr)
+		{
+			return false;
+		}
+
+		FString Error;
+		if (!SetFloatInput(System, TEXT("Motes"), EStackKind::EmitterUpdate, TEXT("SpawnRate"),
+			TEXT("SpawnRate"), 42.0f, Error))
+		{
+			AddError(FString::Printf(TEXT("the fixture's SpawnRate could not be moved: %s"), *Error));
+			return false;
+		}
+
+		// The first apply, with no baseline: every declared value is compared, which is the documented
+		// degradation, and the run records what the asset holds.
+		FPullOptions Options;
+		Options.bApply = true;
+		FPullBaseline Baseline;
+		FPullResult First;
+		FString FirstText;
+		if (!PullInMemory(*this, Path, SourceText, System, Options, Baseline, First, FirstText))
+		{
+			return false;
+		}
+		if (First.Changed != 1)
+		{
+			AddError(FString::Printf(TEXT("the first (baseline-free) apply should have written one value; it wrote %d."),
+				First.Changed));
+		}
+
+		// What the caller does with a successful apply: keep what the run observed.
+		Baseline.Records = First.ObservedRecords;
+		Baseline.bLoaded = true;
+
+		// Now the TEXT moves and the asset does not. That is the whole point of the dirty set: the text
+		// is the newer decision, so pull must leave it alone -- even though the two still disagree.
+		const FString EditedText = FirstText.Replace(TEXT("SpawnRate = 42"), TEXT("SpawnRate = 7"));
+		if (EditedText == FirstText)
+		{
+			AddError(TEXT("the dirty-set case could not edit the text it was given; the value it looks for is not there."));
+			return false;
+		}
+
+		FPullResult Second;
+		FString SecondText;
+		if (!PullInMemory(*this, Path, EditedText, System, Options, Baseline, Second, SecondText))
+		{
+			return false;
+		}
+
+		if (Second.Changed != 0 || SecondText != EditedText)
+		{
+			AddError(FString::Printf(
+				TEXT("a value the asset has not moved since the baseline must not be written back; %d value(s) were, and the text changed.\n%s"),
+				Second.Changed, *DiffFirstLines(EditedText, SecondText)));
+		}
+		if (Second.Withheld != 1)
+		{
+			AddError(FString::Printf(TEXT("expected the one differing value to be reported as withheld; %d were."),
+				Second.Withheld));
+		}
+
+		// And the other half: the asset moves again, so the same comparison now has something to say.
+		if (!SetFloatInput(System, TEXT("Motes"), EStackKind::EmitterUpdate, TEXT("SpawnRate"),
+			TEXT("SpawnRate"), 99.0f, Error))
+		{
+			AddError(FString::Printf(TEXT("the fixture's SpawnRate could not be moved a second time: %s"), *Error));
+			return false;
+		}
+
+		FPullResult Third;
+		FString ThirdText;
+		if (!PullInMemory(*this, Path, EditedText, System, Options, Baseline, Third, ThirdText))
+		{
+			return false;
+		}
+		if (Third.Changed != 1 || !LineContaining(ThirdText, TEXT("SpawnRate")).Contains(TEXT("99")))
+		{
+			AddError(FString::Printf(TEXT("an asset that moved again should be written back; %d value(s) were.\n%s"),
+				Third.Changed, *DiffFirstLines(EditedText, ThirdText)));
+		}
+
+		AddInfo(FString::Printf(TEXT("dirty set: first apply %d written / %d compared, then %d withheld, then %d written again."),
+			First.Changed, First.Compared, Second.Withheld, Third.Changed));
+		return true;
+	}
+
+	AddError(FString::Printf(TEXT("no write-back case is registered under '%s'."), *Parameters));
 	return false;
 }
 

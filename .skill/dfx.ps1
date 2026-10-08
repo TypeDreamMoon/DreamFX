@@ -172,7 +172,12 @@ param(
     # pull: read the values from THIS asset instead of the one the text names. Needed because an
     # export cannot name the asset it came from -- it names the mirror it rebuilds -- so pulling the
     # original's values into that export has no other spelling.
-    [string]$Asset
+    [string]$Asset,
+
+    # pull: ignore the baseline the last -Apply recorded and compare every declared value from
+    # scratch. The baseline is what makes pull write only what the asset has moved since; without
+    # one on disk pull already behaves this way, and says so (DFX7114).
+    [switch]$NoBaseline
 )
 
 $ErrorActionPreference = 'Stop'
@@ -439,6 +444,7 @@ switch ($Command) {
         $arguments += "-Pull=$((Resolve-Path -LiteralPath $Target).Path)"
         if ($Asset) { $arguments += "-Asset=$Asset" }
         if ($Apply) { $arguments += '-Apply' }
+        if ($NoBaseline) { $arguments += '-NoBaseline' }
     }
 }
 

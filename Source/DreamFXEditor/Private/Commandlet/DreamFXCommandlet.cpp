@@ -1038,9 +1038,12 @@ namespace
 	 *
 	 * Writes no asset at all, and without -Apply writes no text either: the thing being changed is a
 	 * hand-maintained source file, so the default is the report that says which line would change and
-	 * from what to what.
+	 * from what to what. -NoBaseline is the other switch, and it is about which values are candidates
+	 * rather than about what may be written: without it pull writes only what the asset has moved since
+	 * the last apply.
 	 */
-	int32 RunPull(const FString& FilePath, bool bApply, const FString& AssetOverride)
+	int32 RunPull(const FString& FilePath, bool bApply, const FString& AssetOverride,
+		bool bNoBaseline)
 	{
 		FString Full = FilePath;
 		if (FPaths::IsRelative(Full))
@@ -1056,6 +1059,7 @@ namespace
 		FPullOptions Options;
 		Options.bApply = bApply;
 		Options.AssetOverride = AssetOverride;
+		Options.bUseBaseline = !bNoBaseline;
 
 		FDiagnosticSink Diagnostics;
 		Diagnostics.SetFile(Full);
@@ -1072,11 +1076,12 @@ namespace
 		// that was given, not what happened inside it: `-Apply` on a file that needed nothing reports
 		// "0 written ... | applied", which is the truth and is what DFX7107 above says in words.
 		UE_LOG(LogDreamFX, Display,
-			TEXT("=== DreamFX pull: %d compared, %d %s, %d not declared, %d not writable, %d stack(s) not addressed | %s ==="),
+			TEXT("=== DreamFX pull: %d compared, %d %s, %d not declared, %d not writable, %d withheld, %d stack(s) not addressed | %s%s ==="),
 			Result.Compared, Result.Changed,
 			Result.bWroteFile ? TEXT("written") : TEXT("to write"),
-			Result.Undeclared, Result.Unwritable, Result.Unaddressable,
-			bApply ? TEXT("applied") : TEXT("dry run"));
+			Result.Undeclared, Result.Unwritable, Result.Withheld, Result.Unaddressable,
+			bApply ? TEXT("applied") : TEXT("dry run"),
+			bApply && Result.bBaselineWritten ? TEXT(" | baseline recorded") : TEXT(""));
 
 		return Diagnostics.NumErrors();
 	}
@@ -1193,7 +1198,8 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	{
 		FString AssetOverride;
 		FParse::Value(*Params, TEXT("Asset="), AssetOverride);
-		return RunPull(PullTarget, FParse::Param(*Params, TEXT("Apply")), AssetOverride);
+		return RunPull(PullTarget, FParse::Param(*Params, TEXT("Apply")),
+			AssetOverride, FParse::Param(*Params, TEXT("NoBaseline")));
 	}
 
 	const bool bLintOnly = FParse::Param(*Params, TEXT("Lint"));
