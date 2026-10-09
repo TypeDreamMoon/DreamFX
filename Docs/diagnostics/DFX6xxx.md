@@ -86,7 +86,7 @@
 Niagara compilation of '%s' did not succeed (status %s).
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3619`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3668`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3998`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3619`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3668`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3987`
 <!-- generated:end DFX6005 -->
 
 **Cause.** The system's compile did not reach a successful state. Individual errors are reported as DFX6001 above this.
@@ -104,7 +104,7 @@ Niagara compilation of '%s' did not succeed (status %s).
 Niagara could not compile the body of '%s':\n%s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1389`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1397`
 <!-- generated:end DFX6006 -->
 
 **Cause.** A `.dfm`'s body is not valid HLSL once lowered. The Niagara message follows.

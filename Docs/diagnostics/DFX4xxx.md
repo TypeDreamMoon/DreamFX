@@ -32,7 +32,7 @@ Input '%s' expects %s, but a number was written.
 Expression for '%s': a vector literal must have 2 to 4 components.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:122`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:353`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:451`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:561`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:600`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:132`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:353`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:451`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:561`, `Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:600`
 <!-- generated:end DFX4002 -->
 
 **Cause.** Niagara vector types are 2, 3 or 4 components.
@@ -338,7 +338,7 @@ Default for '%s' must be a literal, an enum or another parameter. A dynamic inpu
 The hlsl block for '%s' must be a single expression: no statements, no local variables, no return. Move multi-statement logic into a .dfm DynamicInput and call it here.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:357`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:367`
 <!-- generated:end DFX4030 -->
 
 **Cause.** A stack input's `hlsl` block lowers to a node with one typed output pin and no body, so it cannot hold statements.
@@ -356,7 +356,7 @@ The hlsl block for '%s' must be a single expression: no statements, no local var
 '%s' is not an allowed inline function. Allowed: %s. Anything else belongs in a .dfm dynamic input or an hlsl { } block.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:161`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:171`
 <!-- generated:end DFX4031 -->
 
 **Cause.** L6's whitelist. Widening it is the slide into re-implementing a 13k-line expression backend, so it is deliberately short.
@@ -374,7 +374,7 @@ The hlsl block for '%s' must be a single expression: no statements, no local var
 '%s' in the expression for '%s' is not a parameter. Only namespace-qualified parameters (User.X, Particles.X, Engine.X, ...) can be read from an expression.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:103`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:113`
 <!-- generated:end DFX4032 -->
 
 **Cause.** Inline expressions see parameters, not locals. A bare name has nothing to bind to.
@@ -392,7 +392,7 @@ The hlsl block for '%s' must be a single expression: no statements, no local var
 Builtin '%s' takes positional arguments, not named ones.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:169`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:179`
 <!-- generated:end DFX4033 -->
 
 **Cause.** An L6 builtin is positional. Named arguments read as a dynamic input call and would silently resolve to something else.
@@ -410,7 +410,7 @@ Builtin '%s' takes positional arguments, not named ones.
 Builtin '%s' takes %d argument(s), but %d were written.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:177`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:187`
 <!-- generated:end DFX4034 -->
 
 **Cause.** Arity is the only thing separating `lerp(a, b)` from `lerp(a, b, t)`.
@@ -428,7 +428,7 @@ Builtin '%s' takes %d argument(s), but %d were written.
 Expression for '%s' contains a value that has no HLSL form.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:222`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:232`
 <!-- generated:end DFX4035 -->
 
 **Cause.** Part of the expression has no HLSL form -- a curve literal or a data interface inside arithmetic, for instance.
@@ -446,7 +446,7 @@ Expression for '%s' contains a value that has no HLSL form.
 The hlsl block for '%s' is empty.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:347`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:357`
 <!-- generated:end DFX4036 -->
 
 **Cause.** An empty `hlsl` block lowers to an expression with no text in it.
@@ -464,7 +464,7 @@ The hlsl block for '%s' is empty.
 '%s' is %s; a curve { } literal only fits a curve data interface input.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:373`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:383`
 <!-- generated:end DFX4037 -->
 
 **Cause.** A `curve { }` literal fills a curve data interface, and this input is not one.
@@ -482,7 +482,7 @@ The hlsl block for '%s' is empty.
 The curve for '%s' has no keys.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:381`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:391`
 <!-- generated:end DFX4038 -->
 
 **Cause.** An empty curve evaluates to nothing, which reads at runtime as a value stuck at zero.
@@ -500,7 +500,7 @@ The curve for '%s' has no keys.
 Unknown curve interpolation '%s'. Expected Auto, Cubic, Linear or Constant.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:395`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:405`
 <!-- generated:end DFX4039 -->
 
 **Cause.** Curve tangents are data (plan 3.5); an unrecognised mode would fall back to Auto and drop a hand-tuned shape without saying so.
@@ -554,7 +554,7 @@ Parameter '%s': '%s' is a %s, which is not a %s.
 Unknown curve tangent mode '%s'. Expected Auto, User, Break or None.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:405`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXExpressions.cpp:415`
 <!-- generated:end DFX4042 -->
 
 **Cause.** A curve key's `Tangent=` attribute named something that is not one of Unreal's four tangent modes. Refused rather than defaulted for the same reason as DFX4039: falling back to `Auto` would silently discard the tangents written beside it, and a curve whose corners have been rounded off is a different curve.

@@ -374,7 +374,7 @@ The Body block is empty.
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1044`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1052`
 <!-- generated:end DFX3037 -->
 
 **Cause.** A dynamic input's body is not a single expression. The Niagara translator wraps it as `Output = (Type)( <body> );`, so statements before the return produce invalid HLSL rather than an error naming the real problem.
@@ -392,7 +392,7 @@ The Body block is empty.
 '%s' is not a stack a module can be placed in. Use one of: %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:921`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:929`
 <!-- generated:end DFX3038 -->
 
 **Cause.** `Usage` names one of the six stacks (L1) and nothing else.
@@ -410,7 +410,7 @@ The Body block is empty.
 A DynamicInput cannot return a data interface; its Output must be a value type.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:962`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:970`
 <!-- generated:end DFX3039 -->
 
 **Cause.** A dynamic input feeds a value into an input slot; a data interface is not a value.
@@ -500,7 +500,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 The default for input '%s' has to be a literal or an enum entry. A module input default is stored on the asset, so it cannot reference anything outside the module.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:997`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1005`
 <!-- generated:end DFX3044 -->
 
 **Cause.** A module input's default is stored on the asset, so it cannot reference anything outside the module.
@@ -518,7 +518,7 @@ The default for input '%s' has to be a literal or an enum entry. A module input 
 '%s' is not a particle attribute DreamFX knows the type of. Write its type at first use, for example `float %s = ...;`.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:615`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:621`
 <!-- generated:end DFX3046 -->
 
 **Cause.** A `.dfm` body touches a `Particles.*` attribute that is neither a common Niagara attribute nor declared in the body. The pin wired for it needs a type, and guessing would wire one of the wrong width.
@@ -536,7 +536,7 @@ The default for input '%s' has to be a literal or an enum entry. A module input 
 A DynamicInput computes a value; it cannot write '%s'. Move the write into a Module.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1033`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:1041`
 <!-- generated:end DFX3047 -->
 
 **Cause.** A dynamic input computes a value in an input slot; it has no place in the stack to write from.
@@ -716,7 +716,7 @@ Native parent has an unavailable version or a cyclic parent chain: %s.
 Attribute '%s' is declared with conflicting types.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:562`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:569`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:685`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:568`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:575`, `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:693`
 <!-- generated:end DFX3057 -->
 
 **Cause.** A `.dfm` custom attribute has conflicting types, is read during its own initialization, or is first initialized on a path that might not execute.

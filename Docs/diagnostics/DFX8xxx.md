@@ -140,7 +140,7 @@ Could not read emitter '%s': %s
 '%s' cannot be adopted: '%s' has no DreamFXLang form yet, so adopting would destroy it on the first rebuild. Export .dfs instead.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:504`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:516`
 <!-- generated:end DFX8010 -->
 
 **Cause.** **Adopt** refuses an asset that has features DreamFXLang cannot express. One line is raised per feature.
@@ -160,7 +160,7 @@ This is the gate that makes adoption safe. Adopting means the text becomes the o
 Cannot adopt '%s': source destination or another source already exists at '%s'. Edit that file instead; Adopt never replaces existing source.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:420`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:432`
 <!-- generated:end DFX8011 -->
 
 **Cause.** Another `.dfs` already declares the same target asset. Two sources generating one asset take turns overwriting each other, and whichever built last wins.
@@ -180,7 +180,7 @@ Neither source can detect this at build time -- both succeed. The only place to 
 '%s' was adopted, but re-exporting the rebuilt asset does not reproduce this file. First difference at %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:600`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:612`
 <!-- generated:end DFX8012 -->
 
 **Cause.** The asset was adopted and rebuilt, but re-exporting the rebuilt asset does not reproduce the file that was written. The first differing line is in the message.
