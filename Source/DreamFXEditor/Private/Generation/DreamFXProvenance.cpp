@@ -43,7 +43,9 @@ namespace UE::DreamFX::Editor
 		// 1.2 -- dependency-aware source stamps and corrected generation/round-trip semantics.
 		// 1.3 -- native emitter/source system inheritance and verified VM completion.
 		// 1.4 -- precise expressions and initialized, collision-free attribute writeback.
-		return TEXT("1.4");
+		// 1.5 -- the system's fixed-bounds flag is a managed setting (UseFixedBounds), implied by a
+		//        declared FixedBounds box.
+		return TEXT("1.5");
 	}
 
 	FString FProvenance::HashWithSourceDependencies(const FString& SourceHash, const TMap<FString, FString>& Dependencies)

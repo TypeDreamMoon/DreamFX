@@ -1,0 +1,44 @@
+// Write-back fixture: tuned in the editor, and the text is where it has to land.
+//
+// This is the case pull exists for. Everything here starts at the value the text declares, and the
+// test then moves one of them on the ASSET -- the way the editor's rapid-iteration store moves when
+// somebody drags a number -- and pulls. What must come back is exactly one changed line, with its
+// indentation, its trailing semicolon and the line ending it already had, and nothing else in the
+// file touched.
+//
+// `GravityForce`'s node name is pinned with `as` on purpose: the node name is what the pull addresses
+// the asset's stored constants by, so a fixture whose node name happened to equal the module asset's
+// name would pass even if the address were derived from the module name instead of from the asset.
+System(Name="Corpus/NS_WriteBackTuning", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime = 0.5;
+    }
+
+    Emitter Motes
+    {
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Infinite);
+            SpawnRate(SpawnRate = 20.0);
+        }
+
+        ParticleSpawn = {
+            Spawn/Initialization/V2/InitializeParticle(
+                LifetimeMode = DirectSet,
+                Lifetime     = 2.0
+            );
+        }
+
+        ParticleUpdate = {
+            ParticleState();
+            GravityForce(Gravity = (0, 0, -100)) as GravityForce003;
+            SolveForcesAndVelocity();
+            Particles.Drag = 0.5;
+        }
+
+        SpriteRenderer Body
+        {
+            SortOrderHint = 0;
+        }
+    }
+}

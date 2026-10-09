@@ -28,6 +28,15 @@ namespace UE::DreamFX
 		/** Byte offset of the first character, so raw-block reads can rewind exactly. */
 		int32 Offset = 0;
 
+		/**
+		 * Byte offset one past the token's last character -- so the token's own text is
+		 * `Source.Mid(Offset, EndOffset - Offset)`.
+		 *
+		 * Not derivable from Text: a number's payload drops a trailing `f`, a string's is unescaped,
+		 * and a back-quoted name's excludes its quotes.
+		 */
+		int32 EndOffset = 0;
+
 		bool IsSymbol(const TCHAR* Expected) const { return Kind == ETokenKind::Symbol && Text == Expected; }
 		bool IsIdentifier(const TCHAR* Expected) const { return Kind == ETokenKind::Identifier && Text == Expected; }
 		bool IsEnd() const { return Kind == ETokenKind::End; }
@@ -63,9 +72,20 @@ namespace UE::DreamFX
 
 		FSourceLocation CurrentLocation() const { return FSourceLocation(Line, Column); }
 
+		/**
+		 * Byte offset one past the last token `Next` handed out, or past the last raw block read.
+		 *
+		 * This is where a VALUE ends when the parser stops consuming it -- the lexer's next pending
+		 * token starts later, past whatever trivia follows, and a caller rewriting only the value's own
+		 * characters has to leave that trivia alone.
+		 */
+		int32 LastTokenEnd() const { return LastConsumedEnd; }
+
 	private:
 		void Fill(int32 Count);
 		FToken LexToken();
+		/** The scanner itself; LexToken wraps it to stamp every token's end offset. */
+		FToken LexTokenImpl();
 		void SkipTriviaAndComments();
 		void Advance();
 		TCHAR Current() const;
@@ -78,6 +98,7 @@ namespace UE::DreamFX
 		int32 Position = 0;
 		int32 Line = 1;
 		int32 Column = 1;
+		int32 LastConsumedEnd = 0;
 
 		TArray<FToken> Queue;
 	};

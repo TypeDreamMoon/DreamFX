@@ -77,12 +77,12 @@ namespace UE::DreamFX::Editor
 
 	/** One fact per top-level reflected property, skipping transients and an explicit list. */
 	void AppendPropertyFacts(const FString& Prefix, const void* Container, const UStruct* Struct,
-		const TSet<FName>& Skip, const FString& SelfPackage, TArray<FString>& OutFacts)
+		const TSet<FName>& Skip, const FString& SelfPackage, TArray<FString>& OutFacts, EPropertyFlags SkipFlags = CPF_None)
 	{
 		for (TFieldIterator<FProperty> It(Struct); It; ++It)
 		{
 			FProperty* Property = *It;
-			if (Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated)
+			if (Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated | SkipFlags)
 				|| Skip.Contains(Property->GetFName()))
 			{
 				continue;
@@ -247,21 +247,57 @@ namespace UE::DreamFX::Editor
 	{
 		const FString SelfPackage = System->GetOutermost()->GetName();
 
-		// Compare authored runtime configuration independently of the exporter's Settings table.
-		// CPF_Edit selects settings rather than graph ownership, identity and derived compile data;
-		// editor-only metadata (description, thumbnails, baker settings) is not runtime behavior.
-		for (TFieldIterator<FProperty> It(System->GetClass()); It; ++It)
-		{
-			const FProperty* Property = *It;
-			if (!Property->HasAnyPropertyFlags(CPF_Edit)
-				|| Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated | CPF_EditorOnly))
-			{
-				continue;
-			}
-			FString Value;
-			Property->ExportText_InContainer(0, Value, System, System, System, PPF_None);
-			OutFacts.Add(FString::Printf(TEXT("system %s = %s"), *Property->GetName(), *ScrubIdentity(Value, SelfPackage)));
-		}
+		// The system's OWN properties, which this walk used to be blind to (write-back-coverage.md
+		// 3.9): the property walk ran on emitter data, renderers, stages and data interfaces, and
+		// never on `UNiagaraSystem` itself -- so `WarmupTime`, `FixedBounds`, `bFixedTickDelta`,
+		// `EffectType` and `Determinism` could be dropped by a rebuild and produce no fact difference
+		// at all, while the same properties on an emitter would have shown up immediately.
+		//
+		// The skip list is what makes that safe, and every entry is one of three kinds: identity that
+		// another fact already speaks for, a product of the compiler that this walk runs either side
+		// of, or editor bookkeeping with no effect semantics. The authored state the report asked for
+		// -- settings, bounds, the effect type, the platform set, the scalability overrides, the asset
+		// options -- is deliberately absent from it.
+		static const TSet<FName> SystemSkip = {
+			// Identity. A handle id is a guid, the scripts are object paths, and the emitters
+			// themselves are described one fact at a time below.
+			TEXT("EmitterHandles"), TEXT("SystemSpawnScript"), TEXT("SystemUpdateScript"),
+
+			// The user store, already read parameter by parameter as `user ...` facts. The raw export
+			// is one whole-store string whose field order is not part of the state.
+			TEXT("ExposedParameters"),
+
+			// The compiler's own products: the cooked data, the editor's copy of it, and the flags
+			// PostCompile recomputes (NiagaraSystem.cpp). A comparison that runs one side through a
+			// fresh compile cannot also demand these be equal, and what they carry arrives through the
+			// per-script `compiled ...` facts.
+			TEXT("SystemCompiledData"), TEXT("ScriptRuntimeCompiledDataForEditor"),
+			TEXT("StaleRuntimeCompiledDataForEditor"), TEXT("ScriptRuntimeCookedDataMap"),
+			TEXT("SystemStateDataStruct"), TEXT("bSystemStateFastPathEnabled"),
+			TEXT("MaxEmitterImportance"), TEXT("bNeedsGPUContextInitForDataInterfaces"),
+
+			// Editor bookkeeping. EditorData and EditorParameters are the rename and view state the
+			// report documents as a normalization artifact (3.10); MessageStore is the compile's own
+			// message list, which the emitter walk below skips for the same reason.
+			TEXT("EditorData"), TEXT("EditorParameters"), TEXT("MessageStore"),
+
+			// The data baker: settings the text has no form for, and the output of the last bake.
+			TEXT("BakerSettings"), TEXT("BakerGeneratedSettings"),
+
+			// R3 materializes embedded scripts as sibling assets, so an original's scratch pads and a
+			// mirror's are different objects in different packages -- the reason the emitter walk
+			// skips ScratchPads and ParentScratchPads.
+			TEXT("ScratchPadScripts"),
+
+			// Editor presentation, not effect state.
+			TEXT("ThumbnailImage"), TEXT("PreviewMoviePath"),
+		};
+
+		// Editor-only metadata (descriptions, library visibility, categories) is not effect state, and an
+		// original and its mirror legitimately differ there: asset-diff would report noise and the gate
+		// has nothing to protect, since a rebuild never writes it.
+		AppendPropertyFacts(TEXT("system"), System, UNiagaraSystem::StaticClass(), SystemSkip, SelfPackage,
+			OutFacts, CPF_EditorOnly);
 
 		// Identity, wiring and editor bookkeeping. Graphs and scripts are deliberately absent as
 		// objects -- their observable content arrives through the parameter stores here, the export

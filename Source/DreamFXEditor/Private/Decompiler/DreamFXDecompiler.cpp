@@ -5,6 +5,7 @@
 #include "Generation/DreamFXValueLowering.h"
 #include "Schema/DreamFXModuleLibrary.h"
 #include "SourceFiles/DreamFXPaths.h"
+#include "WriteBack/DreamFXSourceValue.h"
 
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Dom/JsonObject.h"
@@ -18,6 +19,7 @@
 #include "NiagaraSystem.h"
 #include "NiagaraTypes.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -60,66 +62,6 @@ namespace UE::DreamFX::Editor
 		FString FormatFloat(float Value)
 		{
 			return FormatFloatLossless(Value);
-		}
-
-		/** Renders a literal value back to source, given the type that says how to read its bytes. */
-		bool LiteralToSource(const FInputValue& Value, const FNiagaraTypeDefinition& Type, FString& Out)
-		{
-			const UScriptStruct* Struct = Value.LiteralStruct;
-			if (Struct == nullptr || Value.LiteralBytes.Num() == 0)
-			{
-				return false;
-			}
-
-			const uint8* Memory = Value.LiteralBytes.GetData();
-
-			if (Struct == FNiagaraFloat::StaticStruct())
-			{
-				Out = FormatFloat(reinterpret_cast<const FNiagaraFloat*>(Memory)->Value);
-				return true;
-			}
-			if (Struct == FNiagaraInt32::StaticStruct())
-			{
-				const int32 Integer = reinterpret_cast<const FNiagaraInt32*>(Memory)->Value;
-				// An int-typed slot holding an enum is written as the enum entry, not a raw number.
-				if (UEnum* Enum = Type.GetEnum())
-				{
-					const int32 Index = Enum->GetIndexByValue(Integer);
-					if (Index != INDEX_NONE)
-					{
-						const FString Token = FValueLowering::EnumEntryToSourceToken(Enum, Index);
-						if (!Token.IsEmpty())
-						{
-							Out = Token;
-							return true;
-						}
-					}
-				}
-				Out = FString::FromInt(Integer);
-				return true;
-			}
-			if (Struct == FNiagaraBool::StaticStruct())
-			{
-				Out = reinterpret_cast<const FNiagaraBool*>(Memory)->GetValue() ? TEXT("true") : TEXT("false");
-				return true;
-			}
-
-			// Everything else in the family is packed floats; the component count comes from the size.
-			const int32 Components = Struct->GetStructureSize() / static_cast<int32>(sizeof(float));
-			if (Components >= 2 && Components <= 4
-				&& Struct->GetStructureSize() == Components * static_cast<int32>(sizeof(float)))
-			{
-				const float* Floats = reinterpret_cast<const float*>(Memory);
-				TArray<FString> Parts;
-				for (int32 Index = 0; Index < Components; ++Index)
-				{
-					Parts.Add(FormatFloat(Floats[Index]));
-				}
-				Out = FString::Printf(TEXT("(%s)"), *FString::Join(Parts, TEXT(", ")));
-				return true;
-			}
-
-			return false;
 		}
 
 		/** Reads a curve data interface's JSON back into a `curve { }` literal. */
@@ -274,65 +216,13 @@ namespace UE::DreamFX::Editor
 		}
 
 		/**
-		 * JSON text as a DSL string literal: compacted onto one line and escaped.
-		 *
-		 * Two characters need escaping and only two, because the lexer's default escape rule is "take
-		 * the next character verbatim" -- so a quote needs one and a backslash needs one to stop it
-		 * eating the quote that follows. Compacting is not cosmetic: the lexer ends a string at a
-		 * newline, so a pretty-printed blob would not survive being read back.
+		 * A value with no settled spelling, reported as a gap by its owner. Kept as a function so the
+		 * wording lives in one place now that the spelling rules themselves do
+		 * (`WriteBack/DreamFXSourceValue.h`).
 		 */
-		FString QuoteSourceString(FString Value)
+		void NoteUnrepresentableProperty(const FString& Kind, const FString& Key, TArray<FString>& OutGaps)
 		{
-			Value.ReplaceInline(TEXT("\\"), TEXT("\\\\"), ESearchCase::CaseSensitive);
-			Value.ReplaceInline(TEXT("\""), TEXT("\\\""), ESearchCase::CaseSensitive);
-			Value.ReplaceInline(TEXT("\n"), TEXT("\\n"), ESearchCase::CaseSensitive);
-			Value.ReplaceInline(TEXT("\r"), TEXT("\\r"), ESearchCase::CaseSensitive);
-			Value.ReplaceInline(TEXT("\t"), TEXT("\\t"), ESearchCase::CaseSensitive);
-			return FString::Printf(TEXT("\"%s\""), *Value);
-		}
-
-		bool JsonTextToSourceString(const FString& JsonText, FString& OutLiteral)
-		{
-			// Re-serialised rather than passed through, so the same value always produces the same
-			// bytes however the engine happened to format it -- which is what keeps a re-export of the
-			// mirror identical to the export it came from.
-			TSharedPtr<FJsonValue> Parsed;
-			const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonText);
-			if (!FJsonSerializer::Deserialize(Reader, Parsed) || !Parsed.IsValid())
-			{
-				return false;
-			}
-
-			FString Compact;
-			const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
-				TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Compact);
-
-			if (Parsed->Type == EJson::Object)
-			{
-				if (!FJsonSerializer::Serialize(Parsed->AsObject().ToSharedRef(), Writer))
-				{
-					return false;
-				}
-			}
-			else if (Parsed->Type == EJson::Array)
-			{
-				if (!FJsonSerializer::Serialize(Parsed->AsArray(), Writer))
-				{
-					return false;
-				}
-			}
-			else
-			{
-				return false;
-			}
-
-			if (Compact.IsEmpty() || Compact.Contains(TEXT("\n")) || Compact.Contains(TEXT("\r")))
-			{
-				return false;
-			}
-
-			OutLiteral = QuoteSourceString(Compact);
-			return true;
+			OutGaps.AddUnique(FString::Printf(TEXT("%s property '%s' (structured value)"), *Kind, *Key));
 		}
 
 		/**
@@ -650,7 +540,7 @@ namespace UE::DreamFX::Editor
 			case EInputValueMode::Literal:
 			{
 				FString Text;
-				if (LiteralToSource(Value, Type, Text))
+				if (FValueLowering::LiteralToSource(Value, Type, Text))
 				{
 					return Text;
 				}
@@ -812,6 +702,22 @@ namespace UE::DreamFX::Editor
 				return;
 			}
 
+			bool bWroteBox = false;
+			bool bWroteFixedBoundsFlag = false;
+			const bool bHasFixedBoundsFlag = Mappings.ContainsByPredicate(
+				[](const TPair<const TCHAR*, const TCHAR*>& Mapping) { return FCString::Strcmp(Mapping.Key, TEXT("UseFixedBounds")) == 0; });
+			ON_SCOPE_EXIT
+			{
+				// The generator turns the override on for a declared box unless the source says
+				// otherwise, so a box held with the flag off must say so or the rebuild makes it live.
+				bool bFlag = false;
+				if (bHasFixedBoundsFlag && bWroteBox && !bWroteFixedBoundsFlag
+					&& (!Current->TryGetBoolField(TEXT("bFixedBounds"), bFlag) || !bFlag))
+				{
+					OutLines.Add(TEXT("UseFixedBounds = false;"));
+				}
+			};
+
 			for (const TPair<const TCHAR*, const TCHAR*>& Mapping : Mappings)
 			{
 				const TSharedPtr<FJsonValue> Value = FindJsonValueByPath(Current, Mapping.Value);
@@ -897,315 +803,21 @@ namespace UE::DreamFX::Editor
 				}
 
 				OutLines.Add(FString::Printf(TEXT("%s = %s;"), Mapping.Key, *Text));
+				bWroteBox |= Value->Type == EJson::Object && FCString::Strcmp(Mapping.Key, TEXT("FixedBounds")) == 0;
+				bWroteFixedBoundsFlag |= FCString::Strcmp(Mapping.Key, TEXT("UseFixedBounds")) == 0;
 			}
 			(void)Writer;
 		}
 
 		/**
-		 * Emits every scalar renderer property that differs from a pristine renderer of the same class.
+		 * Emits every renderer property that differs from a pristine renderer of the same class.
 		 *
 		 * Renderer property blocks are schema-driven (L8), so there is no name list to work from --
-		 * the diff against the default is the whole mechanism. Structs and arrays are skipped and
-		 * counted as gaps rather than guessed at, because a half-written struct would re-import wrong.
+		 * the diff against the default is the whole mechanism. Which spelling a value gets, and which
+		 * values have none at all, is deliberately NOT decided here: it comes from
+		 * `RenderJsonPropertyAsSource`, so that the reader and the writer of a value can never
+		 * disagree about how it is written.
 		 */
-		/** "/Game/FX/M_X.M_X" -> "/Game/FX/M_X". The generator re-appends the object suffix on import. */
-		FString ReferenceToPackagePath(const FString& ReferencePath)
-		{
-			FString PackagePath = ReferencePath;
-			int32 Dot = INDEX_NONE;
-			if (PackagePath.FindLastChar(TEXT('.'), Dot))
-			{
-				PackagePath.LeftInline(Dot);
-			}
-			return PackagePath;
-		}
-
-		/** The `{"refPath": "..."}` shape the external edit API round-trips object references through. */
-		bool TryReadReferenceObject(const TSharedPtr<FJsonValue>& Value, FString& OutPackagePath)
-		{
-			FString ReferencePath;
-			if (Value.IsValid() && Value->Type == EJson::Object && Value->AsObject().IsValid()
-				&& Value->AsObject()->TryGetStringField(TEXT("refPath"), ReferencePath)
-				&& ReferencePath.StartsWith(TEXT("/")))
-			{
-				OutPackagePath = ReferenceToPackagePath(ReferencePath);
-				return true;
-			}
-			return false;
-		}
-
-		/**
-		 * A JSON object that is really a number tuple, as the `(x, y)` literal the DSL already has.
-		 *
-		 * plan-v5 R4 step 1, and the largest single bucket in the coverage report: eight of the eleven
-		 * "structured value" gaps were one thing wearing different names. `SubImageSize` (18 hits) is
-		 * an FVector2D, `PivotInUVSpace` (7) is an FVector2D, `ColorAdd` (2) is an FLinearColor. The
-		 * generator has always been able to write these -- `ValueToJson` emits exactly the X/Y and
-		 * R/G/B/A shapes read here -- so the whole gap was the decompiler not recognising them on the
-		 * way out.
-		 *
-		 * `SubImageSize` is the reason this is step 1 rather than step 4: losing it silently breaks
-		 * every flipbook's sub-UV, which is a visible difference in the mirror that no amount of L1 or
-		 * L2 green would have explained.
-		 *
-		 * Only all-numeric objects with exactly the expected key set convert. Anything else is still a
-		 * gap, because a struct that half-matches is not a vector and guessing its remaining fields
-		 * would be the silent-loss bug this whole pass exists to remove.
-		 */
-		bool TryWriteNumberTuple(const FString& PropertyName, const TSharedPtr<FJsonObject>& Object, FString& OutLiteral)
-		{
-			if (!Object.IsValid())
-			{
-				return false;
-			}
-
-			static const TCHAR* const Xy[]   = { TEXT("X"), TEXT("Y") };
-			static const TCHAR* const Xyz[]  = { TEXT("X"), TEXT("Y"), TEXT("Z") };
-			static const TCHAR* const Xyzw[] = { TEXT("X"), TEXT("Y"), TEXT("Z"), TEXT("W") };
-			static const TCHAR* const Rgba[] = { TEXT("R"), TEXT("G"), TEXT("B"), TEXT("A") };
-
-			// A four-tuple in source carries no record of whether it meant XYZW or RGBA -- the text is
-			// `(1, 0, 0, 1)` either way -- so the writer has to agree with how the reader will encode
-			// it. The generator picks RGBA when the property name contains "Color" and XYZW otherwise
-			// (ValueToJson), and a property whose JSON disagrees with that rule is left as a gap rather
-			// than written as a tuple that would re-import into the wrong four fields.
-			const bool bGeneratorWouldUseRgba = PropertyName.Contains(TEXT("Color"));
-
-			const TCHAR* const* Names = nullptr;
-			switch (Object->Values.Num())
-			{
-			case 2: Names = Xy; break;
-			case 3: Names = Xyz; break;
-			case 4:
-				Names = Object->HasField(TEXT("R")) ? Rgba : Xyzw;
-				if ((Names == Rgba) != bGeneratorWouldUseRgba)
-				{
-					return false;
-				}
-				break;
-			default: return false;
-			}
-
-			const int32 Count = Object->Values.Num();
-			TArray<FString> Parts;
-			Parts.Reserve(Count);
-
-			for (int32 Index = 0; Index < Count; ++Index)
-			{
-				const TSharedPtr<FJsonValue> Field = Object->TryGetField(Names[Index]);
-				if (!Field.IsValid() || Field->Type != EJson::Number)
-				{
-					return false;
-				}
-
-				// Same integral rule the scalar properties use, so a value of 8 reads back as the int
-				// literal it was and a re-export of the mirror is byte-identical.
-				const double Number = Field->AsNumber();
-				Parts.Add(FMath::IsNearlyEqual(Number, FMath::RoundToDouble(Number))
-					? FString::Printf(TEXT("%lld"), static_cast<int64>(FMath::RoundToDouble(Number)))
-					: FormatFloat(static_cast<float>(Number)));
-			}
-
-			OutLiteral = FString::Printf(TEXT("(%s)"), *FString::Join(Parts, TEXT(", ")));
-			return true;
-		}
-
-		/**
-		 * A structured value carried verbatim, as a quoted JSON string.
-		 *
-		 * plan-v5 R4 steps 2 and 4. `MaterialParameters` is an attribute-to-material-parameter binding
-		 * table; `Meshes` elements carry a pivot and a scale beside the mesh; `Platforms` is a
-		 * scalability filter; `UV0Settings` is a ribbon UV struct. Each is a different shape, none has
-		 * a DSL spelling, and between them they are every remaining "structured value" gap in the four
-		 * content packs.
-		 *
-		 * Designing a block syntax per struct is the readable answer and is what the plan asked for.
-		 * This is not that -- it is the *lossless* answer, chosen because the alternative in front of
-		 * us was continuing to drop them. A renderer property that survives as an opaque blob rebuilds
-		 * into the same renderer; one that is recorded as a gap rebuilds into a different effect. When
-		 * a struct earns real syntax it stops coming through here, and nothing else has to change:
-		 * both sides key off "did a more specific rule already handle this".
-		 *
-		 * Deliberately compact (no pretty-printing) and single-line, because it has to fit a string
-		 * literal, and the lexer stops a string at a newline.
-		 */
-		bool TryWriteJsonBlob(const TSharedPtr<FJsonValue>& Value, FString& OutLiteral)
-		{
-			if (!Value.IsValid() || (Value->Type != EJson::Object && Value->Type != EJson::Array))
-			{
-				return false;
-			}
-
-			FString Json;
-			const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
-				TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
-
-			const bool bSerialized = Value->Type == EJson::Object
-				? FJsonSerializer::Serialize(Value->AsObject().ToSharedRef(), Writer)
-				: FJsonSerializer::Serialize(Value->AsArray(), Writer);
-
-			return bSerialized && JsonTextToSourceString(Json, OutLiteral);
-		}
-
-		/**
-		 * An array of asset-carrying structs, as a plain array of paths.
-		 *
-		 * plan-v3 E4-3. `Meshes` and `OverrideMaterials` are arrays of structs whose only interesting
-		 * field, in every case this project has, is the asset itself. Writing them as a path array is
-		 * what makes a mesh renderer migrate at all -- but each element's remaining fields are compared
-		 * against a default-constructed element first, so an entry with a custom pivot or scale is
-		 * reported as a gap instead of being flattened away.
-		 */
-		bool TryWriteReferenceArray(const UClass* RendererClass, const FString& Key,
-			const TArray<TSharedPtr<FJsonValue>>& Elements, TArray<FString>& OutLines)
-		{
-			if (Elements.Num() == 0)
-			{
-				return false;
-			}
-
-			FString ReferenceField;
-			FString ElementDefaultsJson;
-			TArray<FString> Errors;
-			if (!FNiagaraAdapter::GetArrayElementReferenceField(
-				RendererClass, Key, ReferenceField, ElementDefaultsJson, Errors))
-			{
-				return false;
-			}
-
-			TSharedPtr<FJsonObject> ElementDefaults;
-			{
-				const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ElementDefaultsJson);
-				FJsonSerializer::Deserialize(Reader, ElementDefaults);
-			}
-
-			TArray<FString> Paths;
-			bool bDroppedField = false;
-
-			for (const TSharedPtr<FJsonValue>& Element : Elements)
-			{
-				if (!Element.IsValid() || Element->Type != EJson::Object || !Element->AsObject().IsValid())
-				{
-					return false;
-				}
-
-				const TSharedPtr<FJsonObject> Object = Element->AsObject();
-
-				FString PackagePath;
-				if (!TryReadReferenceObject(Object->TryGetField(ReferenceField), PackagePath))
-				{
-					// An element whose reference is unset is not representable as a path, and writing an
-					// empty string would import as "no asset" on a different element index.
-					return false;
-				}
-				Paths.Add(PackagePath);
-
-				for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Object->Values)
-				{
-					if (Field.Key == ReferenceField || !Field.Value.IsValid())
-					{
-						continue;
-					}
-					const TSharedPtr<FJsonValue> Default = ElementDefaults.IsValid()
-						? ElementDefaults->TryGetField(Field.Key) : nullptr;
-					if (!Default.IsValid() || !FJsonValue::CompareEqual(*Field.Value, *Default))
-					{
-						bDroppedField = true;
-					}
-				}
-			}
-
-			// plan-v5 R4 step 4. The path array is the readable form and is exactly right when the
-			// elements carry nothing but their asset -- which is the common case, and why it stays the
-			// preferred one. When an element has a custom pivot or scale, the path array cannot say so,
-			// and it used to be written anyway with the loss noted in the header. Refusing here hands
-			// the property to the verbatim JSON rule instead: less readable, but the mesh renderer
-			// rebuilds with the pivot the artist set.
-			if (bDroppedField)
-			{
-				return false;
-			}
-
-			TArray<FString> Quoted;
-			Quoted.Reserve(Paths.Num());
-			for (const FString& Path : Paths)
-			{
-				Quoted.Add(FString::Printf(TEXT("\"%s\""), *Path));
-			}
-			OutLines.Add(FString::Printf(TEXT("%s = [%s];"), *Key, *FString::Join(Quoted, TEXT(", "))));
-			return true;
-		}
-
-		bool NormalizeUserParameterBinding(TSharedPtr<FJsonValue>& Value,
-			const TSharedPtr<FJsonValue>& Default)
-		{
-			const TSharedPtr<FJsonObject>* Parameter = nullptr;
-			const TSharedPtr<FJsonObject>* DefaultParameter = nullptr;
-			if (!Value.IsValid() || Value->Type != EJson::Object
-				|| !Default.IsValid() || Default->Type != EJson::Object
-				|| !Value->AsObject()->TryGetObjectField(TEXT("parameter"), Parameter)
-				|| !Default->AsObject()->TryGetObjectField(TEXT("parameter"), DefaultParameter))
-			{
-				return false;
-			}
-			FString Name;
-			const TSharedPtr<FJsonValue> Type = (*Parameter)->TryGetField(TEXT("typeDefHandle"));
-			const TSharedPtr<FJsonValue> DefaultType = (*DefaultParameter)->TryGetField(TEXT("typeDefHandle"));
-			if (!(*Parameter)->TryGetStringField(TEXT("name"), Name) || !Type.IsValid() || !DefaultType.IsValid()
-				|| !FJsonValue::CompareEqual(*Type, *DefaultType))
-			{
-				return false;
-			}
-			// Niagara serializes TypeDefHandle as a process-local registry index. These bindings
-			// have a fixed renderer-defined type (MaterialInterface for Sprite/Ribbon); import only
-			// the name so the fresh renderer keeps that type in every editor session.
-			const TSharedRef<FJsonObject> StableParameter = MakeShared<FJsonObject>();
-			StableParameter->SetStringField(TEXT("name"), Name);
-			const TSharedRef<FJsonObject> StableBinding = MakeShared<FJsonObject>();
-			StableBinding->SetObjectField(TEXT("parameter"), StableParameter);
-			Value = MakeShared<FJsonValueObject>(StableBinding);
-			return true;
-		}
-
-		/** Normalize bindings at every struct/array depth, including mesh OverrideMaterials. */
-		bool NormalizeRendererBindings(const FProperty* Property, const void* DefaultData,
-			TSharedPtr<FJsonValue>& Value)
-		{
-			if (Property == nullptr || !Value.IsValid()) { return true; }
-			if (const FStructProperty* Struct = CastField<FStructProperty>(Property))
-			{
-				if (Struct->Struct == FNiagaraUserParameterBinding::StaticStruct())
-				{
-					return DefaultData != nullptr && NormalizeUserParameterBinding(Value,
-						FJsonObjectConverter::UPropertyToJsonValue(const_cast<FProperty*>(Property), DefaultData));
-				}
-				if (Value->Type != EJson::Object) { return true; }
-				for (auto& Field : Value->AsObject()->Values)
-				{
-					const FProperty* Member = FindFProperty<FProperty>(Struct->Struct, FName(*Field.Key));
-					if (!NormalizeRendererBindings(Member,
-						Member != nullptr && DefaultData != nullptr ? Member->ContainerPtrToValuePtr<void>(DefaultData) : nullptr,
-						Field.Value)) { return false; }
-				}
-			}
-			else if (const FArrayProperty* Array = CastField<FArrayProperty>(Property))
-			{
-				const FStructProperty* Inner = CastField<FStructProperty>(Array->Inner);
-				if (Inner != nullptr && Value->Type == EJson::Array)
-				{
-					// Import constructs fresh elements, even when the renderer CDO array is empty.
-					FStructOnScope ElementDefaults(Inner->Struct);
-					TArray<TSharedPtr<FJsonValue>> Elements = Value->AsArray();
-					for (TSharedPtr<FJsonValue>& Element : Elements)
-					{
-						if (!NormalizeRendererBindings(Inner, ElementDefaults.GetStructMemory(), Element)) { return false; }
-					}
-					Value = MakeShared<FJsonValueArray>(MoveTemp(Elements));
-				}
-			}
-			return true;
-		}
-
 		void WriteChangedRendererProperties(const UClass* RendererClass, const FString& Json,
 			const FString& DefaultsJson, TArray<FString>& OutLines, TArray<FString>& OutGaps)
 		{
@@ -1256,97 +868,31 @@ namespace UE::DreamFX::Editor
 				{
 					continue;
 				}
-				if (Value->Type == EJson::Array && TryWriteReferenceArray(RendererClass, Key, Value->AsArray(), OutLines))
+				// The plain-path spelling is judged on the raw value, before bindings are normalized: a
+				// default user-parameter binding still compares equal to a fresh element's there.
+				FString ReferenceArray;
+				if (Value->Type == EJson::Array && TryWriteReferenceArray(RendererClass, Key, Value->AsArray(), ReferenceArray))
 				{
+					OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *ReferenceArray));
 					continue;
 				}
-				const FProperty* RendererProperty = FindFProperty<FProperty>(RendererClass, FName(*Key));
-				if (!NormalizeRendererBindings(RendererProperty,
-					RendererProperty != nullptr ? RendererProperty->ContainerPtrToValuePtr<void>(RendererClass->GetDefaultObject()) : nullptr,
-					Value))
+				if (!NormalizeRendererPropertyBindings(RendererClass, Key, Value))
 				{
 					OutGaps.AddUnique(FString::Printf(TEXT("renderer property '%s' contains a user parameter binding with a non-default or unreadable type"), *Key));
 					continue;
 				}
 
-				switch (Value->Type)
+				// One implementation of "what is this value in source", shared with the write-back
+				// direction: a reader and a writer that spell a value differently turn every pull into
+				// a rewrite of the same line.
+				FString Source;
+				FString Why;
+				if (!RenderJsonPropertyAsSource(RendererClass, Key, Value, Source, Why))
 				{
-				case EJson::Boolean:
-					OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, Value->AsBool() ? TEXT("true") : TEXT("false")));
-					break;
-				case EJson::Number:
-				{
-					const double Number = Value->AsNumber();
-					OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key,
-						FMath::IsNearlyEqual(Number, FMath::RoundToDouble(Number))
-							? *FString::Printf(TEXT("%lld"), static_cast<int64>(FMath::RoundToDouble(Number)))
-							: *FormatFloat(static_cast<float>(Number))));
-					break;
+					NoteUnrepresentableProperty(TEXT("renderer"), Key, OutGaps);
+					continue;
 				}
-				case EJson::String:
-				{
-					const FString Raw = Value->AsString();
-					OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key,
-						Raw.StartsWith(TEXT("/")) ? *FString::Printf(TEXT("\"%s\""), *Raw) : *Raw));
-					break;
-				}
-				case EJson::Object:
-				{
-					// An asset reference comes back as {"refPath": "/Game/FX/M_X.M_X"} -- the shape the
-					// external edit API's reference converter round-trips through. Reading it is what
-					// makes the decompiler usable at all on real content: a coverage sweep of this
-					// project found Material unexported on 17 of 20 systems, and a sprite renderer
-					// without its material is not a migration, it is a white square.
-					//
-					// The trailing `.ShortName` is dropped because the generator re-appends it; the
-					// source form is the package path.
-					FString PackagePath;
-					if (TryReadReferenceObject(Value, PackagePath))
-					{
-						OutLines.Add(FString::Printf(TEXT("%s = \"%s\";"), *Key, *PackagePath));
-						break;
-					}
-
-					// R4 step 1: FVector2D / FLinearColor and friends, which the DSL writes as tuples.
-					FString Tuple;
-					if (TryWriteNumberTuple(Key, Value->AsObject(), Tuple))
-					{
-						OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *Tuple));
-						break;
-					}
-
-					// R4 steps 2/4: everything else structured, carried verbatim rather than dropped.
-					FString Blob;
-					if (TryWriteJsonBlob(Value, Blob))
-					{
-						OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *Blob));
-						break;
-					}
-
-					OutGaps.AddUnique(FString::Printf(TEXT("renderer property '%s' (structured value)"), *Key));
-					break;
-				}
-				case EJson::Array:
-				{
-					if (TryWriteReferenceArray(RendererClass, Key, Value->AsArray(), OutLines))
-					{
-						break;
-					}
-
-					FString Blob;
-					if (TryWriteJsonBlob(Value, Blob))
-					{
-						OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *Blob));
-						break;
-					}
-
-					OutGaps.AddUnique(FString::Printf(TEXT("renderer property '%s' (structured value)"), *Key));
-					break;
-				}
-				default:
-					OutGaps.AddUnique(FString::Printf(TEXT("renderer property '%s' (structured value)"), *Key));
-					break;
-				}
+				OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *Source));
 			}
 		}
 
@@ -1395,7 +941,9 @@ namespace UE::DreamFX::Editor
 			// birth velocity 2273 (=136500 * 1/60) original vs 4529 (=136500 * 1/30) mirror.
 			{ TEXT("FixedTickDelta"),     TEXT("bFixedTickDelta") },
 			{ TEXT("FixedTickDeltaTime"), TEXT("FixedTickDeltaTime") },
-			// Preserve non-default authored bounds even while the system flag is disabled.
+			// Preserve non-default authored bounds even while the system flag is disabled; the flag
+			// then has to be written too, because a declared box turns it on (WriteChangedSettings).
+			{ TEXT("UseFixedBounds"),     TEXT("bFixedBounds") },
 			{ TEXT("FixedBounds"),        TEXT("FixedBounds") },
 		};
 
@@ -2874,7 +2422,7 @@ namespace UE::DreamFX::Editor
 
 					FString DefaultText;
 					if (Variable.DefaultValue.Mode == EInputValueMode::Literal
-						&& LiteralToSource(Variable.DefaultValue, Variable.Type, DefaultText))
+						&& FValueLowering::LiteralToSource(Variable.DefaultValue, Variable.Type, DefaultText))
 					{
 						Line += FString::Printf(TEXT(" = %s"), *DefaultText);
 					}

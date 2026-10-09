@@ -4,13 +4,16 @@
 
 ### 不兼容变更
 
-- 生成器版本升至 `1.4`：已有生成资产在下一次 build 时全部重新生成（依赖感知的源码指纹、继承、VM 完成校验与修正后的 `.dfm` 写回语义）。
+- 生成器版本升至 `1.5`：已有生成资产在下一次 build 时全部重新生成（依赖感知的源码指纹、继承、VM 完成校验与修正后的 `.dfm` 写回语义）。
 - `.dfm` Body 中新声明的粒子属性（`float Particles.X = ...;`）必须在顶层无条件初始化，且同一属性不能以不同类型声明，否则报 `DFX3057`。此前条件分支内的首次声明可以编译，但未执行分支时输出未初始化。只读取上游模块写入的属性时，先写不带初始化的类型声明。
 - `asset-diff` 把缺失镜像、无法解析的内容根和编译失败计入退出码；系统级可编辑运行设置参与比较。
 - Adopt 不再覆盖已存在的规范源码路径（`DFX8011`），Bridge 的 Adopt 同样拒绝。
+- **构建安全闸（`DFX8018`）**：重建会丢掉文本无法表达的事实（未声明的渲染器属性、被清空的材质参数绑定等）时拒绝保存并逐条列出（[#48](https://github.com/TypeDreamMoon/DreamFX/pull/48)）。编辑器内的保存重建、Adopt、Bridge 没有覆盖开关；命令行 `-Force` 同时覆盖该闸并以警告记录丢失项。被拒绝的构建不写溯源记录；编辑器会话中会从磁盘重新加载该资产，避免 Save All / 自动保存写入被拒绝的结果。
 
 ### 新增
 
+- `dfx.ps1 pull <源码>`：把资产中实际存储的值写回文本已声明的字面量（默认试运行，`-Apply` 写入，`-Structure` 写回可唯一定位的结构差异，`-Asset` 指定读取的资产）。只改动值所占的字符，保留注释、换行和文件编码；写前备份到 `Saved/DreamFX/Pull/`（`DFX7106`–`DFX7116`）（[#48](https://github.com/TypeDreamMoon/DreamFX/pull/48)）。
+- 系统 `Settings` 新增 `UseFixedBounds`（`bFixedBounds`）：声明 `FixedBounds` 时默认开启，可显式写 `false` 保留不生效的包围盒；反编译在需要时写出该项，往返保持一致。
 - `System(..., Parent="../Base.dfs")` 源码级系统继承：Settings / Properties / 系统栈 / 发射器按名称合并，父链及其 `.dfe` 参与指纹与监听（[#5](https://github.com/TypeDreamMoon/DreamFX/issues/5)）。
 - `Emitter X inherits "/Game/NE_Parent" version "GUID"` 保留 Niagara 原生父发射器关联，重建保留 handle GUID，支持属性、栈、渲染器、事件组和默认值覆盖（[#5](https://github.com/TypeDreamMoon/DreamFX/issues/5)）。
 - 表达式与默认值支持 `int(...)` 显式截断转换（`DFX4044`）（[#36](https://github.com/TypeDreamMoon/DreamFX/issues/36)）。

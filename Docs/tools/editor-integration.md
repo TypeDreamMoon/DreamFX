@@ -393,6 +393,6 @@ rather than something guessed at.
 - [Getting started](../getting-started.md) — the editor-side workflow in order
 - [Language reference](../language/README.md) — what the exported text means
 - [Asset comparison and export](asset-comparison-and-export.md) — comparison failures and export coverage limits
-- [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8017`, the
+- [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8018`, the
   gap codes that say what a decompile could not carry
 - `dfx.ps1 coverage` — the same question asked of a whole content tree, bucketed by feature

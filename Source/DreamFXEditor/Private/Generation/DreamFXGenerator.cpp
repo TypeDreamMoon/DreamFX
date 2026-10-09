@@ -8,10 +8,12 @@
 #include "DreamFXParser.h"
 #include "DreamFXProvenance.h"
 #include "DreamFXValueLowering.h"
+#include "Diff/DreamFXBuildSafetyGate.h"
 #include "Generation/DreamFXModuleGenerator.h"
 #include "Lint/DreamFXLint.h"
 #include "Schema/DreamFXModuleLibrary.h"
 #include "SourceFiles/DreamFXPaths.h"
+#include "WriteBack/DreamFXSourceValue.h"
 
 #include "Dom/JsonObject.h"
 #include "JsonObjectConverter.h"
@@ -23,7 +25,9 @@
 #include "NiagaraEmitter.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
+#include "PackageTools.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonReader.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UnrealType.h"
@@ -410,6 +414,20 @@ namespace UE::DreamFX::Editor
 			const TCHAR* PropertyName;
 			/** Pairs of {written, actual}, terminated by a null. Empty when no aliasing is needed. */
 			const TCHAR* const* ValueAliases;
+
+			/**
+			 * A bool property the setting cannot work without, set to true whenever the setting is
+			 * written, and null when the setting stands on its own.
+			 *
+			 * The engine reads a box through an override flag, and the language has no spelling for
+			 * that flag: `FixedBounds` is the only way to say "this system's bounds are authored", so
+			 * writing the box without turning the override on is a setting that looks applied and is
+			 * not -- the bounds stay dynamic and the box is inert. The round trip then loses it too,
+			 * because the decompiler prints a box only when the flag says it is live: the corpus
+			 * measured exactly that, `RoundTrip/ValueModes.dfs` declaring +/-50 and coming back as the
+			 * engine's +/-100 default, while every fixture that declared the default box hid it.
+			 */
+			const TCHAR* CompanionBool = nullptr;
 		};
 
 		const TCHAR* const SimTargetAliases[] = { TEXT("CPU"), TEXT("CPUSim"), TEXT("GPU"), TEXT("GPUComputeSim"), nullptr };
@@ -419,7 +437,12 @@ namespace UE::DreamFX::Editor
 		{
 			{ TEXT("EffectType"),  TEXT("EffectType"),  nullptr },
 			{ TEXT("WarmupTime"),  TEXT("WarmupTime"),  nullptr },
-			{ TEXT("FixedBounds"), TEXT("FixedBounds"), nullptr },
+			// The override flag has its own spelling so a rebuild owns it like every other setting
+			// (#19): without one, an in-place rebuild kept whatever the asset had while a fresh build
+			// of the same text got the default. Declaring a box still implies the flag unless the
+			// source sets it explicitly -- see PlanSettings.
+			{ TEXT("UseFixedBounds"), TEXT("bFixedBounds"), nullptr },
+			{ TEXT("FixedBounds"), TEXT("FixedBounds"), nullptr, TEXT("bFixedBounds") },
 			// Substepping. The decompiler's SystemSettingFields carries the same pair; a system that
 			// ticks at a fixed 1/60 simulates visibly differently from one stepped per-frame, and
 			// nothing below the system properties records that fact.
@@ -454,6 +477,105 @@ namespace UE::DreamFX::Editor
 			return Name.Equals(TEXT("ModulePaths"), ESearchCase::IgnoreCase);
 		}
 
+		/**
+		 * The alias a value came from, or the value unchanged.
+		 *
+		 * The inverse of `ApplyValueAlias`, and it has to be a real inverse: the setting table's pairs
+		 * are {written, actual}, so reading back means matching the SECOND half and answering the
+		 * first. `SimTarget = CPU` is the case that makes this load-bearing -- a pull that answered
+		 * `CPUSim` would write a spelling the table does not accept, and the next build would reject
+		 * the file it had just been given.
+		 */
+		FString RevertValueAlias(const TCHAR* const* Aliases, const FString& Actual)
+		{
+			if (Aliases == nullptr)
+			{
+				return Actual;
+			}
+			for (int32 Index = 0; Aliases[Index] != nullptr; Index += 2)
+			{
+				if (Actual.Equals(Aliases[Index + 1], ESearchCase::IgnoreCase))
+				{
+					return Aliases[Index];
+				}
+			}
+			return Actual;
+		}
+
+		/**
+		 * One settings value as the source spelling, from the JSON the property writer takes.
+		 *
+		 * The value half of `PlanSettings` run backwards, sharing its spelling rules with the
+		 * decompiler's `WriteChangedSettings` deliberately: those two must agree, and the only way to
+		 * guarantee that is for one implementation to answer both.
+		 */
+		bool RenderSettingValue(const TCHAR* const* ValueAliases, const TSharedPtr<FJsonValue>& Value,
+			FString& OutSource, FString& OutWhy)
+		{
+			if (!Value.IsValid() || Value->IsNull())
+			{
+				OutWhy = TEXT("the asset holds nothing there");
+				return false;
+			}
+
+			switch (Value->Type)
+			{
+			case EJson::Boolean:
+				OutSource = Value->AsBool() ? TEXT("true") : TEXT("false");
+				return true;
+
+			case EJson::Number:
+			{
+				const double Number = Value->AsNumber();
+				OutSource = FMath::IsNearlyEqual(Number, FMath::RoundToDouble(Number))
+					? FString::Printf(TEXT("%lld"), static_cast<int64>(FMath::RoundToDouble(Number)))
+					: FormatFloatLossless(static_cast<float>(Number));
+				return true;
+			}
+
+			case EJson::String:
+			{
+				const FString Spelled = RevertValueAlias(ValueAliases, Value->AsString());
+				OutSource = Spelled.StartsWith(TEXT("/"))
+					? FString::Printf(TEXT("\"%s\""), *Spelled)
+					: Spelled;
+				return true;
+			}
+
+			case EJson::Object:
+			{
+				// The one struct with a spelling: an FBox as `box(min..., max...)`. Written whenever it
+				// is asked for, because the ask is the source declaring `FixedBounds` -- the companion
+				// override flag is what the plan writes to make that declaration live, so a declared box
+				// is by construction a live one.
+				const TSharedPtr<FJsonObject>* Box = nullptr;
+				const TSharedPtr<FJsonObject>* Min = nullptr;
+				const TSharedPtr<FJsonObject>* Max = nullptr;
+				if (!Value->TryGetObject(Box)
+					|| !(*Box)->TryGetObjectField(TEXT("Min"), Min)
+					|| !(*Box)->TryGetObjectField(TEXT("Max"), Max))
+				{
+					OutWhy = TEXT("it is a structured value with no settled spelling of its own");
+					return false;
+				}
+
+				auto Axis = [](const TSharedPtr<FJsonObject>& Corner, const TCHAR* Name)
+				{
+					return FormatFloatLossless(static_cast<float>(Corner->GetNumberField(Name)));
+				};
+
+				OutSource = FString::Printf(TEXT("box(%s, %s, %s, %s, %s, %s)"),
+					*Axis(*Min, TEXT("X")), *Axis(*Min, TEXT("Y")), *Axis(*Min, TEXT("Z")),
+					*Axis(*Max, TEXT("X")), *Axis(*Max, TEXT("Y")), *Axis(*Max, TEXT("Z")));
+				return true;
+			}
+
+			default:
+				OutWhy = TEXT("it is a value type this language does not spell as a setting");
+				return false;
+			}
+		}
+
 		FString ApplyValueAlias(const TCHAR* const* Aliases, const FString& Written)
 		{
 			if (Aliases == nullptr)
@@ -468,6 +590,19 @@ namespace UE::DreamFX::Editor
 				}
 			}
 			return Written;
+		}
+
+		/** The table row a `Settings` key writes through, or null when the key is not one. */
+		const FSettingMapping* FindSettingMapping(const FString& SettingName, bool bSystemScope)
+		{
+			const TArrayView<const FSettingMapping> Mappings = bSystemScope
+				? TArrayView<const FSettingMapping>(SystemSettings)
+				: TArrayView<const FSettingMapping>(EmitterSettings);
+
+			return Mappings.FindByPredicate([&SettingName](const FSettingMapping& Candidate)
+			{
+				return SettingName.Equals(Candidate.SourceName, ESearchCase::IgnoreCase);
+			});
 		}
 
 		/** `box(minX, minY, minZ, maxX, maxY, maxZ)` -> the JSON shape FBox serialises to. */
@@ -563,6 +698,8 @@ namespace UE::DreamFX::Editor
 		{
 			bool bOk = true;
 			TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
+			TSet<FString> DeclaredProperties;
+			TArray<const TCHAR*> Companions;
 
 			// A rebuild owns the supported settings, including ones removed from the source. Seed
 			// only these fields from a fresh asset; copying the whole default blob would reset GUIDs,
@@ -656,10 +793,59 @@ namespace UE::DreamFX::Editor
 				}
 
 				SetJsonFieldByPath(Properties, Mapping->PropertyName, Json);
+				DeclaredProperties.Add(Mapping->PropertyName);
+				if (Mapping->CompanionBool != nullptr)
+				{
+					Companions.AddUnique(Mapping->CompanionBool);
+				}
+			}
+
+			// A declared box turns its override on, unless the source spells the override itself:
+			// `UseFixedBounds = false;` keeps an authored box inert on purpose, and is what the
+			// decompiler writes for an asset that holds a box with the flag off.
+			for (const TCHAR* Companion : Companions)
+			{
+				if (!DeclaredProperties.Contains(Companion))
+				{
+					Properties->SetBoolField(Companion, true);
+				}
 			}
 
 			OutJson = Properties->Values.Num() > 0 ? SerializeJsonObject(Properties) : FString();
 			return bOk;
+		}
+
+		/**
+		 * The property names a planned settings JSON will write, which is what the source declared.
+		 *
+		 * The JSON is what the plan applies, so its top-level keys ARE the declaration: reading them
+		 * back is exact, where re-deriving them from the settings table would be a second copy of that
+		 * table with nothing keeping the two in step. A nested path (`Platforms.QualityLevelMask`) is
+		 * filed under its top-level property, which is also the name the fact carries -- the fact walk
+		 * exports the property, not the path.
+		 *
+		 * Used by the build-safety gate: a fact whose value changed is drift only when the source does
+		 * not name it, and this is how "named" is answered for anything the Settings blocks write.
+		 */
+		void CollectDeclaredProperties(const FString& PropertiesJson, const FString& Scope,
+			FDeclaredFacts& Out)
+		{
+			if (PropertiesJson.IsEmpty())
+			{
+				return;
+			}
+
+			TSharedPtr<FJsonObject> Object;
+			const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PropertiesJson);
+			if (!FJsonSerializer::Deserialize(Reader, Object) || !Object.IsValid())
+			{
+				return;
+			}
+
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry : Object->Values)
+			{
+				Out.Add(Scope, Entry.Key);
+			}
 		}
 
 		/** Builds "ModuleName.InputName" for diagnostics. */
@@ -2470,7 +2656,8 @@ namespace UE::DreamFX::Editor
 
 		bool ApplyStack(const FStackAddress& OwnerAddress, const FPlannedStack& Stack,
 			FDiagnosticSink& Diagnostics, TMap<FName, FSourceLocation>& OutModuleLocations,
-			TArray<FDeferredSelfReference>* OutDeferredSelfRefs = nullptr)
+			TArray<FDeferredSelfReference>* OutDeferredSelfRefs = nullptr,
+			FDeclaredFacts* OutDeclared = nullptr)
 		{
 			bool bOk = true;
 
@@ -2587,6 +2774,47 @@ namespace UE::DreamFX::Editor
 				const FPlannedModule& Module = *Entry.Planned;
 				const FStackAddress ModuleAddress = StackAddress.WithModule(Entry.Name);
 				TArray<FString> Errors;
+
+				// The build-safety gate's declaration index: what this source names, addressed the way
+				// the facts are. Recorded HERE because this is the only place a node's name exists --
+				// the engine assigns it when the module is added and `as <name>` may rename it
+				// afterwards, so nothing downstream can recover it, and guessing it (module asset name
+				// plus a count) is exactly the heuristic the gate must not run on.
+				//
+				// The scope is the constant-name prefix the rapid-iteration facts carry:
+				// `Constants.<emitter>.<node>` for an emitter stack, `Constants.<node>` for a
+				// system-scope one (SystemState's own facts are named that way, measured).
+				if (OutDeclared != nullptr)
+				{
+					const FString Constants = StackAddress.EmitterName.IsNone()
+						? FString::Printf(TEXT("Constants.%s"), *Entry.Name.ToString())
+						: FString::Printf(TEXT("Constants.%s.%s"),
+							*StackAddress.EmitterName.ToString(), *Entry.Name.ToString());
+					const FString Scope = TEXT("ri ") + Constants;
+
+					for (const FPlannedInput& Input : Module.Inputs)
+					{
+						// Two spellings of one declaration, both straight out of the parse: the
+						// argument as the author wrote it, and the input's Niagara variable name --
+						// which is the name the rapid-iteration facts are addressed by, and not always
+						// the same string (`Life Cycle Mode` vs `LifeCycleMode`).
+						if (Input.Path.Num() > 0)
+						{
+							OutDeclared->Add(Scope, Input.Path[0].ToString());
+						}
+						if (!Input.NiagaraName.IsNone())
+						{
+							OutDeclared->Add(Scope, Input.NiagaraName.ToString());
+						}
+					}
+
+					// A folded `Set Parameters` entry is a declaration too, and its name is the
+					// parameter it writes.
+					for (const FPlannedSetParameter& Parameter : Module.Parameters)
+					{
+						OutDeclared->Add(Scope, Parameter.Name.ToString());
+					}
+				}
 
 				if (Module.bIsSetParameters)
 				{
@@ -2885,13 +3113,21 @@ namespace UE::DreamFX::Editor
 		}
 
 		bool ApplyPlan(UNiagaraSystem* System, const FPlan& Plan, FDiagnosticSink& Diagnostics,
-			TMap<FName, FSourceLocation>& OutModuleLocations)
+			TMap<FName, FSourceLocation>& OutModuleLocations, FDeclaredFacts& OutDeclared)
 		{
 			// plan-v6 P1. Every write below shares one edit context until something changes the shape
 			// of the stack, at which point the next call builds a fresh one. Without this each write
 			// built an entire system view model of its own, which made the cost of applying a plan
 			// quadratic in its size -- the largest system in this project spent minutes on it.
 			FNiagaraAdapter::FWriteScope WriteScope(System);
+
+			// The build-safety gate's declaration index, plan half. Every write below goes through one
+			// of these three JSON blobs -- the system's settings, an emitter's, a renderer's -- so
+			// their keys ARE what the source declared, and reading them back is exact where
+			// re-deriving them from the settings tables would be a second copy of those tables that
+			// can drift from them. The module half cannot be taken from the plan (the node names do
+			// not exist yet) and is recorded inside ApplyStack instead.
+			CollectDeclaredProperties(Plan.SystemPropertiesJson, TEXT("system"), OutDeclared);
 
 			const FStackAddress SystemAddress(System);
 			TArray<FString> Errors;
@@ -3072,7 +3308,8 @@ namespace UE::DreamFX::Editor
 
 			for (const FPlannedStack& Stack : Plan.SystemStacks)
 			{
-				if (!ApplyStack(SystemAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs))
+				if (!ApplyStack(SystemAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
+					&OutDeclared))
 				{
 					return false;
 				}
@@ -3099,6 +3336,46 @@ namespace UE::DreamFX::Editor
 				}
 
 				const FStackAddress EmitterAddress = SystemAddress.WithEmitter(Emitter.Name);
+
+				// The emitter half of the declaration index: the settings this source writes, and the
+				// renderer properties and `Bind`s it writes. The renderer index is the plan's position
+				// because a rebuild clears an emitter's renderers before adding these back, so the
+				// order the source declares IS the index the facts report.
+				{
+					const FString EmitterName = Emitter.Name.ToString();
+					const FString EmitterScope = FString::Printf(TEXT("emitter %s"), *EmitterName);
+					CollectDeclaredProperties(Emitter.PropertiesJson, EmitterScope, OutDeclared);
+
+					// The adapter reports the handle's enabled flag as the fact `enabled`, while the
+					// source declares it as the setting that writes `bIsEnabled`.
+					if (OutDeclared.Names(EmitterScope, TEXT("bIsEnabled")))
+					{
+						OutDeclared.Add(EmitterScope, TEXT("enabled"));
+					}
+
+					int32 RendererIndex = 0;
+					for (const FPlannedRenderer& Renderer : Emitter.Renderers)
+					{
+						const FString RendererScope = FString::Printf(TEXT("emitter %s renderer %d:%s"),
+							*EmitterName, RendererIndex,
+							Renderer.Class != nullptr ? *Renderer.Class->GetName() : TEXT("?"));
+
+						CollectDeclaredProperties(Renderer.PropertiesJson, RendererScope, OutDeclared);
+
+						for (const FPlannedBinding& Binding : Renderer.Bindings)
+						{
+							// `Bind X -> Y` writes the renderer's `<X>Binding` property -- the adapter
+							// appends the suffix unless the name already carries it -- and the fact is
+							// named for the property, so the declaration has to be spelled that way.
+							const FString Property = Binding.PropertyName.EndsWith(TEXT("Binding"), ESearchCase::IgnoreCase)
+								? Binding.PropertyName
+								: Binding.PropertyName + TEXT("Binding");
+							OutDeclared.Add(RendererScope, Property);
+						}
+
+						++RendererIndex;
+					}
+				}
 
 				// Emitter settings go on before the stacks: SimTarget in particular changes which
 				// modules and data interfaces are legal, so a GPU emitter must know it is one first.
@@ -3132,7 +3409,8 @@ namespace UE::DreamFX::Editor
 				for (const FPlannedStack& Stack : Emitter.Stacks)
 				{
 					if (Emitter.Parent && !ClearStack(EmitterAddress, Stack.ScriptName, Diagnostics, Stack.Location)) { return false; }
-					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs))
+					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
+						&OutDeclared))
 					{
 						return false;
 					}
@@ -3260,7 +3538,7 @@ namespace UE::DreamFX::Editor
 					}
 
 					if (!ApplyStack(EmitterAddress, Handler.Stack, Diagnostics, OutModuleLocations,
-						&DeferredSelfRefs))
+						&DeferredSelfRefs, &OutDeclared))
 					{
 						return false;
 					}
@@ -3349,7 +3627,7 @@ namespace UE::DreamFX::Editor
 
 					TArray<FDeferredSelfReference> StageSelfRefs;
 					if (!ApplyStack(EmitterAddress, Stage.Stack, Diagnostics, OutModuleLocations,
-						&StageSelfRefs))
+						&StageSelfRefs, &OutDeclared))
 					{
 						return false;
 					}
@@ -3581,6 +3859,142 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	bool RenderSettingSource(const FString& SettingName, bool bSystemScope, const FString& PropertiesJson,
+		FString& OutSource, FString& OutWhy)
+	{
+		OutSource.Reset();
+		OutWhy.Reset();
+
+		// The same two tables the plan side writes through. A settings key that is not in them is one
+		// the build would reject as unknown (DFX3020), so refusing here is not a limitation of the
+		// read path -- it is the same contract.
+		const FSettingMapping* Mapping = FindSettingMapping(SettingName, bSystemScope);
+		if (Mapping == nullptr)
+		{
+			TArray<FString> Available;
+			const TArrayView<const FSettingMapping> Mappings = bSystemScope
+				? TArrayView<const FSettingMapping>(SystemSettings)
+				: TArrayView<const FSettingMapping>(EmitterSettings);
+			for (const FSettingMapping& Candidate : Mappings)
+			{
+				Available.Add(Candidate.SourceName);
+			}
+			OutWhy = FString::Printf(TEXT("'%s' is not a setting the %s block writes (it writes: %s)"),
+				*SettingName, bSystemScope ? TEXT("system") : TEXT("emitter"),
+				*FString::Join(Available, TEXT(", ")));
+			return false;
+		}
+
+		TSharedPtr<FJsonObject> Properties;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PropertiesJson);
+		if (!FJsonSerializer::Deserialize(Reader, Properties) || !Properties.IsValid())
+		{
+			OutWhy = TEXT("the asset's settings could not be read");
+			return false;
+		}
+
+		const TSharedPtr<FJsonValue> Value = FindJsonPropertyByPath(Properties, Mapping->PropertyName);
+		if (!Value.IsValid())
+		{
+			OutWhy = FString::Printf(TEXT("the asset holds no '%s' property"), Mapping->PropertyName);
+			return false;
+		}
+
+		return RenderSettingValue(Mapping->ValueAliases, Value, OutSource, OutWhy);
+	}
+
+	TSharedPtr<FJsonValue> FindSettingJson(const FString& SettingName, bool bSystemScope,
+		const TSharedPtr<FJsonObject>& PropertiesJson)
+	{
+		const FSettingMapping* Mapping = FindSettingMapping(SettingName, bSystemScope);
+		return Mapping != nullptr ? FindJsonPropertyByPath(PropertiesJson, Mapping->PropertyName) : nullptr;
+	}
+
+	bool LowerDeclaredPropertyToJson(const FPropertyEntry& Property, bool bSystemScope,
+		const FString& DefaultRoot, const UClass* RendererClass, TSharedPtr<FJsonValue>& OutJson)
+	{
+		OutJson.Reset();
+		if (!Property.Value.IsValid())
+		{
+			return false;
+		}
+
+		// A scratch sink, and deliberately: the caller has already parsed and planned this file, so a
+		// failure here is not news -- it is this function saying "not a value I can put in JSON".
+		FDiagnosticSink Scratch;
+
+		if (RendererClass != nullptr)
+		{
+			TSharedPtr<FJsonValue> Json;
+			if (!ValueToJson(*Property.Value, DefaultRoot, Property.Name, Scratch, Json) || !Json.IsValid())
+			{
+				return false;
+			}
+
+			// The same wrapping `PlanRenderer` applies: `Meshes = ["/Engine/..."]` is an array of
+			// strings in source and an array of element structs in the asset, and the comparison has
+			// to happen on the asset's side of that conversion or every mesh renderer reads as
+			// changed forever.
+			if (Json->Type == EJson::Array)
+			{
+				FString ReferenceField;
+				FString ElementDefaultsJson;
+				TArray<FString> ReferenceErrors;
+				if (FNiagaraAdapter::GetArrayElementReferenceField(
+					RendererClass, Property.Name, ReferenceField, ElementDefaultsJson, ReferenceErrors))
+				{
+					TArray<TSharedPtr<FJsonValue>> Wrapped;
+					bool bAllStrings = true;
+					for (const TSharedPtr<FJsonValue>& Element : Json->AsArray())
+					{
+						if (!Element.IsValid() || Element->Type != EJson::String)
+						{
+							bAllStrings = false;
+							break;
+						}
+						const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+						Object->SetField(ReferenceField, Element);
+						Wrapped.Add(MakeShared<FJsonValueObject>(Object));
+					}
+					if (bAllStrings && Wrapped.Num() > 0)
+					{
+						Json = MakeShared<FJsonValueArray>(Wrapped);
+					}
+				}
+			}
+
+			OutJson = Json;
+			return true;
+		}
+
+		const FSettingMapping* Mapping = FindSettingMapping(Property.Name, bSystemScope);
+		if (Mapping == nullptr)
+		{
+			return false;
+		}
+
+		TSharedPtr<FJsonValue> Json;
+		if (Property.Value->Kind == EValueKind::Call && Property.Value->Text.Equals(TEXT("box"), ESearchCase::IgnoreCase))
+		{
+			if (!BoxCallToJson(*Property.Value, Property.Name, Scratch, Json))
+			{
+				return false;
+			}
+		}
+		else if (!ValueToJson(*Property.Value, DefaultRoot, Property.Name, Scratch, Json) || !Json.IsValid())
+		{
+			return false;
+		}
+
+		if (Mapping->ValueAliases != nullptr && Json->Type == EJson::String)
+		{
+			Json = MakeShared<FJsonValueString>(ApplyValueAlias(Mapping->ValueAliases, Json->AsString()));
+		}
+
+		OutJson = Json;
+		return true;
+	}
+
 	/**
 	 * A deferred build between its compile request and its finalize.
 	 *
@@ -3599,11 +4013,54 @@ namespace UE::DreamFX::Editor
 		FString SourceHash;
 		bool bHasGpuEmitter = false;
 		bool bSave = true;
+
+		/** The asset's facts as they were read, before this build's first write to it. */
+		FBuildSafetySnapshot PreBuildFacts;
+		/** What the source declared, addressed the way those facts are. */
+		FDeclaredFacts Declared;
+		/** `-Force`: the safety gate reports what a rebuild drops instead of refusing it. */
+		bool bForceLossyRebuild = false;
 	};
 
 	namespace
 	{
 		/** The post-compile tail shared by the synchronous and pipelined paths: wait, report, stamp, save. */
+		/**
+		 * Puts a refused rebuild's package back the way the disk has it.
+		 *
+		 * The gate refuses the SAVE, but by then the system in memory holds the rebuild: every write
+		 * applied and its package dirty. On a command line that object dies with the process. In an
+		 * editor session it is what Save All, autosave and an open Niagara editor see, so leaving it
+		 * would let the next ordinary save write exactly what the gate refused. Reloading from disk is
+		 * the editor's own revert. A package that was never saved has no disk state to go back to, and
+		 * is left as it is.
+		 */
+		void DiscardRefusedBuild(FPendingBuild& Pending, FDiagnosticSink& Diagnostics)
+		{
+			UNiagaraSystem* System = Pending.System.Get();
+			if (System == nullptr || !GIsEditor || IsRunningCommandlet())
+			{
+				return;
+			}
+			UPackage* Package = System->GetOutermost();
+			const FString PackageFile = FPackageName::LongPackageNameToFilename(
+				Package->GetName(), FPackageName::GetAssetPackageExtension());
+			if (!FPaths::FileExists(PackageFile))
+			{
+				return;
+			}
+
+			// The build's own reference must not keep the discarded object alive past the reload.
+			Pending.System.Reset();
+			FText Error;
+			if (!UPackageTools::ReloadPackages({ Package }, Error, EReloadPackagesInteractionMode::AssumePositive))
+			{
+				Diagnostics.Warning(TEXT("DFX8018"), Pending.HeaderLocation, FString::Printf(
+					TEXT("'%s' was not saved, but its package could not be reloaded from disk (%s). Revert the asset before saving anything else in this session."),
+					*Pending.Plan.FullAssetPath, *Error.ToString()));
+			}
+		}
+
 		bool FinalizeBuild(FPendingBuild& Pending, FDiagnosticSink& Diagnostics)
 		{
 			UNiagaraSystem* System = Pending.System.Get();
@@ -3623,7 +4080,9 @@ namespace UE::DreamFX::Editor
 				// -DreamFXSaveFailedBuilds keeps the wreck on disk for the coroner. A failed build
 				// normally saves nothing, and every later reader then silently measures the LAST
 				// saved asset instead -- a five-hour-stale mirror once answered an afternoon of
-				// questions about a build it had nothing to do with.
+				// questions about a build it had nothing to do with. The safety gate below does not
+				// apply here: this save is already a diagnostic dump of a build that failed loudly,
+				// and refusing it would destroy the one artifact the flag exists to leave behind.
 				if (Pending.bSave && FParse::Param(FCommandLine::Get(), TEXT("DreamFXSaveFailedBuilds")))
 				{
 					TArray<FString> SaveErrors;
@@ -3711,6 +4170,25 @@ namespace UE::DreamFX::Editor
 			Stamp.GeneratorVersion = FProvenance::GetGeneratorVersion();
 			Stamp.ModuleDependencies = Pending.Plan.Dependencies.Paths;
 			Stamp.ModuleVersions = Pending.Plan.Dependencies.Versions;
+
+			if (Pending.bSave)
+			{
+				// The safety gate, and the last point at which refusing still means anything: the
+				// system in memory is now exactly what the save would write -- every write applied and
+				// the compile finished -- and nothing has reached the disk yet. `Before` was read before
+				// the first write, so this is the one comparison in the pipeline that is not text
+				// against text (write-back-coverage.md 6.1).
+				if (!FBuildSafetyGate::CheckBeforeSave(System, Pending.PreBuildFacts, Pending.Declared,
+					Pending.bForceLossyRebuild, Pending.Plan.FullAssetPath, Pending.HeaderLocation,
+					Diagnostics))
+				{
+					// No save and no stamp -- the stamp is written below, only once the gate passed, so
+					// a refused build can never read as up to date -- and the in-memory rebuild is
+					// discarded, so nothing in this session can save what the gate refused.
+					DiscardRefusedBuild(Pending, Diagnostics);
+					return false;
+				}
+			}
 
 			FProvenance::Write(System, Stamp);
 
@@ -3910,6 +4388,22 @@ namespace UE::DreamFX::Editor
 
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE ApplyPlan begin '%s'"), *Plan.FullAssetPath);
 
+		// The safety gate's before-side, read here because everything below this line is a mutation.
+		// Two cases are deliberately not captured: a verify (nothing is written at all) and a first
+		// generation -- a package that did not exist has no earlier content for a rebuild to replace,
+		// so there is nothing to lose and nothing to compare against.
+		FBuildSafetySnapshot PreBuildFacts;
+		if (Options.bSave && !bCreated)
+		{
+			PreBuildFacts = FBuildSafetyGate::Capture(System);
+		}
+
+		// Filled by ApplyPlan below, one entry per thing the source names. Without it the gate can
+		// still tell a structure it must not compare from one it must, but it cannot tell a value the
+		// text meant from a value the text never mentioned -- and that difference is the whole reason
+		// it does not refuse ordinary authoring.
+		FDeclaredFacts Declared;
+
 		TMap<FName, FSourceLocation> ModuleLocations;
 		{
 			// The window holds every structural and value write, and nothing in it needs a compiled
@@ -3917,7 +4411,7 @@ namespace UE::DreamFX::Editor
 			// this records is paid exactly once, by the wait in FinalizeBuild.
 			FNiagaraAdapter::FCompileSuppressionScope SuppressCompiles(System);
 
-			if (!ApplyPlan(System, Plan, Diagnostics, ModuleLocations))
+			if (!ApplyPlan(System, Plan, Diagnostics, ModuleLocations, Declared))
 			{
 				return Result;
 			}
@@ -3952,6 +4446,9 @@ namespace UE::DreamFX::Editor
 		Pending.SourceHash = Pending.Plan.EffectiveSourceHash;
 		Pending.bHasGpuEmitter = bHasGpuEmitter;
 		Pending.bSave = Options.bSave;
+		Pending.PreBuildFacts = MoveTemp(PreBuildFacts);
+		Pending.Declared = MoveTemp(Declared);
+		Pending.bForceLossyRebuild = Options.bForceLossyRebuild;
 
 		// A rebuild whose writes all landed on values the asset already held raises no change id, and
 		// the compile request would then bless whatever VM the asset came in with -- including one

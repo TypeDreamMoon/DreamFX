@@ -108,6 +108,20 @@ namespace UE::DreamFX
 		EValueKind Kind = EValueKind::Number;
 		FSourceLocation Location;
 
+		/**
+		 * The value's own byte range in the parsed text, `[StartOffset, EndOffset)`.
+		 *
+		 * A location is a line and a column, which is enough to point a reader at a value and not
+		 * enough to rewrite one: the writer has to know exactly which characters the value occupies.
+		 * The end is the end of the value's LAST token rather than the start of the next one, because
+		 * whatever sits between the two -- a trailing comment above all -- belongs to neither and has
+		 * to survive a minimal rewrite.
+		 *
+		 * INDEX_NONE on a node the parser never saw (a synthesized value, or a node built by a test).
+		 */
+		int32 StartOffset = INDEX_NONE;
+		int32 EndOffset = INDEX_NONE;
+
 		/** Number / Bool payload. */
 		double Number = 0.0;
 		bool bBool = false;
@@ -255,6 +269,22 @@ namespace UE::DreamFX
 
 		/** Innermost enclosing `#Region` label. v1 keeps this as text only (L5). */
 		FString Region;
+
+		/**
+		 * The statement's own byte range in the parsed text, `[StartOffset, EndOffset)`, from its
+		 * first token (a `disabled` prefix included) through its last one (the `;` when written).
+		 *
+		 * The same argument the value spans carry, one level up: a value span is enough to REWRITE a
+		 * literal, and a statement span is what it takes to DELETE the line that holds it -- or to
+		 * know where a new line goes. Leading indentation and the trailing newline are deliberately
+		 * outside it, because they belong to the line rather than to the statement, and only the
+		 * writer knows which of the two it is changing.
+		 *
+		 * INDEX_NONE on a statement the parser never saw (built by the merge of a `.dfe`, or by a
+		 * test).
+		 */
+		int32 StartOffset = INDEX_NONE;
+		int32 EndOffset = INDEX_NONE;
 	};
 
 	/** `Bind SpriteSize -> Particles.SpriteSize;` */
@@ -263,6 +293,14 @@ namespace UE::DreamFX
 		FString PropertyName;
 		FString Target;
 		FSourceLocation Location;
+
+		/**
+		 * The target name's own byte range, for the same reason a value has one: a `Bind` is
+		 * rewritten by splicing over the target's characters, so a comment between the arrow and the
+		 * name has to survive.
+		 */
+		int32 TargetStartOffset = INDEX_NONE;
+		int32 TargetEndOffset = INDEX_NONE;
 	};
 
 	struct FRenderer
@@ -388,6 +426,16 @@ namespace UE::DreamFX
 		 * wrong place entirely.
 		 */
 		FString SourceFile;
+
+		/**
+		 * Byte offset one past the `}` that closes the block; INDEX_NONE on a stack no parser
+		 * produced.
+		 *
+		 * A writer that has to append a statement to a stack needs the closing brace's position, and
+		 * nothing else in the tree knows it: the statements stop before it, and the stack's own
+		 * Location points at its keyword.
+		 */
+		int32 EndOffset = INDEX_NONE;
 	};
 
 	struct FEmitter

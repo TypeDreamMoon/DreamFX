@@ -28,7 +28,8 @@ Schema-driven: the names are read off the live asset, so a misspelling reports t
 Settings = {
     EffectType  = "/Niagara/Default/FX_Default.FX_Default";
     WarmupTime  = 0.0;
-    FixedBounds = box(-200, -200, -50, 200, 200, 300);
+    FixedBounds = box(-200, -200, -50, 200, 200, 300);   // implies UseFixedBounds = true
+    UseFixedBounds = true;          // the system's "Fixed Bounds" override flag (bFixedBounds)
     FixedTickDelta     = true;      // substep at a fixed rate instead of once per frame
     FixedTickDeltaTime = 0.01667;   // ... of 60Hz. Changes simulation, not just smoothness
     ModulePaths = ["/Niagara/Modules", "/Game/FX/Modules"];
@@ -42,6 +43,11 @@ the list, so declaring your own folder adds to them rather than replacing them.
 Rebuilding resets omitted supported system and emitter settings to fresh-asset engine defaults,
 then applies the settings declared in the source. Removing a supported setting therefore clears its
 previous override; this reset covers the generator's mapped settings, not unrelated asset fields.
+
+A declared `FixedBounds` box turns the system's override flag on, because a box under dynamic bounds
+is inert. Write `UseFixedBounds = false;` to keep an authored box while the bounds stay dynamic; the
+decompiler writes exactly that for an asset that holds a box with the flag off, so the round trip
+keeps both.
 
 ## `Properties` — user parameters
 

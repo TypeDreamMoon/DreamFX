@@ -135,6 +135,16 @@ namespace UE::DreamFX
 
 	FToken FLexer::LexToken()
 	{
+		FToken Token = LexTokenImpl();
+		// Every path through the scanner leaves Position one past the token it produced (or at the end
+		// of the source), so this is the one place a token's extent has to be recorded -- and it is
+		// recorded from the scanner rather than from Text, which is lossy for three token kinds.
+		Token.EndOffset = Position;
+		return Token;
+	}
+
+	FToken FLexer::LexTokenImpl()
+	{
 		SkipTriviaAndComments();
 
 		FToken Token;
@@ -335,7 +345,7 @@ namespace UE::DreamFX
 		Diagnostics.Error(TEXT("DFX1003"), Token.Location,
 			FString::Printf(TEXT("Unexpected character '%c' (U+%04X)."), Character, static_cast<int32>(Character)));
 		Advance();
-		return LexToken();
+		return LexTokenImpl();
 	}
 
 	void FLexer::Fill(int32 Count)
@@ -368,6 +378,7 @@ namespace UE::DreamFX
 		}
 		FToken Token = Queue[0];
 		Queue.RemoveAt(0);
+		LastConsumedEnd = Token.EndOffset;
 		return Token;
 	}
 
@@ -476,6 +487,9 @@ namespace UE::DreamFX
 				{
 					OutText = Source.Mid(BodyStart, Position - BodyStart);
 					Advance(); // past the closing '}'
+					// A raw block is consumed as characters, not as tokens, so the end of the value
+					// that contains one has to be recorded here -- Next() never saw the '}'.
+					LastConsumedEnd = Position;
 					return true;
 				}
 				Advance();
@@ -486,6 +500,7 @@ namespace UE::DreamFX
 		}
 
 		Diagnostics.Error(TEXT("DFX1004"), OutLocation, TEXT("Unterminated raw block: missing '}'."));
+		LastConsumedEnd = Position;
 		return false;
 	}
 }
