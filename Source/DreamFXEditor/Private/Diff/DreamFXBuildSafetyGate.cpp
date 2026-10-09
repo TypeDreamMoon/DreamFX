@@ -460,9 +460,12 @@ namespace UE::DreamFX::Editor
 		CollectComparableFacts(Before.Facts, BeforeFacts);
 		TArray<FString> AfterFacts;
 		CollectComparableFacts(RawAfter, AfterFacts);
-		FFileHelper::SaveStringArrayToFile(BeforeFacts, *(DumpDir / BaseName + TEXT(".before.facts")));
-		FFileHelper::SaveStringArrayToFile(AfterFacts, *(DumpDir / BaseName + TEXT(".after.facts")));
-		FFileHelper::SaveStringArrayToFile(ReportedFacts, *(DumpDir / BaseName + TEXT(".lost.facts")));
+		FFileHelper::SaveStringArrayToFile(BeforeFacts, *(DumpDir / BaseName + TEXT(".before.facts")),
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		FFileHelper::SaveStringArrayToFile(AfterFacts, *(DumpDir / BaseName + TEXT(".after.facts")),
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		FFileHelper::SaveStringArrayToFile(ReportedFacts, *(DumpDir / BaseName + TEXT(".lost.facts")),
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 
 		auto Report = [bForceFromCommandLine](const FString& Line)
 		{

@@ -25,6 +25,7 @@
 #include "NiagaraEmitter.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
+#include "PackageTools.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonWriter.h"
@@ -4017,6 +4018,42 @@ namespace UE::DreamFX::Editor
 	namespace
 	{
 		/** The post-compile tail shared by the synchronous and pipelined paths: wait, report, stamp, save. */
+		/**
+		 * Puts a refused rebuild's package back the way the disk has it.
+		 *
+		 * The gate refuses the SAVE, but by then the system in memory holds the rebuild: every write
+		 * applied and its package dirty. On a command line that object dies with the process. In an
+		 * editor session it is what Save All, autosave and an open Niagara editor see, so leaving it
+		 * would let the next ordinary save write exactly what the gate refused. Reloading from disk is
+		 * the editor's own revert. A package that was never saved has no disk state to go back to, and
+		 * is left as it is.
+		 */
+		void DiscardRefusedBuild(FPendingBuild& Pending, FDiagnosticSink& Diagnostics)
+		{
+			UNiagaraSystem* System = Pending.System.Get();
+			if (System == nullptr || !GIsEditor || IsRunningCommandlet())
+			{
+				return;
+			}
+			UPackage* Package = System->GetOutermost();
+			const FString PackageFile = FPackageName::LongPackageNameToFilename(
+				Package->GetName(), FPackageName::GetAssetPackageExtension());
+			if (!FPaths::FileExists(PackageFile))
+			{
+				return;
+			}
+
+			// The build's own reference must not keep the discarded object alive past the reload.
+			Pending.System.Reset();
+			FText Error;
+			if (!UPackageTools::ReloadPackages({ Package }, Error, EReloadPackagesInteractionMode::AssumePositive))
+			{
+				Diagnostics.Warning(TEXT("DFX8018"), Pending.HeaderLocation, FString::Printf(
+					TEXT("'%s' was not saved, but its package could not be reloaded from disk (%s). Revert the asset before saving anything else in this session."),
+					*Pending.Plan.FullAssetPath, *Error.ToString()));
+			}
+		}
+
 		bool FinalizeBuild(FPendingBuild& Pending, FDiagnosticSink& Diagnostics)
 		{
 			UNiagaraSystem* System = Pending.System.Get();
@@ -4127,25 +4164,29 @@ namespace UE::DreamFX::Editor
 			Stamp.ModuleDependencies = Pending.Plan.Dependencies.Paths;
 			Stamp.ModuleVersions = Pending.Plan.Dependencies.Versions;
 
-			FProvenance::Write(System, Stamp);
-
 			if (Pending.bSave)
 			{
 				// The safety gate, and the last point at which refusing still means anything: the
-				// system in memory is now exactly what the save would write -- every write applied, the
-				// compile finished, the provenance stamp set -- and nothing has reached the disk yet.
-				// `Before` was read before the first write, so this is the one comparison in the
-				// pipeline that is not text against text (write-back-coverage.md 6.1).
+				// system in memory is now exactly what the save would write -- every write applied and
+				// the compile finished -- and nothing has reached the disk yet. `Before` was read before
+				// the first write, so this is the one comparison in the pipeline that is not text
+				// against text (write-back-coverage.md 6.1).
 				if (!FBuildSafetyGate::CheckBeforeSave(System, Pending.PreBuildFacts, Pending.Declared,
 					Pending.bForceLossyRebuild, Pending.Plan.FullAssetPath, Pending.HeaderLocation,
 					Diagnostics))
 				{
-					// Deliberately no save and no stamp: leaving the package untouched is what makes
-					// this a refusal rather than a warning, and the next run starts from the same
-					// asset state and reaches the same verdict.
+					// No save and no stamp -- the stamp is written below, only once the gate passed, so
+					// a refused build can never read as up to date -- and the in-memory rebuild is
+					// discarded, so nothing in this session can save what the gate refused.
+					DiscardRefusedBuild(Pending, Diagnostics);
 					return false;
 				}
+			}
 
+			FProvenance::Write(System, Stamp);
+
+			if (Pending.bSave)
+			{
 				Errors.Reset();
 				if (!FNiagaraAdapter::SaveSystem(System, Errors))
 				{
