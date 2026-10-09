@@ -24,6 +24,17 @@ namespace UE::DreamFX::Editor
 			if (Parent.EndsWith(TEXT(":"))) { Parent += TEXT("/"); }
 			return Parent.IsEmpty() ? Path : Parent;
 		}
+		/** The directory itself when it exists, otherwise its nearest existing ancestor. */
+		FString NearestExistingDirectory(FString Directory)
+		{
+			while (!Directory.IsEmpty() && !IFileManager::Get().DirectoryExists(*Directory))
+			{
+				const FString Parent = ParentDirectory(Directory);
+				if (Parent == Directory) { return FString(); }
+				Directory = Parent;
+			}
+			return Directory;
+		}
 	}
 
 	FSourceWatchSession::FSourceWatchSession(IDirectoryWatcher& InWatcher, TFunction<void(const TSet<FString>&)> InQueueSources)
@@ -38,10 +49,19 @@ namespace UE::DreamFX::Editor
 	{
 		if (bWatcherAvailable)
 		{
-			for (const auto& Entry : Handles) { Watcher.UnregisterDirectoryChangedCallback_Handle(Entry.Key, Entry.Value); }
+			for (const auto& Entry : RecursiveHandles) { Watcher.UnregisterDirectoryChangedCallback_Handle(Entry.Key, Entry.Value); }
+			for (const auto& Entry : ShallowHandles) { Watcher.UnregisterDirectoryChangedCallback_Handle(Entry.Key, Entry.Value); }
 		}
-		Handles.Reset();
+		RecursiveHandles.Reset();
+		ShallowHandles.Reset();
+		StaleWatches.Reset();
 		PendingChanges.Reset();
+	}
+
+	void FSourceWatchSession::GetWatches(TArray<FString>& OutRecursive, TArray<FString>& OutShallow) const
+	{
+		RecursiveHandles.GetKeys(OutRecursive);
+		ShallowHandles.GetKeys(OutShallow);
 	}
 
 	bool FSourceWatchSession::IsRootSource(const FString& File) const
@@ -70,73 +90,105 @@ namespace UE::DreamFX::Editor
 		Dependencies.Refresh(SourceFiles);
 	}
 
-	TArray<FString> FSourceWatchSession::DesiredWatchDirectories() const
+	TArray<FSourceWatchSession::FWatchSpec> FSourceWatchSession::DesiredWatches() const
 	{
-		TArray<FString> Directories;
-		for (const FString& Root : Roots) { Directories.AddUnique(ParentDirectory(Root)); }
+		// Roots are the only recursive subscriptions. A nested root is already covered by its parent.
+		TArray<FString> Recursive;
+		for (const FString& Root : Roots)
+		{
+			if (IFileManager::Get().DirectoryExists(*Root)) { Recursive.AddUnique(Root); }
+		}
+		Recursive.Sort([](const FString& A, const FString& B) { return A.Len() < B.Len(); });
+		TArray<FString> RecursiveResult;
+		for (const FString& Directory : Recursive)
+		{
+			if (!RecursiveResult.ContainsByPredicate([&](const FString& Existing) { return InDirectory(Directory, Existing); }))
+			{
+				RecursiveResult.Add(Directory);
+			}
+		}
+
+		// Everything else needs only direct children: a file inside a dependency directory, or a
+		// watched directory (a root, a dependency directory) being created, removed, renamed or
+		// replaced inside its parent. A missing directory is watched through its nearest existing
+		// ancestor, whose direct child is the next directory to appear; the subscription then moves
+		// one level down on the following reconcile.
+		TArray<FString> Shallow;
+		auto AddShallow = [&](const FString& Directory)
+		{
+			const FString Existing = NearestExistingDirectory(Directory);
+			if (!Existing.IsEmpty()
+				&& !RecursiveResult.ContainsByPredicate([&](const FString& Covered) { return InDirectory(Existing, Covered); }))
+			{
+				Shallow.AddUnique(Existing);
+			}
+		};
+		for (const FString& Root : Roots) { AddShallow(ParentDirectory(Root)); }
 		TArray<FString> Referenced;
 		Dependencies.GetReferencedFiles(Referenced);
 		for (const FString& File : Referenced)
 		{
 			if (IsRootSource(File)) { continue; }
-			// Watch a surviving ancestor while a dependency's directory is absent. Creation of any
-			// missing intermediate directory then invalidates the unresolved reference. Start above
-			// the containing directory: watching that directory itself misses its rename/removal.
-			FString Directory = ParentDirectory(ParentDirectory(File));
-			while (!Directory.IsEmpty() && !IFileManager::Get().DirectoryExists(*Directory))
-			{
-				const FString Parent = ParentDirectory(Directory);
-				if (Parent == Directory) { break; }
-				Directory = Parent;
-			}
-			if (!Directory.IsEmpty() && IFileManager::Get().DirectoryExists(*Directory)) { Directories.AddUnique(Directory); }
+			const FString Directory = ParentDirectory(File);
+			AddShallow(Directory);
+			if (IFileManager::Get().DirectoryExists(*Directory)) { AddShallow(ParentDirectory(Directory)); }
 		}
-		// Keep surviving ancestor coverage after a missing directory returns to avoid unnecessary
-		// subscription changes while preserving notifications for the containing directory itself.
-		for (const auto& Entry : Handles)
-		{
-			if (IFileManager::Get().DirectoryExists(*Entry.Key)
-				&& Directories.ContainsByPredicate([&](const FString& Directory) { return InDirectory(Directory, Entry.Key); }))
-			{
-				Directories.AddUnique(Entry.Key);
-			}
-		}
-		Directories.Sort([](const FString& A, const FString& B) { return A.Len() < B.Len(); });
-		TArray<FString> Result;
-		for (const FString& Directory : Directories)
-		{
-			if (IFileManager::Get().DirectoryExists(*Directory)
-				&& !Result.ContainsByPredicate([&](const FString& Existing) { return InDirectory(Directory, Existing); }))
-			{
-				Result.Add(Directory);
-			}
-		}
+
+		TArray<FWatchSpec> Result;
+		for (const FString& Directory : RecursiveResult) { Result.Add({ Directory, true }); }
+		for (const FString& Directory : Shallow) { Result.Add({ Directory, false }); }
 		return Result;
 	}
 
 	void FSourceWatchSession::ReconcileWatches()
 	{
-		const TArray<FString> Desired = DesiredWatchDirectories();
-		// Register replacements first so expanding/collapsing watch coverage does not leave a gap.
-		bool bAllRegistered = true;
-		for (const FString& Directory : Desired)
+		// A watched directory that was replaced (moved away and another moved in, or deleted and
+		// recreated) leaves its OS handle on the old directory object. Subscribe it afresh.
+		for (const FString& Stale : StaleWatches)
 		{
-			if (!Handles.Contains(Directory))
+			for (const bool bRecursive : { true, false })
 			{
-				FDelegateHandle Handle;
-				if (Watcher.RegisterDirectoryChangedCallback_Handle(Directory,
-					IDirectoryWatcher::FDirectoryChanged::CreateRaw(this, &FSourceWatchSession::HandleChanges), Handle,
-					IDirectoryWatcher::WatchOptions::IncludeDirectoryChanges)) { Handles.Add(Directory, Handle); }
-				else { bAllRegistered = false; }
+				TMap<FString, FDelegateHandle>& Handles = HandlesFor(bRecursive);
+				if (const FDelegateHandle* Handle = Handles.Find(Stale))
+				{
+					Watcher.UnregisterDirectoryChangedCallback_Handle(Stale, *Handle);
+					Handles.Remove(Stale);
+				}
 			}
 		}
-		if (!bAllRegistered) { return; } // Keep existing coverage when a replacement cannot be registered.
-		for (auto It = Handles.CreateIterator(); It; ++It)
+		StaleWatches.Reset();
+
+		const TArray<FWatchSpec> Desired = DesiredWatches();
+		// Register replacements first so expanding/collapsing watch coverage does not leave a gap.
+		bool bAllRegistered = true;
+		for (const FWatchSpec& Spec : Desired)
 		{
-			if (!ContainsPath(Desired, It.Key()))
+			TMap<FString, FDelegateHandle>& Handles = HandlesFor(Spec.bRecursive);
+			if (Handles.Contains(Spec.Directory)) { continue; }
+			const uint32 Flags = IDirectoryWatcher::WatchOptions::IncludeDirectoryChanges
+				| (Spec.bRecursive ? 0 : IDirectoryWatcher::WatchOptions::IgnoreChangesInSubtree);
+			FDelegateHandle Handle;
+			if (Watcher.RegisterDirectoryChangedCallback_Handle(Spec.Directory,
+				IDirectoryWatcher::FDirectoryChanged::CreateRaw(this, &FSourceWatchSession::HandleChanges), Handle, Flags))
 			{
-				Watcher.UnregisterDirectoryChangedCallback_Handle(It.Key(), It.Value());
-				It.RemoveCurrent();
+				Handles.Add(Spec.Directory, Handle);
+			}
+			else { bAllRegistered = false; }
+		}
+		if (!bAllRegistered) { return; } // Keep existing coverage when a replacement cannot be registered.
+		for (const bool bRecursive : { true, false })
+		{
+			for (auto It = HandlesFor(bRecursive).CreateIterator(); It; ++It)
+			{
+				const bool bWanted = Desired.ContainsByPredicate([&](const FWatchSpec& Spec)
+				{
+					return Spec.bRecursive == bRecursive && FPaths::IsSamePath(Spec.Directory, It.Key());
+				});
+				if (!bWanted)
+				{
+					Watcher.UnregisterDirectoryChangedCallback_Handle(It.Key(), It.Value());
+					It.RemoveCurrent();
+				}
 			}
 		}
 	}
@@ -149,9 +201,12 @@ namespace UE::DreamFX::Editor
 		for (const FString& Root : Roots) { if (!ContainsPath(NewRoots, Root)) { ChangedDirectories.AddUnique(Root); } }
 		for (const FString& Root : NewRoots) { if (!ContainsPath(Roots, Root)) { ChangedDirectories.AddUnique(Root); } }
 		// A watch on the removed directory itself need not receive its removal/rename event.
-		for (const auto& Entry : Handles)
+		for (const bool bRecursive : { true, false })
 		{
-			if (!IFileManager::Get().DirectoryExists(*Entry.Key)) { ChangedDirectories.AddUnique(Entry.Key); }
+			for (const auto& Entry : HandlesFor(bRecursive))
+			{
+				if (!IFileManager::Get().DirectoryExists(*Entry.Key)) { ChangedDirectories.AddUnique(Entry.Key); }
+			}
 		}
 		Roots = MoveTemp(NewRoots);
 		if (!bInitialized || !bQueueNewSources)
@@ -222,6 +277,25 @@ namespace UE::DreamFX::Editor
 			// versions predating the named FCA_RescanRequired enumerator.
 			const bool bRescan = Change.Action != FFileChangeData::FCA_Added
 				&& Change.Action != FFileChangeData::FCA_Removed && Change.Action != FFileChangeData::FCA_Modified;
+
+			if (bRescan || Change.Action != FFileChangeData::FCA_Modified)
+			{
+				for (const bool bRecursive : { true, false })
+				{
+					for (const auto& Entry : HandlesFor(bRecursive))
+					{
+						if (InDirectory(Entry.Key, File)) { StaleWatches.Add(Entry.Key); }
+					}
+				}
+			}
+
+			// Decide relevance from paths alone before touching the disk: a shallow watch still
+			// reports unrelated siblings, and none of them may cost a filesystem query.
+			const bool bUnderRoot = IsRootSource(File)
+				|| Roots.ContainsByPredicate([&](const FString& Root) { return InDirectory(Root, File); });
+			const bool bKnownOrAncestor = Known.ContainsByPredicate([&](const FString& Entry) { return InDirectory(Entry, File); });
+			if (!bRescan && !bUnderRoot && !bKnownOrAncestor) { continue; }
+
 			const bool bDirectory = IFileManager::Get().DirectoryExists(*File)
 				|| Known.ContainsByPredicate([&](const FString& Entry)
 				{
@@ -231,9 +305,7 @@ namespace UE::DreamFX::Editor
 				});
 			if (bRescan || bDirectory)
 			{
-				if ((bRescan || Change.Action != FFileChangeData::FCA_Modified)
-					&& (IsRootSource(File) || Roots.ContainsByPredicate([&](const FString& Root) { return InDirectory(Root, File); })
-						|| Known.ContainsByPredicate([&](const FString& Entry) { return InDirectory(Entry, File); })))
+				if ((bRescan || Change.Action != FFileChangeData::FCA_Modified) && (bUnderRoot || bKnownOrAncestor))
 				{
 					ChangedDirectories.AddUnique(File);
 				}
@@ -244,6 +316,7 @@ namespace UE::DreamFX::Editor
 			}
 		}
 		if (!ChangedFiles.IsEmpty() || !ChangedDirectories.IsEmpty()) { Invalidate(MoveTemp(ChangedFiles), ChangedDirectories); }
+		else if (!StaleWatches.IsEmpty()) { ReconcileWatches(); }
 	}
 
 	void FSourceWatchSession::InvalidateFile(const FString& File)

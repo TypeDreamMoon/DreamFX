@@ -126,13 +126,22 @@ calls it are queued together.
 Decompiled exports are included, like any other source. See [Export vs Adopt](#export-vs-adopt).
 
 The watcher also follows `.dfs` `Parent` chains and emitter `from` references outside the DFX
-roots. It watches surviving ancestor directories for missing references, so creating a missing
-parent or emitter source resumes rebuilds. Directory moves, renames, removals and rescan events
-invalidate both the previous dependency graph and the newly discovered sources. External sources
-trigger their in-root dependents; they do not acquire standalone build targets merely by being watched.
+roots. Only the DFX roots are watched recursively. The directory holding each root, the directory of
+each external reference and that directory's parent are watched shallowly — direct children only —
+so a root or dependency directory being renamed, removed or replaced is seen without receiving every
+write under the project (`Saved/`, `Intermediate/`, `DerivedDataCache/`). A missing reference is
+watched through its nearest existing ancestor, so creating the missing parent or emitter source
+resumes rebuilds. Directory moves, renames, removals and rescan events invalidate both the previous
+dependency graph and the newly discovered sources; a watched directory that was itself replaced is
+subscribed again. External sources trigger their in-root dependents; they do not acquire standalone
+build targets merely by being watched.
 
-Moving or renaming a source without changing its contents still makes an ordinary build regenerate
-the asset and update its absolute and relative provenance paths. Verify remains read-only.
+A source's location is its DFX root plus its path inside that root. Moving or renaming a source
+without changing its contents makes an ordinary build regenerate the asset and update its
+provenance. The same tree checked out at another absolute path — a teammate's machine, CI, the test
+host — is the same location, so it is not rebuilt; commands that open or rebuild from the stamp
+resolve the recorded absolute path first and the root-relative path second. Verify remains
+read-only.
 
 | Toast | Condition |
 | :-- | :-- |

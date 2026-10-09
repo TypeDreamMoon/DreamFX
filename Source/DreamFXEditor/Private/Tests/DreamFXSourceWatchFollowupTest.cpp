@@ -71,6 +71,16 @@ bool FDreamFXExternalSourceWatchRegression::RunTest(const FString& Parameters)
 	const FString Parent = Files.Write(TEXT("Shared/Base.dfs"), ParentText);
 	if (!Watch.Wait(TEXT("initially missing external parent is discovered"), Expected)) { return false; }
 	TestFalse(TEXT("external parent does not generate a standalone asset automatically"), Watch.Queued.Contains(Parent));
+	{
+		// An external dependency is followed through its own directory, never by recursing over an
+		// ancestor -- which for a dependency beside the project would be the whole project.
+		TArray<FString> Recursive, Shallow;
+		Watch.Session->GetWatches(Recursive, Shallow);
+		TestTrue(TEXT("an external dependency adds no recursive watch"),
+			Recursive.Num() == 1 && FPaths::IsSamePath(Recursive[0], Files.Directory / TEXT("DFX")));
+		TestTrue(TEXT("the external dependency directory is watched shallowly"),
+			Shallow.ContainsByPredicate([&](const FString& Directory) { return FPaths::IsSamePath(Directory, Files.Directory / TEXT("Shared")); }));
+	}
 	Watch.Clear();
 	// Equal-length ordinary overwrites must propagate without a rename or creation notification.
 	if (!TestFalse(TEXT("modify existing external parent"), Files.Write(TEXT("Shared/Base.dfs"),
@@ -109,6 +119,15 @@ bool FDreamFXDirectorySourceWatchRegression::RunTest(const FString& Parameters)
 	const FString Root = Files.Directory / TEXT("DFX");
 	FWatchHarness Watch(*this, Root);
 	if (!TestNotNull(TEXT("real DirectoryWatcher available"), Watch.Watcher) || Child.IsEmpty()) { return false; }
+	{
+		// The root's parent stands for the project directory: watching it recursively would deliver
+		// every write under Saved/, Intermediate/ and DerivedDataCache/ to the session.
+		TArray<FString> Recursive, Shallow;
+		Watch.Session->GetWatches(Recursive, Shallow);
+		TestTrue(TEXT("only the root is watched recursively"), Recursive.Num() == 1 && FPaths::IsSamePath(Recursive[0], Root));
+		TestTrue(TEXT("the root's parent is watched without its subtree"),
+			Shallow.ContainsByPredicate([&](const FString& Directory) { return FPaths::IsSamePath(Directory, Files.Directory); }));
+	}
 	Watch.Clear();
 	if (!TestFalse(TEXT("modify known source before any directory move"), Files.Write(TEXT("DFX/Child.dfs"),
 		TEXT("System(Name=\"ChilX\",Parent=\"Parents/Base\") {}")).IsEmpty())) { return false; }
