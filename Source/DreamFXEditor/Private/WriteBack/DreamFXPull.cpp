@@ -568,7 +568,20 @@ namespace UE::DreamFX::Editor
 			}
 			if (Left->Type != Right->Type)
 			{
-				return false;
+				// One flag, two spellings: a bool reflected as uint8 reads back as 0/1, and the
+				// generator writes FBox::IsValid as 1 while UE 5.8 reflects it as a bool.
+				auto AsFlag = [](const TSharedPtr<FJsonValue>& Value, bool& OutFlag)
+				{
+					if (Value->Type == EJson::Boolean) { OutFlag = Value->AsBool(); return true; }
+					if (Value->Type == EJson::Number && (Value->AsNumber() == 0.0 || Value->AsNumber() == 1.0))
+					{
+						OutFlag = Value->AsNumber() != 0.0;
+						return true;
+					}
+					return false;
+				};
+				bool bLeft = false, bRight = false;
+				return AsFlag(Left, bLeft) && AsFlag(Right, bRight) && bLeft == bRight;
 			}
 
 			switch (Left->Type)
@@ -777,6 +790,23 @@ namespace UE::DreamFX::Editor
 		return !Find(Scope, Key, Recorded) || Recorded != Now;
 	}
 
+	namespace
+	{
+		/** The encoding to write a source back in: the one it was read in, UTF-8 without a BOM by default. */
+		FFileHelper::EEncodingOptions SourceEncodingOf(const TArray<uint8>& Bytes)
+		{
+			if (Bytes.Num() >= 3 && Bytes[0] == 0xEF && Bytes[1] == 0xBB && Bytes[2] == 0xBF)
+			{
+				return FFileHelper::EEncodingOptions::ForceUTF8;
+			}
+			if (Bytes.Num() >= 2 && ((Bytes[0] == 0xFF && Bytes[1] == 0xFE) || (Bytes[0] == 0xFE && Bytes[1] == 0xFF)))
+			{
+				return FFileHelper::EEncodingOptions::ForceUnicode;
+			}
+			return FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM;
+		}
+	}
+
 	bool FPullBaseline::Load(const FString& InPath, FString& OutWhy)
 	{
 		Path = InPath;
@@ -850,7 +880,7 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree=*/true);
-		if (!FFileHelper::SaveStringArrayToFile(Lines, *Path))
+		if (!FFileHelper::SaveStringArrayToFile(Lines, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 		{
 			OutWhy = FString::Printf(TEXT("'%s' could not be written"), *Path);
 			return false;
@@ -1061,13 +1091,25 @@ namespace UE::DreamFX::Editor
 				// The asset's value at this key, through the same table the plan writes through: a
 				// nested setting (`Platforms.QualityLevelMask`) is one int inside an object, and only
 				// the table knows the path.
-				const TSharedPtr<FJsonValue> StoredValue = PropertyClass != nullptr
+				// A setting is stored under the property its table row writes (`LocalSpace` is
+				// `bLocalSpace`, `QualityLevelMask` is `Platforms.QualityLevelMask`), never under the
+				// source spelling.
+				TSharedPtr<FJsonValue> StoredValue = PropertyClass != nullptr
 					? (AssetJson.IsValid() ? AssetJson->TryGetField(Property.Name) : nullptr)
-					: FindJsonPropertyByPath(AssetJson, Property.Name);
+					: FindSettingJson(Property.Name, bSystemScope, AssetJson);
 
 				if (!StoredValue.IsValid() || StoredValue->IsNull())
 				{
 					CannotWrite(Property.Location, TEXT("the asset holds nothing under that name"));
+					continue;
+				}
+
+				// The decompiler's reading of a renderer value, binding types included: a user parameter
+				// binding's raw type is a process-local registry index, and writing it into the text would
+				// make the line differ in every editor session.
+				if (PropertyClass != nullptr && !NormalizeRendererPropertyBindings(PropertyClass, Property.Name, StoredValue))
+				{
+					CannotWrite(Property.Location, TEXT("it holds a user parameter binding whose type is not the renderer's default"));
 					continue;
 				}
 
@@ -2384,8 +2426,13 @@ namespace UE::DreamFX::Editor
 		FPullResult Result;
 		Result.FilePath = FilePath;
 
+		// The bytes as well as the text: the backup is the file exactly as it was, and the rewrite
+		// keeps its encoding. The default AutoDetect would turn any source with a non-ASCII comment
+		// or name into UTF-16LE -- every other DreamFX writer, and every editor it is opened in,
+		// expects UTF-8.
+		TArray<uint8> SourceBytes;
 		FString SourceText;
-		if (!FFileHelper::LoadFileToString(SourceText, *FilePath))
+		if (!FFileHelper::LoadFileToArray(SourceBytes, *FilePath) || !FFileHelper::LoadFileToString(SourceText, *FilePath))
 		{
 			Diagnostics.Error(TEXT("DFX1000"), FSourceLocation(),
 				FString::Printf(TEXT("Could not read source file '%s'."), *FilePath));
@@ -2426,7 +2473,7 @@ namespace UE::DreamFX::Editor
 			// held, and they are not recoverable from the asset once a build has run.
 			Result.BackupPath = BackupPathFor(FilePath);
 			IFileManager::Get().MakeDirectory(*FPaths::GetPath(Result.BackupPath), /*Tree=*/true);
-			if (!FFileHelper::SaveStringToFile(SourceText, *Result.BackupPath))
+			if (!FFileHelper::SaveArrayToFile(SourceBytes, *Result.BackupPath))
 			{
 				Diagnostics.Error(TEXT("DFX7110"), FSourceLocation(), FString::Printf(
 					TEXT("pull: the backup '%s' could not be written, so '%s' was left untouched."),
@@ -2435,7 +2482,7 @@ namespace UE::DreamFX::Editor
 				return Result;
 			}
 
-			if (!FFileHelper::SaveStringToFile(NewSource, *FilePath))
+			if (!FFileHelper::SaveStringToFile(NewSource, *FilePath, SourceEncodingOf(SourceBytes)))
 			{
 				Diagnostics.Error(TEXT("DFX7110"), FSourceLocation(), FString::Printf(
 					TEXT("pull: '%s' could not be written; the bytes it held are in '%s'."),
@@ -2479,7 +2526,7 @@ namespace UE::DreamFX::Editor
 			Lines.Append(Result.Report);
 
 			IFileManager::Get().MakeDirectory(*FPaths::GetPath(ReportPath), /*Tree=*/true);
-			if (FFileHelper::SaveStringArrayToFile(Lines, *ReportPath))
+			if (FFileHelper::SaveStringArrayToFile(Lines, *ReportPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 			{
 				Result.ReportPath = ReportPath;
 			}

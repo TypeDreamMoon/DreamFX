@@ -3903,6 +3903,13 @@ namespace UE::DreamFX::Editor
 		return RenderSettingValue(Mapping->ValueAliases, Value, OutSource, OutWhy);
 	}
 
+	TSharedPtr<FJsonValue> FindSettingJson(const FString& SettingName, bool bSystemScope,
+		const TSharedPtr<FJsonObject>& PropertiesJson)
+	{
+		const FSettingMapping* Mapping = FindSettingMapping(SettingName, bSystemScope);
+		return Mapping != nullptr ? FindJsonPropertyByPath(PropertiesJson, Mapping->PropertyName) : nullptr;
+	}
+
 	bool LowerDeclaredPropertyToJson(const FPropertyEntry& Property, bool bSystemScope,
 		const FString& DefaultRoot, const UClass* RendererClass, TSharedPtr<FJsonValue>& OutJson)
 	{

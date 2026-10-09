@@ -90,6 +90,14 @@ namespace UE::DreamFX::Editor
 		const FString& PropertiesJson, FString& OutSource, FString& OutWhy);
 
 	/**
+	 * The asset's JSON value for one `Settings` key, found through the same table row the plan writes
+	 * through -- the source spelling and the property path differ for most settings. Null when the key
+	 * is not a setting or the asset holds nothing there.
+	 */
+	TSharedPtr<FJsonValue> FindSettingJson(const FString& SettingName, bool bSystemScope,
+		const TSharedPtr<FJsonObject>& PropertiesJson);
+
+	/**
 	 * The JSON one declared property writes, taken from the same code path the plan writes through.
 	 *
 	 * This is how a reader decides whether a text already MEANS what the asset holds, which is not a

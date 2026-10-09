@@ -73,6 +73,20 @@ namespace UE::DreamFX::Editor
 		const TArray<TSharedPtr<FJsonValue>>& Elements, FString& OutSource);
 
 	/**
+	 * Rewrites every `FNiagaraUserParameterBinding` inside one renderer property value -- at any struct
+	 * or array depth, `OverrideMaterials[].UserParamBinding` included -- to its name-only spelling.
+	 *
+	 * Niagara serializes the binding's type as a process-local registry index, so the raw JSON differs
+	 * between editor sessions and cannot go into source. These bindings have a renderer-defined type,
+	 * and importing the name alone lets the fresh renderer supply it. The decompiler and `pull` both
+	 * read renderer values through this, so neither writes the index into a text.
+	 *
+	 * @return false when a binding's type is not the renderer's default -- the name-only spelling
+	 *         cannot carry it, and the caller reports a gap instead.
+	 */
+	bool NormalizeRendererPropertyBindings(const UClass* RendererClass, const FString& Key, TSharedPtr<FJsonValue>& Value);
+
+	/**
 	 * One property value as the right-hand side of `Key = <this>;`.
 	 *
 	 * @param PropertyClass  the class the property lives on, needed for the array-of-references rule

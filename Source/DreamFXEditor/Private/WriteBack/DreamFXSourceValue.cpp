@@ -4,6 +4,9 @@
 #include "Generation/DreamFXValueLowering.h"
 
 #include "Dom/JsonObject.h"
+#include "UObject/StructOnScope.h"
+#include "NiagaraCommon.h"
+#include "JsonObjectConverter.h"
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -271,6 +274,87 @@ namespace UE::DreamFX::Editor
 		}
 		OutSource = FString::Printf(TEXT("[%s]"), *FString::Join(Quoted, TEXT(", ")));
 		return true;
+	}
+
+	namespace
+	{
+		bool NormalizeUserParameterBinding(TSharedPtr<FJsonValue>& Value,
+			const TSharedPtr<FJsonValue>& Default)
+		{
+			const TSharedPtr<FJsonObject>* Parameter = nullptr;
+			const TSharedPtr<FJsonObject>* DefaultParameter = nullptr;
+			if (!Value.IsValid() || Value->Type != EJson::Object
+				|| !Default.IsValid() || Default->Type != EJson::Object
+				|| !Value->AsObject()->TryGetObjectField(TEXT("parameter"), Parameter)
+				|| !Default->AsObject()->TryGetObjectField(TEXT("parameter"), DefaultParameter))
+			{
+				return false;
+			}
+			FString Name;
+			const TSharedPtr<FJsonValue> Type = (*Parameter)->TryGetField(TEXT("typeDefHandle"));
+			const TSharedPtr<FJsonValue> DefaultType = (*DefaultParameter)->TryGetField(TEXT("typeDefHandle"));
+			if (!(*Parameter)->TryGetStringField(TEXT("name"), Name) || !Type.IsValid() || !DefaultType.IsValid()
+				|| !FJsonValue::CompareEqual(*Type, *DefaultType))
+			{
+				return false;
+			}
+			// Niagara serializes TypeDefHandle as a process-local registry index. These bindings
+			// have a fixed renderer-defined type (MaterialInterface for Sprite/Ribbon); import only
+			// the name so the fresh renderer keeps that type in every editor session.
+			const TSharedRef<FJsonObject> StableParameter = MakeShared<FJsonObject>();
+			StableParameter->SetStringField(TEXT("name"), Name);
+			const TSharedRef<FJsonObject> StableBinding = MakeShared<FJsonObject>();
+			StableBinding->SetObjectField(TEXT("parameter"), StableParameter);
+			Value = MakeShared<FJsonValueObject>(StableBinding);
+			return true;
+		}
+
+		/** Normalize bindings at every struct/array depth, including mesh OverrideMaterials. */
+		bool NormalizeRendererBindings(const FProperty* Property, const void* DefaultData,
+			TSharedPtr<FJsonValue>& Value)
+		{
+			if (Property == nullptr || !Value.IsValid()) { return true; }
+			if (const FStructProperty* Struct = CastField<FStructProperty>(Property))
+			{
+				if (Struct->Struct == FNiagaraUserParameterBinding::StaticStruct())
+				{
+					return DefaultData != nullptr && NormalizeUserParameterBinding(Value,
+						FJsonObjectConverter::UPropertyToJsonValue(const_cast<FProperty*>(Property), DefaultData));
+				}
+				if (Value->Type != EJson::Object) { return true; }
+				for (auto& Field : Value->AsObject()->Values)
+				{
+					const FProperty* Member = FindFProperty<FProperty>(Struct->Struct, FName(*Field.Key));
+					if (!NormalizeRendererBindings(Member,
+						Member != nullptr && DefaultData != nullptr ? Member->ContainerPtrToValuePtr<void>(DefaultData) : nullptr,
+						Field.Value)) { return false; }
+				}
+			}
+			else if (const FArrayProperty* Array = CastField<FArrayProperty>(Property))
+			{
+				const FStructProperty* Inner = CastField<FStructProperty>(Array->Inner);
+				if (Inner != nullptr && Value->Type == EJson::Array)
+				{
+					// Import constructs fresh elements, even when the renderer CDO array is empty.
+					FStructOnScope ElementDefaults(Inner->Struct);
+					TArray<TSharedPtr<FJsonValue>> Elements = Value->AsArray();
+					for (TSharedPtr<FJsonValue>& Element : Elements)
+					{
+						if (!NormalizeRendererBindings(Inner, ElementDefaults.GetStructMemory(), Element)) { return false; }
+					}
+					Value = MakeShared<FJsonValueArray>(MoveTemp(Elements));
+				}
+			}
+			return true;
+		}
+	}
+
+	bool NormalizeRendererPropertyBindings(const UClass* RendererClass, const FString& Key, TSharedPtr<FJsonValue>& Value)
+	{
+		const FProperty* Property = RendererClass != nullptr ? FindFProperty<FProperty>(RendererClass, FName(*Key)) : nullptr;
+		return NormalizeRendererBindings(Property,
+			Property != nullptr ? Property->ContainerPtrToValuePtr<void>(RendererClass->GetDefaultObject()) : nullptr,
+			Value);
 	}
 
 	bool RenderJsonPropertyAsSource(const UClass* PropertyClass, const FString& Key,

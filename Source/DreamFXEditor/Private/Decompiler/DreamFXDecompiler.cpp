@@ -818,76 +818,6 @@ namespace UE::DreamFX::Editor
 		 * `RenderJsonPropertyAsSource`, so that the reader and the writer of a value can never
 		 * disagree about how it is written.
 		 */
-		bool NormalizeUserParameterBinding(TSharedPtr<FJsonValue>& Value,
-			const TSharedPtr<FJsonValue>& Default)
-		{
-			const TSharedPtr<FJsonObject>* Parameter = nullptr;
-			const TSharedPtr<FJsonObject>* DefaultParameter = nullptr;
-			if (!Value.IsValid() || Value->Type != EJson::Object
-				|| !Default.IsValid() || Default->Type != EJson::Object
-				|| !Value->AsObject()->TryGetObjectField(TEXT("parameter"), Parameter)
-				|| !Default->AsObject()->TryGetObjectField(TEXT("parameter"), DefaultParameter))
-			{
-				return false;
-			}
-			FString Name;
-			const TSharedPtr<FJsonValue> Type = (*Parameter)->TryGetField(TEXT("typeDefHandle"));
-			const TSharedPtr<FJsonValue> DefaultType = (*DefaultParameter)->TryGetField(TEXT("typeDefHandle"));
-			if (!(*Parameter)->TryGetStringField(TEXT("name"), Name) || !Type.IsValid() || !DefaultType.IsValid()
-				|| !FJsonValue::CompareEqual(*Type, *DefaultType))
-			{
-				return false;
-			}
-			// Niagara serializes TypeDefHandle as a process-local registry index. These bindings
-			// have a fixed renderer-defined type (MaterialInterface for Sprite/Ribbon); import only
-			// the name so the fresh renderer keeps that type in every editor session.
-			const TSharedRef<FJsonObject> StableParameter = MakeShared<FJsonObject>();
-			StableParameter->SetStringField(TEXT("name"), Name);
-			const TSharedRef<FJsonObject> StableBinding = MakeShared<FJsonObject>();
-			StableBinding->SetObjectField(TEXT("parameter"), StableParameter);
-			Value = MakeShared<FJsonValueObject>(StableBinding);
-			return true;
-		}
-
-		/** Normalize bindings at every struct/array depth, including mesh OverrideMaterials. */
-		bool NormalizeRendererBindings(const FProperty* Property, const void* DefaultData,
-			TSharedPtr<FJsonValue>& Value)
-		{
-			if (Property == nullptr || !Value.IsValid()) { return true; }
-			if (const FStructProperty* Struct = CastField<FStructProperty>(Property))
-			{
-				if (Struct->Struct == FNiagaraUserParameterBinding::StaticStruct())
-				{
-					return DefaultData != nullptr && NormalizeUserParameterBinding(Value,
-						FJsonObjectConverter::UPropertyToJsonValue(const_cast<FProperty*>(Property), DefaultData));
-				}
-				if (Value->Type != EJson::Object) { return true; }
-				for (auto& Field : Value->AsObject()->Values)
-				{
-					const FProperty* Member = FindFProperty<FProperty>(Struct->Struct, FName(*Field.Key));
-					if (!NormalizeRendererBindings(Member,
-						Member != nullptr && DefaultData != nullptr ? Member->ContainerPtrToValuePtr<void>(DefaultData) : nullptr,
-						Field.Value)) { return false; }
-				}
-			}
-			else if (const FArrayProperty* Array = CastField<FArrayProperty>(Property))
-			{
-				const FStructProperty* Inner = CastField<FStructProperty>(Array->Inner);
-				if (Inner != nullptr && Value->Type == EJson::Array)
-				{
-					// Import constructs fresh elements, even when the renderer CDO array is empty.
-					FStructOnScope ElementDefaults(Inner->Struct);
-					TArray<TSharedPtr<FJsonValue>> Elements = Value->AsArray();
-					for (TSharedPtr<FJsonValue>& Element : Elements)
-					{
-						if (!NormalizeRendererBindings(Inner, ElementDefaults.GetStructMemory(), Element)) { return false; }
-					}
-					Value = MakeShared<FJsonValueArray>(MoveTemp(Elements));
-				}
-			}
-			return true;
-		}
-
 		void WriteChangedRendererProperties(const UClass* RendererClass, const FString& Json,
 			const FString& DefaultsJson, TArray<FString>& OutLines, TArray<FString>& OutGaps)
 		{
@@ -946,10 +876,7 @@ namespace UE::DreamFX::Editor
 					OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *ReferenceArray));
 					continue;
 				}
-				const FProperty* RendererProperty = FindFProperty<FProperty>(RendererClass, FName(*Key));
-				if (!NormalizeRendererBindings(RendererProperty,
-					RendererProperty != nullptr ? RendererProperty->ContainerPtrToValuePtr<void>(RendererClass->GetDefaultObject()) : nullptr,
-					Value))
+				if (!NormalizeRendererPropertyBindings(RendererClass, Key, Value))
 				{
 					OutGaps.AddUnique(FString::Printf(TEXT("renderer property '%s' contains a user parameter binding with a non-default or unreadable type"), *Key));
 					continue;
