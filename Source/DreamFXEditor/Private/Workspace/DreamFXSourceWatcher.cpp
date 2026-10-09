@@ -7,7 +7,7 @@
 #include "Settings/DreamFXEditorSettings.h"
 #include "SourceFiles/DreamFXPaths.h"
 #include "UI/DreamFXEditorGeneration.h"
-#include "Workspace/DreamFXSourceDependencies.h"
+#include "Workspace/DreamFXSourceWatchSession.h"
 #include "Workspace/DreamFXWorkspaceService.h"
 
 #include "Algo/StableSort.h"
@@ -31,10 +31,9 @@ namespace UE::DreamFX::Editor
 		constexpr float DebounceSeconds = 0.75f;
 		constexpr double RootRefreshSeconds = 2.0;
 
-		TMap<FString, FDelegateHandle> GWatchHandles;
+		TUniquePtr<FSourceWatchSession> GWatchSession;
 		bool GRegistered = false;
 		double GLastRootRefresh = 0.0;
-		FSourceDependencyIndex GDependencies;
 		FTSTicker::FDelegateHandle GTickerHandle;
 		TSet<FString> GPendingFiles;
 		double GLastChangeTime = 0.0;
@@ -264,6 +263,7 @@ namespace UE::DreamFX::Editor
 
 		bool Tick(float /*DeltaTime*/)
 		{
+			if (GWatchSession) { GWatchSession->ProcessPendingChanges(); }
 			if (FPlatformTime::Seconds() - GLastRootRefresh >= RootRefreshSeconds)
 			{
 				FSourceWatcher::RefreshSourceRoots();
@@ -304,39 +304,7 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
-		void OnDirectoryChanged(const TArray<FFileChangeData>& Changes)
-		{
-			TArray<FString> ChangedSources;
-			for (const FFileChangeData& Change : Changes)
-			{
-				if (!FDreamFXPaths::IsSourceFile(Change.Filename))
-				{
-					continue;
-				}
-				// Decompiled exports included (plan-v4 V1-3): they rebuild a mirror under
-				// `Decompiled/`, never the asset they were read from, so save-to-rebuild is as safe
-				// here as anywhere else. Skipping them was the reason editing an export and saving
-				// produced no build and no message at all.
-				const FString File = FPaths::ConvertRelativePathToFull(Change.Filename);
-				ChangedSources.AddUnique(File);
-				if (Change.Action != FFileChangeData::FCA_Removed)
-				{
-					GPendingFiles.Add(File);
-				}
-			}
 
-			if (ChangedSources.Num() > 0)
-			{
-				// Consult both versions: the old graph remembers removed .dfe files, while the new
-				// graph finds newly added files and changed source-resolution precedence.
-				GDependencies.FindDependents(ChangedSources, GPendingFiles);
-				TArray<FString> SourceFiles;
-				FDreamFXPaths::FindSourceFiles(SourceFiles);
-				GDependencies.Refresh(SourceFiles);
-				GDependencies.FindDependents(ChangedSources, GPendingFiles);
-				GLastChangeTime = FPlatformTime::Seconds();
-			}
-		}
 	}
 
 	void FSourceWatcher::Register()
@@ -354,6 +322,11 @@ namespace UE::DreamFX::Editor
 			return;
 		}
 
+		GWatchSession = MakeUnique<FSourceWatchSession>(*Watcher, [](const TSet<FString>& Sources)
+		{
+			GPendingFiles.Append(Sources);
+			GLastChangeTime = FPlatformTime::Seconds();
+		});
 		GRegistered = true;
 		RefreshSourceRoots(/*bQueueNewSources=*/false);
 
@@ -373,22 +346,14 @@ namespace UE::DreamFX::Editor
 			GTickerHandle.Reset();
 		}
 
-		if (FDirectoryWatcherModule* Module = FModuleManager::GetModulePtr<FDirectoryWatcherModule>(
-			TEXT("DirectoryWatcher")))
+		if (GWatchSession)
 		{
-			if (IDirectoryWatcher* Watcher = Module->Get())
-			{
-				for (const TPair<FString, FDelegateHandle>& Entry : GWatchHandles)
-				{
-					Watcher->UnregisterDirectoryChangedCallback_Handle(Entry.Key, Entry.Value);
-				}
-			}
+			FDirectoryWatcherModule* Module = FModuleManager::GetModulePtr<FDirectoryWatcherModule>(TEXT("DirectoryWatcher"));
+			GWatchSession->Stop(Module != nullptr && Module->Get() != nullptr);
+			GWatchSession.Reset();
 		}
-
-		GWatchHandles.Reset();
 		GPendingFiles.Reset();
 		GDeferredBulkFiles.Reset();
-		GDependencies.Reset();
 		GAnnounceSuccess = false;
 	}
 
@@ -400,67 +365,9 @@ namespace UE::DreamFX::Editor
 		{
 			return; // Commandlets and -NoDreamFXEditor must not acquire directory watches.
 		}
-		FDirectoryWatcherModule* Module = FModuleManager::GetModulePtr<FDirectoryWatcherModule>(TEXT("DirectoryWatcher"));
-		IDirectoryWatcher* Watcher = Module ? Module->Get() : nullptr;
-		if (Watcher == nullptr)
-		{
-			return;
-		}
-
-		TSet<FString> CurrentDirectories;
-		TArray<FString> AddedDirectories;
-		bool bRootsChanged = false;
-		for (const FSourceRoot& Root : FDreamFXPaths::GetSourceRoots())
-		{
-			CurrentDirectories.Add(Root.Directory);
-			if (GWatchHandles.Contains(Root.Directory))
-			{
-				continue;
-			}
-			FDelegateHandle Handle;
-			if (Watcher->RegisterDirectoryChangedCallback_Handle(Root.Directory,
-				IDirectoryWatcher::FDirectoryChanged::CreateStatic(&OnDirectoryChanged), Handle,
-				IDirectoryWatcher::WatchOptions::IncludeDirectoryChanges))
-			{
-				GWatchHandles.Add(Root.Directory, Handle);
-				AddedDirectories.Add(Root.Directory);
-				bRootsChanged = true;
-				UE_LOG(LogDreamFX, Display, TEXT("Watching '%s' for source changes."), *Root.Directory);
-			}
-		}
-		for (auto It = GWatchHandles.CreateIterator(); It; ++It)
-		{
-			if (!CurrentDirectories.Contains(It.Key()))
-			{
-				Watcher->UnregisterDirectoryChangedCallback_Handle(It.Key(), It.Value());
-				It.RemoveCurrent();
-				bRootsChanged = true;
-			}
-		}
-		if (bRootsChanged)
-		{
-			TArray<FString> SourceFiles;
-			FDreamFXPaths::FindSourceFiles(SourceFiles);
-			GDependencies.Refresh(SourceFiles);
-			if (bQueueNewSources)
-			{
-				TArray<FString> AddedSources;
-				for (const FString& File : SourceFiles)
-				{
-					if (AddedDirectories.ContainsByPredicate([&File](const FString& Directory)
-						{ return FPaths::IsUnderDirectory(File, Directory); }))
-					{
-						GPendingFiles.Add(File);
-						AddedSources.Add(File);
-					}
-				}
-				GDependencies.FindDependents(AddedSources, GPendingFiles);
-				if (AddedSources.Num() > 0)
-				{
-					GLastChangeTime = FPlatformTime::Seconds();
-				}
-			}
-		}
+		TArray<FString> Directories;
+		for (const FSourceRoot& Root : FDreamFXPaths::GetSourceRoots()) { Directories.Add(Root.Directory); }
+		if (GWatchSession) { GWatchSession->Refresh(Directories, bQueueNewSources); }
 	}
 
 	void FSourceWatcher::FlushPending()
@@ -473,15 +380,7 @@ namespace UE::DreamFX::Editor
 	{
 		const FString FullPath = FPaths::ConvertRelativePathToFull(FilePath);
 		GPendingFiles.Add(FullPath);
-		if (FPaths::GetExtension(FullPath).Equals(TEXT("dfe"), ESearchCase::IgnoreCase))
-		{
-			const TArray<FString> ChangedFiles = { FullPath };
-			GDependencies.FindDependents(ChangedFiles, GPendingFiles);
-			TArray<FString> SourceFiles;
-			FDreamFXPaths::FindSourceFiles(SourceFiles);
-			GDependencies.Refresh(SourceFiles);
-			GDependencies.FindDependents(ChangedFiles, GPendingFiles);
-		}
+		if (GWatchSession) { GWatchSession->InvalidateFile(FullPath); }
 		GLastChangeTime = FPlatformTime::Seconds();
 		GAnnounceSuccess |= bAnnounceSuccess;
 	}

@@ -10,6 +10,8 @@ namespace UE::DreamFX::Editor
 	public:
 		void Refresh(const TArray<FString>& SourceFiles);
 		void FindDependents(const TArray<FString>& ChangedFiles, TSet<FString>& OutSources) const;
+		/** Includes unresolved candidates: deleting and later recreating a dependency remains observable. */
+		void GetReferencedFiles(TArray<FString>& OutFiles) const;
 		void Reset() { DependenciesBySource.Reset(); TrackedSources.Reset(); }
 
 	private:

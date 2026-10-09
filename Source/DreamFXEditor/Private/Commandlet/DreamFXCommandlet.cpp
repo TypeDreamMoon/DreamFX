@@ -145,7 +145,7 @@ namespace
 	 * Several are accepted, separated by `+` or `,`: booting the editor is most of what a scan costs,
 	 * and plan-v4's four content packs are one question, not four.
 	 */
-	TArray<FString> ParseContentRoots(const FString& PathSpec)
+	TArray<FString> ParseContentRoots(const FString& PathSpec, bool bAllowDefaultRoots = true)
 	{
 		TArray<FString> Roots;
 
@@ -166,7 +166,7 @@ namespace
 				}
 			}
 
-			if (Roots.Num() > 0)
+			if (Roots.Num() > 0 || !bAllowDefaultRoots)
 			{
 				return Roots;
 			}
@@ -290,7 +290,9 @@ namespace
 			return 0;
 		}
 
-		if (!FFileHelper::SaveStringToFile(Result.Source, *OutputPath))
+		// The default AutoDetect writes UTF-16LE as soon as a name or description is not ASCII; every
+		// other DreamFX writer, and every editor the source is opened in, expects UTF-8.
+		if (!FFileHelper::SaveStringToFile(Result.Source, *OutputPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 		{
 			UE_LOG(LogDreamFX, Error, TEXT("Could not write '%s'."), *OutputPath);
 			return 1;
@@ -760,7 +762,23 @@ namespace
 	 */
 	int32 RunAssetDiff(const FString& SearchRoot, bool bCompileFirst)
 	{
-		const TArray<FString> Roots = ParseContentRoots(SearchRoot);
+		const TArray<FString> Roots = ParseContentRoots(SearchRoot, SearchRoot.IsEmpty());
+		if (Roots.IsEmpty())
+		{
+			UE_LOG(LogDreamFX, Error, TEXT("Asset diff has no valid content roots to compare."));
+			return 1;
+		}
+		for (const FString& Root : Roots)
+		{
+			FString RootToken, MountPoint, RootError;
+			const FString ProbePackage = Root / TEXT("DreamFXRootValidation");
+			if (!FPackageName::IsValidLongPackageName(ProbePackage)
+				|| !FDreamFXPaths::ResolveRootTokenForPackage(ProbePackage, RootToken, MountPoint, RootError))
+			{
+				UE_LOG(LogDreamFX, Error, TEXT("Asset diff cannot resolve content root '%s': %s"), *Root, *RootError);
+				return 1;
+			}
+		}
 		TArray<FAssetData> Assets;
 		FindSystems(Roots, /*bIncludeMirrors=*/false, Assets);
 
@@ -770,6 +788,7 @@ namespace
 		int32 Same = 0;
 		int32 Different = 0;
 		int32 Missing = 0;
+		int32 Failed = 0;
 
 		for (const FAssetData& Asset : Assets)
 		{
@@ -780,6 +799,8 @@ namespace
 			FString RootError;
 			if (!FDreamFXPaths::ResolveRootTokenForPackage(PackagePath, RootToken, MountPoint, RootError))
 			{
+				++Failed;
+				UE_LOG(LogDreamFX, Warning, TEXT("  FAILED  %s: %s"), *PackagePath, *RootError);
 				continue;
 			}
 			const FString MirrorPath = MountPoint / FDreamFXPaths::ToDecompiledNamespace(
@@ -820,10 +841,19 @@ namespace
 
 				FCompileStateInfo CompileState;
 				TArray<FString> CompileErrors;
-				FNiagaraAdapter::WaitAndCollect(Original, /*bIncludingGpuShaders=*/false,
+				const bool bOriginalCompiled = FNiagaraAdapter::WaitAndCollect(Original, /*bIncludingGpuShaders=*/true,
 					CompileState, CompileErrors);
-				FNiagaraAdapter::WaitAndCollect(Mirror, /*bIncludingGpuShaders=*/false,
-					CompileState, CompileErrors);
+				TArray<FString> MirrorCompileErrors;
+				const bool bMirrorCompiled = FNiagaraAdapter::WaitAndCollect(Mirror, /*bIncludingGpuShaders=*/true,
+					CompileState, MirrorCompileErrors);
+				if (!bOriginalCompiled || !bMirrorCompiled)
+				{
+					++Failed;
+					UE_LOG(LogDreamFX, Warning, TEXT("  FAILED  %s: original compile %s (%s); mirror compile %s (%s)"),
+						*PackagePath, bOriginalCompiled ? TEXT("succeeded") : TEXT("failed"), *FString::Join(CompileErrors, TEXT(" | ")),
+						bMirrorCompiled ? TEXT("succeeded") : TEXT("failed"), *FString::Join(MirrorCompileErrors, TEXT(" | ")));
+					continue;
+				}
 			}
 
 			TArray<FString> LeftFacts;
@@ -893,9 +923,9 @@ namespace
 			ReportSide(TEXT("mirror  "), OnlyMirror);
 		}
 
-		UE_LOG(LogDreamFX, Display, TEXT("=== asset diff: %d same, %d different, %d missing ==="),
-			Same, Different, Missing);
-		return Different;
+		UE_LOG(LogDreamFX, Display, TEXT("=== asset diff: %d same, %d different, %d missing, %d failed ==="),
+			Same, Different, Missing, Failed);
+		return Different + Missing + Failed;
 	}
 
 	/**

@@ -247,6 +247,22 @@ namespace UE::DreamFX::Editor
 	{
 		const FString SelfPackage = System->GetOutermost()->GetName();
 
+		// Compare authored runtime configuration independently of the exporter's Settings table.
+		// CPF_Edit selects settings rather than graph ownership, identity and derived compile data;
+		// editor-only metadata (description, thumbnails, baker settings) is not runtime behavior.
+		for (TFieldIterator<FProperty> It(System->GetClass()); It; ++It)
+		{
+			const FProperty* Property = *It;
+			if (!Property->HasAnyPropertyFlags(CPF_Edit)
+				|| Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated | CPF_EditorOnly))
+			{
+				continue;
+			}
+			FString Value;
+			Property->ExportText_InContainer(0, Value, System, System, System, PPF_None);
+			OutFacts.Add(FString::Printf(TEXT("system %s = %s"), *Property->GetName(), *ScrubIdentity(Value, SelfPackage)));
+		}
+
 		// Identity, wiring and editor bookkeeping. Graphs and scripts are deliberately absent as
 		// objects -- their observable content arrives through the parameter stores here, the export
 		// (L1) and the simulation (L3); their node soup is all identity.

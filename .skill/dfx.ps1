@@ -422,12 +422,15 @@ $arguments += @('-unattended', '-nopause', '-nosplash', '-nullrhi')
 # ---------------------------------------------------------------- snapshot for -CleanNew
 
 function Get-AssetSnapshot {
-    param([string]$Root)
+    param([string]$Root, [switch]$RequireComplete)
     $map = @{}
+    # An incomplete snapshot cannot establish which assets are safe to remove, so -CleanNew fails
+    # closed. Without it the snapshot only feeds the "assets written" report, and one unreadable
+    # directory under Plugins/ must not fail every build.
+    $scanErrors = if ($RequireComplete) { 'Stop' } else { 'SilentlyContinue' }
     foreach ($dir in @((Join-Path $Root 'Content'), (Join-Path $Root 'Plugins'))) {
         if (-not (Test-Path -LiteralPath $dir)) { continue }
-        # An incomplete snapshot cannot establish which assets are safe to remove.
-        foreach ($file in Get-ChildItem -LiteralPath $dir -Filter '*.uasset' -File -Recurse -ErrorAction Stop) {
+        foreach ($file in Get-ChildItem -LiteralPath $dir -Filter '*.uasset' -File -Recurse -ErrorAction $scanErrors) {
             $map[$file.FullName] = $file.LastWriteTimeUtc
         }
     }
@@ -435,7 +438,7 @@ function Get-AssetSnapshot {
 }
 
 $trackAssets = $CleanNew -or $Command -eq 'build'
-$before = if ($trackAssets) { Get-AssetSnapshot -Root $projectRoot } else { @{} }
+$before = if ($trackAssets) { Get-AssetSnapshot -Root $projectRoot -RequireComplete:$CleanNew } else { @{} }
 
 # ---------------------------------------------------------------- run
 
@@ -455,6 +458,11 @@ if (Test-Path -LiteralPath $engineLog) {
     }
     $exit = $resolvedExit
 }
+
+# Each run has its own log; keep the recent ones for diagnosis instead of letting them pile up.
+Get-ChildItem -LiteralPath (Split-Path -Parent $engineLog) -Filter 'DreamFX-*.log' -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 20 |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 if ($Raw) {
     $output | ForEach-Object { $_ }
@@ -511,7 +519,7 @@ else {
 # ---------------------------------------------------------------- asset report
 
 if ($trackAssets) {
-    $after = Get-AssetSnapshot -Root $projectRoot
+    $after = Get-AssetSnapshot -Root $projectRoot -RequireComplete:$CleanNew
     $touched = @(Get-DreamFXAssetChanges -Before $before -After $after)
 
     if ($touched.Count -gt 0) {

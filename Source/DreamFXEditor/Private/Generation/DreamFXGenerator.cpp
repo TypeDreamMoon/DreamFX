@@ -45,8 +45,10 @@ namespace UE::DreamFX::Editor
 			TArray<FString> Paths;
 			/** Asset path -> "Major.Minor:Guid". */
 			TMap<FString, FString> Versions;
+			/** Selected script versions and their transitive compile inputs, not just exposed version labels. */
+			TMap<FString, FString> CompileInputs;
 
-			void Add(const UNiagaraScript* Asset)
+			void Add(const UNiagaraScript* Asset, const FGuid& SelectedVersion)
 			{
 				if (Asset == nullptr)
 				{
@@ -55,6 +57,11 @@ namespace UE::DreamFX::Editor
 				const FString Path = Asset->GetPathName();
 				Paths.AddUnique(Path);
 				Versions.Add(Path, FNiagaraAdapter::GetScriptVersion(Asset).ToStampString());
+				FNiagaraVMExecutableDataId CompileId;
+				Asset->ComputeVMCompilationId(CompileId, SelectedVersion);
+				FString CompileKey;
+				CompileId.AppendKeyString(CompileKey);
+				CompileInputs.Add(TEXT("module:") + Path + TEXT("@") + SelectedVersion.ToString(), HashSourceText(CompileKey));
 			}
 		};
 
@@ -957,6 +964,14 @@ namespace UE::DreamFX::Editor
 
 			// L6: arithmetic and builtin calls collapse into one HLSL expression rather than growing an
 			// operator-node backend.
+			if (Value.Kind == EValueKind::Call && Value.Text == TEXT("int") && Value.Arguments.IsEmpty()
+				&& Value.Elements.Num() == 1 && Value.Elements[0].IsValid() && Value.Elements[0]->Kind == EValueKind::Number)
+			{
+				FInputValue Literal;
+				if (!FValueLowering::Lower(Value, TargetType, DisplayName, Diagnostics, Literal)) { return false; }
+				Emit(MoveTemp(Literal));
+				return true;
+			}
 			if (FExpressions::RequiresHlslLowering(Value))
 			{
 				FString Hlsl;
@@ -979,7 +994,6 @@ namespace UE::DreamFX::Editor
 							*Value.Text, *FExpressions::ListBuiltins(), *Error));
 					return false;
 				}
-				OutDependencies.Add(DynamicInput);
 
 				// R1b, the dynamic input half. `MakeFloatFromLinearColor@1.0` and the same call with
 				// no pin are different scripts as far as their inputs are concerned: the revision
@@ -1007,6 +1021,7 @@ namespace UE::DreamFX::Editor
 					}
 					PinnedVersion = Match->Guid;
 				}
+				OutDependencies.Add(DynamicInput, PinnedVersion);
 
 				// The *stack* schema, not the asset one: a static switch on the dynamic input exists
 				// only on a live chain, and planning against the asset schema is what made
@@ -1438,7 +1453,7 @@ namespace UE::DreamFX::Editor
 				Planned.bDisabled = Statement.bDisabled;
 				Planned.InstanceName = Statement.InstanceName;
 				Planned.VersionGuid = PinnedVersion;
-				OutDependencies.Add(ModuleAsset);
+				OutDependencies.Add(ModuleAsset, PinnedVersion);
 
 				TSet<FName> Seen;
 
@@ -2020,6 +2035,20 @@ namespace UE::DreamFX::Editor
 						}
 						SourceDependencies.Add(Current.Emitter->GetPathName() + TEXT("@") + Current.Version.ToString(),
 							Current.Emitter->GetChangeId().ToString());
+						// A module referenced inside the parent's stacks can change independently of
+						// the parent emitter asset. Include those transitive compile inputs as well.
+						TArray<UNiagaraScript*> ParentScripts;
+						Data->GetScripts(ParentScripts);
+						for (const UNiagaraScript* Script : ParentScripts)
+						{
+							if (!Script) { continue; }
+							FNiagaraVMExecutableDataId CompileId;
+							Script->ComputeVMCompilationId(CompileId, Current.Version);
+							FString CompileKey;
+							CompileId.AppendKeyString(CompileKey);
+							SourceDependencies.Add(TEXT("parent-script:") + Script->GetPathName() + TEXT("@")
+								+ Current.Version.ToString(), HashSourceText(CompileKey));
+						}
 						Current = Data->GetParent();
 					}
 					// Native duplication/renaming can discard graph metadata that is not referenced
@@ -2250,6 +2279,7 @@ namespace UE::DreamFX::Editor
 				OutPlan.Emitters.Add(MoveTemp(Planned));
 			}
 
+			SourceDependencies.Append(OutPlan.Dependencies.CompileInputs);
 			OutPlan.EffectiveSourceHash = FProvenance::HashWithSourceDependencies(Document.SourceHash, SourceDependencies);
 
 			if (OutPlan.Emitters.Num() == 0 && bOk)
@@ -3676,22 +3706,11 @@ namespace UE::DreamFX::Editor
 			}
 
 			FProvenanceStamp Stamp;
-			Stamp.SourceFullPath = Pending.SourceFilePath;
+			FProvenance::SetSourceLocation(Stamp, Pending.SourceFilePath);
 			Stamp.SourceHash = Pending.SourceHash;
 			Stamp.GeneratorVersion = FProvenance::GetGeneratorVersion();
 			Stamp.ModuleDependencies = Pending.Plan.Dependencies.Paths;
 			Stamp.ModuleVersions = Pending.Plan.Dependencies.Versions;
-
-			FSourceRoot OwningRoot;
-			if (FDreamFXPaths::FindOwningRoot(Pending.SourceFilePath, OwningRoot))
-			{
-				Stamp.SourceRelativePath = Pending.SourceFilePath;
-				FPaths::MakePathRelativeTo(Stamp.SourceRelativePath, *(OwningRoot.Directory / TEXT("")));
-			}
-			else
-			{
-				Stamp.SourceRelativePath = FPaths::GetCleanFilename(Pending.SourceFilePath);
-			}
 
 			FProvenance::Write(System, Stamp);
 
@@ -3808,7 +3827,8 @@ namespace UE::DreamFX::Editor
 		}
 		Result.System = System;
 
-		const bool bUpToDate = FProvenance::IsUpToDate(System, Plan.EffectiveSourceHash);
+		const bool bUpToDate = FProvenance::IsUpToDate(System, Plan.EffectiveSourceHash)
+			&& FProvenance::IsSourceLocationCurrent(System, Document.SourceFilePath);
 
 		if (Options.bVerifyOnly)
 		{

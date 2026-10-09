@@ -62,9 +62,9 @@ namespace UE::DreamFX::Editor
 			// The source path is the actionable part of the message, so make it one click away.
 			// Through the same launch chain the menus use (plan-v3 E5): the OS default handler for a
 			// .dfs is whatever happens to be registered, which on most machines is nothing at all.
-			if (!Stamp.SourceFullPath.IsEmpty())
+			FString SourcePath;
+			if (FProvenance::ResolveSourceFile(Stamp, SourcePath))
 			{
-				const FString SourcePath = Stamp.SourceFullPath;
 				Info.HyperlinkText = LOCTEXT("DreamFXOpenSource", "Open source file");
 				Info.Hyperlink = FSimpleDelegate::CreateLambda([SourcePath]()
 				{

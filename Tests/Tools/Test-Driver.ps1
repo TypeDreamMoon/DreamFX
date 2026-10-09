@@ -34,9 +34,15 @@ if (-not $snapshot) { throw 'Production snapshot function not found' }
         Write-Error 'Simulated incomplete asset scan'
     }
     $failed = $false
-    try { $null = Get-AssetSnapshot -Root $repo }
+    try { $null = Get-AssetSnapshot -Root $repo -RequireComplete }
     catch { $failed = $_.Exception.Message -match 'Simulated incomplete asset scan' }
     Assert-Equal $failed $true 'An incomplete snapshot must abort before cleanup'
+
+    # Without -CleanNew the snapshot only feeds a report; an unreadable directory must not fail the build.
+    $failed = $false
+    try { $null = Get-AssetSnapshot -Root $repo }
+    catch { $failed = $true }
+    Assert-Equal $failed $false 'A report-only snapshot tolerates an incomplete scan'
 }
 $report = @($driver.EndBlock.Statements | Where-Object {
     $_ -is [System.Management.Automation.Language.IfStatementAst] -and
@@ -44,7 +50,7 @@ $report = @($driver.EndBlock.Statements | Where-Object {
 })
 Assert-Equal $report.Count 1 'Locate the production asset report'
 $reportBlock = [scriptblock]::Create($report[0].Extent.Text)
-function Get-AssetSnapshot { param($Root) return $script:after }
+function Get-AssetSnapshot { param($Root, [switch]$RequireComplete) return $script:after }
 function git {
     $global:LASTEXITCODE = 0
     if ($args -contains 'rev-parse') {

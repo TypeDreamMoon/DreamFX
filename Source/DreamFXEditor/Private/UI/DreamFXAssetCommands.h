@@ -9,6 +9,18 @@ class UObject;
 
 namespace UE::DreamFX::Editor
 {
+	/** Completed export, shared by the UI and bridge without launching an editor or showing a toast. */
+	struct FAssetExportResult
+	{
+		bool bSucceeded = false;
+		FString OutputPath;
+		/** A refused mirror export: the source that already builds the asset, when it is on disk. */
+		FString ExistingSourcePath;
+		FString Message;
+		TArray<FString> UnsupportedFeatures;
+		FDiagnosticSink Diagnostics;
+	};
+
 	struct FVerifyBatchResult
 	{
 		int32 Checked = 0;
@@ -45,10 +57,17 @@ namespace UE::DreamFX::Editor
 		/**
 		 * Decompiles to `<DecompiledOutputDirectory>/<package path>/<asset>.dfs` and opens it.
 		 *
-		 * A copy for reading and editing, not a source root: nothing watches it and nothing claims the
-		 * asset. Gaps become a warning toast; they are in the file either way (E4-0).
+		 * The exported source builds a separate asset in the Decompiled/ namespace. Gaps become a
+		 * warning toast and are listed in the source header.
 		 */
 		static void ExportSystem(UNiagaraSystem* System);
+		static FAssetExportResult ExportAsset(UObject* Asset);
+
+		/** Checks file existence before parsing: an invalid source is still the author's file. */
+		static bool ValidateAdoptDestination(const FString& PackagePath, const FString& SourcePath,
+			FDiagnosticSink& Diagnostics);
+		/** Publishes a new source without replacing a concurrently created destination. */
+		static bool WriteNewAdoptSource(const FString& SourcePath, const FString& Source, FString& OutError);
 
 		/**
 		 * Export's strict form: decompile into the real source root, rebuild the asset from it, then

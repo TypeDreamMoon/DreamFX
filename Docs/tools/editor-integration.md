@@ -125,6 +125,24 @@ calls it are queued together.
 
 Decompiled exports are included, like any other source. See [Export vs Adopt](#export-vs-adopt).
 
+The watcher also follows `.dfs` `Parent` chains and emitter `from` references outside the DFX
+roots. Only the DFX roots are watched recursively. The directory holding each root, the directory of
+each external reference and that directory's parent are watched shallowly — direct children only —
+so a root or dependency directory being renamed, removed or replaced is seen without receiving every
+write under the project (`Saved/`, `Intermediate/`, `DerivedDataCache/`). A missing reference is
+watched through its nearest existing ancestor, so creating the missing parent or emitter source
+resumes rebuilds. Directory moves, renames, removals and rescan events invalidate both the previous
+dependency graph and the newly discovered sources; a watched directory that was itself replaced is
+subscribed again. External sources trigger their in-root dependents; they do not acquire standalone
+build targets merely by being watched.
+
+A source's location is its DFX root plus its path inside that root. Moving or renaming a source
+without changing its contents makes an ordinary build regenerate the asset and update its
+provenance. The same tree checked out at another absolute path — a teammate's machine, CI, the test
+host — is the same location, so it is not rebuilt; commands that open or rebuild from the stamp
+resolve the recorded absolute path first and the root-relative path second. Verify remains
+read-only.
+
 | Toast | Condition |
 | :-- | :-- |
 | `DreamFX: {Built} built, {Skipped} up to date.` | nothing failed |
@@ -208,25 +226,29 @@ Exports written before this arrangement still name the original. They are refuse
 [DFX8013](../diagnostics/DFX8xxx.md#dfx8013) rather than obeyed; re-exporting replaces them.
 
 Exporting an asset that is *already* a mirror is refused too — it would leave two sources claiming one
-asset — and the toast links to the source the mirror was built from.
+asset. The bridge's `decompile` action reports `ok: false` for this refusal, a failed decompile or a
+failed file write. Successful responses include the written `outputPath`; bridge requests do not
+launch a text editor.
 
 ### Adopt
 
-1. Decompile. **Refuse** if anything is unrepresentable, listing what.
-2. Work out the source path from the asset's mount point: `/Game/FX/NS_X` → `<Project>/DFX/FX/NS_X.dfs`,
+1. Work out the source path from the asset's mount point: `/Game/FX/NS_X` → `<Project>/DFX/FX/NS_X.dfs`,
    `/MoonToon/FX/NS_X` → `<MoonToon>/DFX/FX/NS_X.dfs`.
-3. **Refuse** if another `.dfs` already declares the same target asset.
+2. **Refuse** if that destination already exists, including incomplete or invalid source, or another
+   `.dfs` already declares the same target asset.
+3. Decompile. **Refuse** if anything is unrepresentable, listing what.
 4. Confirm, listing the file to write and the asset to rebuild.
-5. Write the file, rebuild the asset from it, stamp provenance.
+5. Check the destination again and publish a new file without replacing an existing destination,
+   including a file created while the confirmation was open. Rebuild the asset and stamp provenance.
 6. Re-decompile the rebuilt asset and compare byte for byte.
 
 | Diagnostic | Cause |
 | :-- | :-- |
 | `DFX8010` | the asset has features DreamFXLang cannot express |
-| `DFX8011` | another source already generates this asset |
+| `DFX8011` | the source destination already exists, or another source already generates this asset |
 | `DFX8012` | adopted, but the rebuilt asset does not re-export to the same text |
 
-Step 1 is what makes step 6 meaningful: with no known gaps, a mismatch is a real defect rather than
+Step 3 is what makes step 6 meaningful: with no known gaps, a mismatch is a real defect rather than
 an expected loss. `DFX8012` leaves the source file in place — the asset was rebuilt from it, so the
 text is authoritative either way — and logs the first differing line.
 
@@ -370,6 +392,7 @@ rather than something guessed at.
 
 - [Getting started](../getting-started.md) — the editor-side workflow in order
 - [Language reference](../language/README.md) — what the exported text means
-- [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8016`, the
+- [Asset comparison and export](asset-comparison-and-export.md) — comparison failures and export coverage limits
+- [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8017`, the
   gap codes that say what a decompile could not carry
 - `dfx.ps1 coverage` — the same question asked of a whole content tree, bucketed by feature
