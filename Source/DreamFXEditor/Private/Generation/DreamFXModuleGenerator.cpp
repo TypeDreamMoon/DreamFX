@@ -1395,20 +1395,9 @@ namespace UE::DreamFX::Editor
 		// ---------------------------------------------------------------- stamp and save
 
 		FProvenanceStamp Stamp;
-		Stamp.SourceFullPath = Document.SourceFilePath;
+		FProvenance::SetSourceLocation(Stamp, Document.SourceFilePath);
 		Stamp.SourceHash = Document.SourceHash;
 		Stamp.GeneratorVersion = FProvenance::GetGeneratorVersion();
-
-		FSourceRoot OwningRoot;
-		if (FDreamFXPaths::FindOwningRoot(Document.SourceFilePath, OwningRoot))
-		{
-			Stamp.SourceRelativePath = Document.SourceFilePath;
-			FPaths::MakePathRelativeTo(Stamp.SourceRelativePath, *(OwningRoot.Directory / TEXT("")));
-		}
-		else
-		{
-			Stamp.SourceRelativePath = FPaths::GetCleanFilename(Document.SourceFilePath);
-		}
 
 		FProvenance::Write(Script, Stamp);
 

@@ -2,6 +2,7 @@
 
 #if WITH_AUTOMATION_TESTS
 
+#include "Misc/FileHelper.h"
 #include "DreamFXParser.h"
 #include "Generation/DreamFXGenerator.h"
 #include "Generation/DreamFXModuleGenerator.h"
@@ -94,6 +95,26 @@ bool FDreamFXSourceMoveRegression::RunTest(const FString& Parameters)
 		TestEqual(TEXT("source contents remain identical"), MovedStamp.SourceHash, OriginalStamp.SourceHash);
 		TestTrue(TEXT("following unchanged build keeps asset"), Generate(bSkipped) == Asset);
 		TestTrue(TEXT("following unchanged build skips"), bSkipped);
+
+		// Another checkout of the same tree: same root, same root-relative path, different absolute
+		// path. It is the same source, so it must neither rebuild nor lose its way to the file.
+		TestFalse(TEXT("owning root recorded"), MovedStamp.SourceRoot.IsEmpty());
+		if (!TestTrue(TEXT("moved source written for resolution"), FFileHelper::SaveStringToFile(Text, *MovedPath,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))) { return false; }
+		ON_SCOPE_EXIT { IFileManager::Get().Delete(*MovedPath, false, true); IFileManager::Get().DeleteDirectory(*FPaths::GetPath(MovedPath)); IFileManager::Get().DeleteDirectory(*Folder); };
+		FProvenanceStamp OtherCheckout = MovedStamp;
+		OtherCheckout.SourceFullPath = TEXT("Z:/AnotherCheckout/DFX/DreamFXAutomation/Moved/Renamed.") + Extension;
+		FProvenance::Write(Asset, OtherCheckout);
+		TestTrue(TEXT("another checkout of the same source is current"), FProvenance::IsSourceLocationCurrent(Asset, MovedPath));
+		TestTrue(TEXT("another checkout keeps asset"), Generate(bSkipped) == Asset);
+		TestTrue(TEXT("another checkout's unchanged build skips"), bSkipped);
+		FString Resolved;
+		TestTrue(TEXT("a foreign absolute path resolves through root and relative path"),
+			FProvenance::ResolveSourceFile(OtherCheckout, Resolved) && FPaths::IsSamePath(Resolved, MovedPath));
+		FProvenanceStamp OtherRoot = OtherCheckout;
+		OtherRoot.SourceRoot = TEXT("Plugin.DreamFXNoSuchRoot");
+		FProvenance::Write(Asset, OtherRoot);
+		TestFalse(TEXT("the same relative path under another root is a different source"), FProvenance::IsSourceLocationCurrent(Asset, MovedPath));
 	}
 	return true;
 }

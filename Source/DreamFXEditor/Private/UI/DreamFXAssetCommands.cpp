@@ -224,7 +224,10 @@ namespace UE::DreamFX::Editor
 				return false;
 			}
 
-			if (!FPaths::FileExists(OutStamp.SourceFullPath))
+			// The recorded absolute path belongs to the machine that built the asset. Another checkout
+			// finds the same file by its root and root-relative path.
+			FString SourceFile;
+			if (!FProvenance::ResolveSourceFile(OutStamp, SourceFile))
 			{
 				Notify(FText::Format(
 					LOCTEXT("SourceMissing", "'{0}' names source '{1}', which is not on disk."),
@@ -232,6 +235,7 @@ namespace UE::DreamFX::Editor
 					FText::FromString(OutStamp.SourceFullPath)), /*bSuccess=*/false);
 				return false;
 			}
+			OutStamp.SourceFullPath = SourceFile;
 
 			return true;
 		}

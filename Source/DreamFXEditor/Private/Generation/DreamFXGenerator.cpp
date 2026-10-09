@@ -3706,22 +3706,11 @@ namespace UE::DreamFX::Editor
 			}
 
 			FProvenanceStamp Stamp;
-			Stamp.SourceFullPath = Pending.SourceFilePath;
+			FProvenance::SetSourceLocation(Stamp, Pending.SourceFilePath);
 			Stamp.SourceHash = Pending.SourceHash;
 			Stamp.GeneratorVersion = FProvenance::GetGeneratorVersion();
 			Stamp.ModuleDependencies = Pending.Plan.Dependencies.Paths;
 			Stamp.ModuleVersions = Pending.Plan.Dependencies.Versions;
-
-			FSourceRoot OwningRoot;
-			if (FDreamFXPaths::FindOwningRoot(Pending.SourceFilePath, OwningRoot))
-			{
-				Stamp.SourceRelativePath = Pending.SourceFilePath;
-				FPaths::MakePathRelativeTo(Stamp.SourceRelativePath, *(OwningRoot.Directory / TEXT("")));
-			}
-			else
-			{
-				Stamp.SourceRelativePath = FPaths::GetCleanFilename(Pending.SourceFilePath);
-			}
 
 			FProvenance::Write(System, Stamp);
 
