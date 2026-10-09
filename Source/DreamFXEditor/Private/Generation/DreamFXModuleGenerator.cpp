@@ -960,6 +960,11 @@ namespace UE::DreamFX::Editor
 			if (Declaration.DefaultValue.IsValid())
 			{
 				const FString DisplayName = FString::Printf(TEXT("%s.%s"), *AssetName, *Declaration.Name);
+				if (!FValueLowering::ValidateObjectDefaultType(Input.Type, DisplayName,
+					Declaration.DefaultValue->Location, Diagnostics))
+				{
+					return Result;
+				}
 				if (!FValueLowering::Lower(*Declaration.DefaultValue, Input.Type, DisplayName, Diagnostics, Input.Default))
 				{
 					return Result;

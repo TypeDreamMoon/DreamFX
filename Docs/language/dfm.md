@@ -106,6 +106,12 @@ Each becomes a `Module.<Name>` input with the declared default and description. 
 literals or enum entries, because a module input's default is stored on the asset and cannot reference
 anything outside the module (DFX3044).
 
+Data interfaces (`DI<X>` and shorthands such as `Texture2D`) and instance-only object types
+(actors, components and classes marked `DefaultToInstanced`) cannot declare input defaults
+(DFX4043). Declare the input without `= ...` and supply its instance from the system or a stack input.
+These values are not asset paths. `Object<Texture>` and other asset reference types remain distinct
+from data interfaces; ordinary asset references are supported on system parameters and stack inputs.
+
 Attributes: `[ Description="..." ]`, `[ Advanced ]`, `[ StaticSwitch ]`.
 
 `[StaticSwitch]` is accepted, validated (bool/int/enum, constant default — DFX3034/DFX3035) and then

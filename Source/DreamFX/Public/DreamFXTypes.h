@@ -168,6 +168,7 @@ namespace UE::DreamFX
 		FString Name;
 		FValuePtr Value;
 		FSourceLocation Location;
+		FString SourceFile;
 	};
 
 	/**
@@ -185,6 +186,7 @@ namespace UE::DreamFX
 		FValuePtr DefaultValue;
 		TArray<FAttribute> Attributes;
 		FSourceLocation Location;
+		FString SourceFile;
 
 		DREAMFX_API const FAttribute* FindAttribute(const TCHAR* Key) const;
 		DREAMFX_API bool HasAttribute(const TCHAR* Key) const;
@@ -202,6 +204,7 @@ namespace UE::DreamFX
 	{
 		EStatementKind Kind = EStatementKind::ModuleCall;
 		FSourceLocation Location;
+		FString SourceFile;
 
 		/** Module name or path for ModuleCall; fully qualified assignment target otherwise. */
 		FString Name;
@@ -273,6 +276,7 @@ namespace UE::DreamFX
 		/** Reserved `MaterialParam X = V;` entries (L8). Parsed, rejected at lowering in v1. */
 		TArray<FPropertyEntry> MaterialParameters;
 		FSourceLocation Location;
+		FString SourceFile;
 	};
 
 	/**
@@ -392,6 +396,12 @@ namespace UE::DreamFX
 		/** `Emitter Flash from "DFX/Emitters/E_MoonFlashCard"` -- copy semantics in v1 (R3). */
 		FString FromPath;
 		FSourceLocation FromLocation;
+		/** Origin of FromPath, preserved when a system inherits this emitter from another .dfs. */
+		FString FromSourceFile;
+		/** Native Niagara parent asset; distinct from source-file copy/merge. */
+		FString NativeParentPath;
+		FString NativeParentVersion;
+		FSourceLocation NativeParentLocation;
 
 		TArray<FPropertyEntry> Settings;
 
@@ -432,6 +442,9 @@ namespace UE::DreamFX
 		/** `Root="Plugin.MoonToon"` -- empty means the project content root. */
 		FString Root;
 		FSourceLocation HeaderLocation;
+		/** Optional .dfs source parent, resolved relative to this source before source-root lookup. */
+		FString ParentPath;
+		FSourceLocation ParentLocation;
 
 		/** Absolute path of the file this was parsed from. */
 		FString SourceFilePath;

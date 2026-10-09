@@ -26,6 +26,10 @@ namespace UE::DreamFX::Editor
 		static bool Lower(const FValue& Value, const FNiagaraTypeDefinition& TargetType,
 			const FString& InputDisplayName, FDiagnosticSink& Diagnostics, FInputValue& OutValue);
 
+		/** Reject defaults for instance-only object types before interpreting strings as asset paths. */
+		static bool ValidateObjectDefaultType(const FNiagaraTypeDefinition& Type, const FString& InputDisplayName,
+			const FSourceLocation& Location, FDiagnosticSink& Diagnostics);
+
 		/** Human-readable type name for diagnostics. */
 		static FString DescribeType(const FNiagaraTypeDefinition& Type);
 

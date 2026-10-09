@@ -21,6 +21,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/GCObjectScopeGuard.h"
+#include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace UE::DreamFX::Editor
@@ -1678,7 +1679,11 @@ namespace UE::DreamFX::Editor
 
 				TArray<TTuple<FName, FInputValue>> Values;
 				Errors.Reset();
-				FNiagaraAdapter::GetModuleInputValues(ModuleAddress, Values, Errors);
+				if (!FNiagaraAdapter::GetModuleInputValues(ModuleAddress, Values, Errors))
+				{
+					Result.UnsupportedFeatures.AddUnique(FString::Printf(TEXT("inputs of module '%s' could not be read: %s"),
+						*Module.ModuleName.ToString(), *FString::Join(Errors, TEXT(" | "))));
+				}
 
 				// -DreamFXTraceInputs names every input the reader returned, before any gate
 				// touches it. The suppression trace below only sees values that were SET and then
@@ -1761,6 +1766,8 @@ namespace UE::DreamFX::Editor
 					bHasLiveVersion = FNiagaraAdapter::GetModuleScriptVersion(ModuleAddress, LiveVersion, Errors);
 					if (!bHasLiveVersion)
 					{
+						Result.UnsupportedFeatures.AddUnique(FString::Printf(TEXT("version of module '%s' could not be read"),
+							*Module.ModuleName.ToString()));
 						UE_LOG(LogDreamFX, Warning, TEXT("Could not read the script version of module '%s': %s"),
 							*Module.ModuleName.ToString(), *FString::Join(Errors, TEXT(" | ")));
 					}
@@ -2060,6 +2067,26 @@ namespace UE::DreamFX::Editor
 			Writer.Blank();
 		}
 
+		struct FInheritedEmitterExport
+		{
+			FString HeaderSuffix;
+			FString SettingsJson;
+			TStrongObjectPtr<UNiagaraSystem> ParentHost;
+			TArray<FParameterDefault> ParameterDefaults;
+			TSet<FName> IdenticalStacks;
+			bool bIdenticalRenderers = false;
+			bool bReady = false;
+		};
+
+		void NoteInheritanceLimit(FName EmitterName, const FString& Detail,
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
+		{
+			const FString Message = FString::Printf(TEXT("Emitter '%s' retains its native parent, but %s"),
+				*EmitterName.ToString(), *Detail);
+			Result.UnsupportedFeatures.AddUnique(Message);
+			Diagnostics.Warning(TEXT("DFX8014"), FSourceLocation(), Message);
+		}
+
 		/**
 		 * A whole `Emitter ... { ... }` block, header line included.
 		 *
@@ -2089,7 +2116,7 @@ namespace UE::DreamFX::Editor
 			FModuleLibrary& Modules, const FStackAddress& EmitterAddress, const FEmitterInfo& Info,
 			FDecompileResult& Result, FDiagnosticSink& Diagnostics, bool bSystemScope = false,
 			const TMap<FName, FStackAddress>* StackAddressOverrides = nullptr,
-			bool bLeaveOpen = false)
+			bool bLeaveOpen = false, const FInheritedEmitterExport* Inherited = nullptr)
 		{
 			TArray<FString> Errors;
 
@@ -2110,7 +2137,8 @@ namespace UE::DreamFX::Editor
 				const FString* Defaults = Modules.GetEmitterDefaults(DefaultsError);
 
 				TArray<FString> Lines;
-				WriteChangedSettings(Writer, Json, Defaults ? *Defaults : FString(),
+				WriteChangedSettings(Writer, Json, Inherited != nullptr ? Inherited->SettingsJson
+					: Defaults ? *Defaults : FString(),
 					EmitterSettingFields, Lines);
 				if (Lines.Num() > 0)
 				{
@@ -2138,6 +2166,15 @@ namespace UE::DreamFX::Editor
 				TArray<FString> Lines;
 				for (const FParameterDefault& Default : ParameterDefaults)
 				{
+					const FParameterDefault* ParentDefault = Inherited != nullptr && Inherited->bReady
+						? Inherited->ParameterDefaults.FindByPredicate([&](const FParameterDefault& Candidate)
+							{ return Candidate.Variable == Default.Variable; }) : nullptr;
+					if (ParentDefault != nullptr && ParentDefault->Mode == Default.Mode
+						&& ((Default.Mode == FParameterDefault::EMode::Value && ParentDefault->Value.Equals(Default.Value))
+							|| (Default.Mode == FParameterDefault::EMode::Binding && ParentDefault->Binding == Default.Binding)))
+					{
+						continue;
+					}
 					const FString Name = ToNameToken(Default.Variable.GetName().ToString());
 					const FString TypeName = FValueLowering::DescribeDeclaredType(Default.Variable.GetType());
 
@@ -2186,7 +2223,8 @@ namespace UE::DreamFX::Editor
 
 		for (const FScriptStackInfo& Stack : Info.Stacks)
 		{
-			if (Stack.Modules.Num() == 0)
+			if ((Inherited != nullptr && Inherited->IdenticalStacks.Contains(Stack.ScriptName))
+				|| (Stack.Modules.Num() == 0 && Inherited == nullptr))
 			{
 				continue;
 			}
@@ -2255,7 +2293,7 @@ namespace UE::DreamFX::Editor
 		// renderers to walk.
 		for (const FRendererInfo& Renderer : Info.Renderers)
 		{
-			if (bSystemScope)
+			if (bSystemScope || (Inherited != nullptr && Inherited->bIdenticalRenderers))
 			{
 				break;
 			}
@@ -2495,6 +2533,191 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	namespace
+	{
+		bool RendererGroupsMatch(const FStackAddress& CurrentAddress, const FEmitterInfo& Current,
+			const FStackAddress& ParentAddress, const FEmitterInfo& Parent, FModuleLibrary& Modules)
+		{
+			if (Current.Renderers.Num() != Parent.Renderers.Num()) { return false; }
+			for (int32 Index = 0; Index < Current.Renderers.Num(); ++Index)
+			{
+				const FRendererInfo& Renderer = Current.Renderers[Index];
+				if (Renderer.Class != Parent.Renderers[Index].Class) { return false; }
+				TArray<FString> Errors;
+				FString CurrentJson, ParentJson, DefaultsError;
+				const FString* Defaults = Modules.GetRendererDefaults(Renderer.Class, DefaultsError);
+				if (Defaults == nullptr
+					|| !FNiagaraAdapter::GetRendererProperties(CurrentAddress.WithRenderer(Renderer.Index), CurrentJson, Errors)
+					|| !FNiagaraAdapter::GetRendererProperties(ParentAddress.WithRenderer(Parent.Renderers[Index].Index), ParentJson, Errors))
+				{
+					return false;
+				}
+				TArray<FString> CurrentLines, ParentLines, Gaps;
+				WriteChangedRendererProperties(Renderer.Class, CurrentJson, *Defaults, CurrentLines, Gaps);
+				WriteChangedRendererProperties(Renderer.Class, ParentJson, *Defaults, ParentLines, Gaps);
+				if (!Gaps.IsEmpty() || CurrentLines != ParentLines) { return false; }
+				TArray<TPair<FString, FName>> CurrentBindings, ParentBindings;
+				if (!FNiagaraAdapter::GetRendererBindings(CurrentAddress.WithRenderer(Renderer.Index), CurrentBindings, Errors)
+					|| !FNiagaraAdapter::GetRendererBindings(ParentAddress.WithRenderer(Parent.Renderers[Index].Index), ParentBindings, Errors)
+					|| CurrentBindings != ParentBindings)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// Compare through a private host with the same emitter name, so aliases have the same
+		// spelling. No parent or child graph is changed by collecting the baseline.
+		void PrepareInheritedEmitterExport(const FStackAddress& Address, const FEmitterInfo& Info,
+			const FContext& Context, FModuleLibrary& Modules, FInheritedEmitterExport& Out,
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
+		{
+			TArray<FString> Errors;
+			FString ParentPath;
+			FGuid ParentVersion;
+			if (!FNiagaraAdapter::GetEmitterParent(Address, ParentPath, ParentVersion, Errors))
+			{
+				const FString Message = FString::Printf(TEXT("Emitter '%s': native parent association could not be read; exported snapshot may lose inheritance: %s"),
+					*Info.Name.ToString(), *FString::Join(Errors, TEXT(" | ")));
+				Result.UnsupportedFeatures.AddUnique(Message);
+				Diagnostics.Warning(TEXT("DFX8014"), FSourceLocation(), Message);
+				return;
+			}
+			if (ParentPath.IsEmpty())
+			{
+				return;
+			}
+			Out.HeaderSuffix = FString::Printf(TEXT(" inherits \"%s\""), *ParentPath);
+			if (ParentVersion.IsValid())
+			{
+				Out.HeaderSuffix += FString::Printf(TEXT(" version \"%s\""), *ParentVersion.ToString(EGuidFormats::DigitsWithHyphens));
+			}
+			else
+			{
+				NoteInheritanceLimit(Info.Name, TEXT("its parent version is unavailable; rebuilding selects the exposed version"), Result, Diagnostics);
+			}
+			for (const FNiagaraEmitterHandle& Handle : Context.System->GetEmitterHandles())
+			{
+				if (Handle.GetName() == Info.Name && Handle.GetEmitterData() != nullptr
+					&& !Handle.GetEmitterData()->IsSynchronizedWithParent())
+				{
+					NoteInheritanceLimit(Info.Name, TEXT("the child has unmerged parent changes; the exported snapshot can turn stale inherited values into explicit overrides. Merge the child in Niagara before adopting the source"), Result, Diagnostics);
+					break;
+				}
+			}
+			UNiagaraEmitter* Parent = LoadObject<UNiagaraEmitter>(nullptr, *ParentPath);
+			if (Parent == nullptr || !Parent->IsAsset() || !Parent->bIsInheritable)
+			{
+				NoteInheritanceLimit(Info.Name, TEXT("the parent is not an inheritable standalone emitter asset; this source cannot rebuild until the parent is repaired"), Result, Diagnostics);
+				return;
+			}
+			const FGuid ComparisonVersion = ParentVersion.IsValid() ? ParentVersion : Parent->GetExposedVersion().VersionGuid;
+			FVersionedNiagaraEmitter CurrentParent(Parent, ComparisonVersion);
+			TSet<UNiagaraEmitter*> Visited;
+			while (CurrentParent.Emitter != nullptr)
+			{
+				const FVersionedNiagaraEmitterData* Data = CurrentParent.GetEmitterData();
+				if (Data == nullptr || CurrentParent.Emitter->FindVersionData(CurrentParent.Version) == nullptr
+					|| Visited.Contains(CurrentParent.Emitter))
+				{
+					NoteInheritanceLimit(Info.Name, TEXT("the parent chain has an unavailable version or a cycle; this source cannot rebuild until the parent is repaired"), Result, Diagnostics);
+					return;
+				}
+				if (!Data->IsSynchronizedWithParent())
+				{
+					NoteInheritanceLimit(Info.Name, TEXT("the parent has unmerged ancestor changes; merge and save the parent in Niagara before rebuilding this source"), Result, Diagnostics);
+					return;
+				}
+				Visited.Add(CurrentParent.Emitter);
+				CurrentParent = Data->GetParent();
+			}
+			bool bCreated = false;
+			UNiagaraSystem* Host = FNiagaraAdapter::AcquireSystem(
+				TEXT("/Temp/DreamFX"), TEXT("InheritedEmitterExport_") + FGuid::NewGuid().ToString(EGuidFormats::Digits), bCreated, Errors);
+			if (Host == nullptr)
+			{
+				NoteInheritanceLimit(Info.Name, TEXT("the parent baseline could not be read; emitted blocks are complete overrides"), Result, Diagnostics);
+				return;
+			}
+			Out.ParentHost = TStrongObjectPtr<UNiagaraSystem>(Host);
+			Host->AddEmitterHandle(*Parent, Info.Name, ComparisonVersion);
+			const FStackAddress ParentAddress = FStackAddress(Host).WithEmitter(Info.Name);
+			FNiagaraAdapter::FReadScope ParentScope(Host);
+			FEmitterInfo ParentInfo;
+			if (!FNiagaraAdapter::GetEmitterInfo(ParentAddress, ParentInfo, Errors)
+				|| !FNiagaraAdapter::GetEmitterProperties(ParentAddress, Out.SettingsJson, Errors))
+			{
+				NoteInheritanceLimit(Info.Name, TEXT("the parent baseline could not be read; emitted blocks are complete overrides"), Result, Diagnostics);
+				return;
+			}
+			Out.bReady = true;
+			FNiagaraAdapter::GetParameterDefaults(ParentAddress, Out.ParameterDefaults, Errors);
+			TArray<FParameterDefault> CurrentDefaults;
+			FNiagaraAdapter::GetParameterDefaults(Address, CurrentDefaults, Errors);
+			for (const FParameterDefault& Default : Out.ParameterDefaults)
+			{
+				if (!CurrentDefaults.ContainsByPredicate([&](const FParameterDefault& Candidate) { return Candidate.Variable == Default.Variable; }))
+				{
+					NoteInheritanceLimit(Info.Name, FString::Printf(TEXT("removing inherited default '%s' has no source spelling; the parent's default remains"),
+						*Default.Variable.GetName().ToString()), Result, Diagnostics);
+				}
+			}
+			for (const FScriptStackInfo& Stack : Info.Stacks)
+			{
+				EStackKind Kind;
+				if (!FNiagaraAdapter::StackForScriptName(Stack.ScriptName, Kind) || Kind == EStackKind::EventHandler) { continue; }
+				const FScriptStackInfo* ParentStack = ParentInfo.FindStack(Stack.ScriptName);
+				if (ParentStack == nullptr) { continue; }
+				FWriter CurrentWriter, ParentWriter;
+				FDecompileResult CurrentResult, ParentResult;
+				FContext CurrentContext = Context;
+				CurrentContext.ExtractedScriptFolder.Reset();
+				CurrentContext.Unsupported = &CurrentResult.UnsupportedFeatures;
+				FContext ParentContext = CurrentContext;
+				ParentContext.System = Host;
+				ParentContext.Unsupported = &ParentResult.UnsupportedFeatures;
+				WriteStackModules(CurrentWriter, CurrentContext, Modules, Address, Stack, Kind, CurrentResult);
+				WriteStackModules(ParentWriter, ParentContext, Modules, ParentAddress, *ParentStack, Kind, ParentResult);
+				if (CurrentResult.UnsupportedFeatures.IsEmpty() && ParentResult.UnsupportedFeatures.IsEmpty()
+					&& CurrentWriter.Get() == ParentWriter.Get())
+				{
+					Out.IdenticalStacks.Add(Stack.ScriptName);
+				}
+				else
+				{
+					NoteInheritanceLimit(Info.Name, FString::Printf(TEXT("%s is exported as a whole-stack override; future parent changes inside that stack will not propagate when rebuilding"),
+						LexStackKind(Kind)), Result, Diagnostics);
+				}
+			}
+			Out.bIdenticalRenderers = RendererGroupsMatch(Address, Info, ParentAddress, ParentInfo, Modules);
+			if (!Out.bIdenticalRenderers)
+			{
+				NoteInheritanceLimit(Info.Name, Info.Renderers.IsEmpty()
+					? TEXT("removing all inherited renderers has no source spelling; the parent's renderers remain")
+					: TEXT("renderers are exported as a complete group override; future parent renderer changes will not propagate when rebuilding"), Result, Diagnostics);
+			}
+			TArray<FNiagaraAdapter::FEventHandlerSummary> CurrentEvents, ParentEvents;
+			FNiagaraAdapter::GetEmitterEventHandlers(Address, CurrentEvents, Errors);
+			FNiagaraAdapter::GetEmitterEventHandlers(ParentAddress, ParentEvents, Errors);
+			if (!CurrentEvents.IsEmpty() || !ParentEvents.IsEmpty())
+			{
+				NoteInheritanceLimit(Info.Name, CurrentEvents.IsEmpty()
+					? TEXT("removing inherited event handlers has no source spelling; the parent's handlers remain")
+					: TEXT("event handlers are exported as snapshots; later parent handler changes may be overridden"), Result, Diagnostics);
+			}
+			TArray<FNiagaraAdapter::FSimulationStageSummary> CurrentStages, ParentStages;
+			FNiagaraAdapter::GetEmitterSimulationStages(Address, CurrentStages, Errors);
+			FNiagaraAdapter::GetEmitterSimulationStages(ParentAddress, ParentStages, Errors);
+			if (!CurrentStages.IsEmpty() || !ParentStages.IsEmpty())
+			{
+				NoteInheritanceLimit(Info.Name, CurrentStages.IsEmpty()
+					? TEXT("removing all inherited stages has no source spelling; the parent's stages remain")
+					: TEXT("stages are exported as a complete group snapshot; future parent stage changes will not propagate when rebuilding"), Result, Diagnostics);
+			}
+		}
+	}
+
 	FDecompileResult FDecompiler::Decompile(UNiagaraSystem* System, const FString& RootToken,
 		FDiagnosticSink& Diagnostics, const FDecompileOptions& Options)
 	{
@@ -2721,7 +2944,6 @@ namespace UE::DreamFX::Editor
 				continue;
 			}
 
-			NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
 			NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics, /*bSingleIsRepresented=*/true);
 			NoteSimulationStages(EmitterAddress, EmitterName, Result, Diagnostics);
 
@@ -2825,9 +3047,12 @@ namespace UE::DreamFX::Editor
 					*EmitterName.ToString()));
 			}
 
-			WriteEmitterBlock(Writer, FString::Printf(TEXT("Emitter %s"), *ToNameToken(EmitterName.ToString())),
+			FInheritedEmitterExport Inherited;
+			PrepareInheritedEmitterExport(EmitterAddress, Info, Context, Modules, Inherited, Result, Diagnostics);
+			WriteEmitterBlock(Writer, FString::Printf(TEXT("Emitter %s"), *ToNameToken(EmitterName.ToString())) + Inherited.HeaderSuffix,
 				Context, Modules, EmitterAddress, Info, Result, Diagnostics, /*bSystemScope=*/false,
-				StackOverrides.Num() > 0 ? &StackOverrides : nullptr, /*bLeaveOpen=*/bStagesToWrite);
+				StackOverrides.Num() > 0 ? &StackOverrides : nullptr, /*bLeaveOpen=*/bStagesToWrite,
+				Inherited.HeaderSuffix.IsEmpty() ? nullptr : &Inherited);
 			if (bStagesToWrite)
 			{
 				// Focusing a stage mutates the host's usage ids; the shared read context must not

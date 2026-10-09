@@ -1,6 +1,7 @@
 #include "DreamFXEmitterMerge.h"
 
 #include "DreamFXValueLowering.h"
+#include "Misc/ScopeExit.h"
 
 namespace UE::DreamFX::Editor
 {
@@ -10,6 +11,24 @@ namespace UE::DreamFX::Editor
 		OutMerged = Base;
 		OutMerged.Name = Override.Name;
 		OutMerged.Location = Override.Location;
+		if (!Override.FromPath.IsEmpty())
+		{
+			OutMerged.FromPath = Override.FromPath;
+			OutMerged.FromLocation = Override.FromLocation;
+			OutMerged.FromSourceFile = Override.FromSourceFile;
+			OutMerged.NativeParentPath.Reset();
+			OutMerged.NativeParentVersion.Reset();
+			OutMerged.NativeParentLocation = FSourceLocation();
+		}
+		else if (!Override.NativeParentPath.IsEmpty())
+		{
+			OutMerged.NativeParentPath = Override.NativeParentPath;
+			OutMerged.NativeParentVersion = Override.NativeParentVersion;
+			OutMerged.NativeParentLocation = Override.NativeParentLocation;
+			OutMerged.FromPath.Reset();
+			OutMerged.FromSourceFile.Reset();
+			OutMerged.FromLocation = FSourceLocation();
+		}
 
 		for (const FPropertyEntry& Setting : Override.Settings)
 		{
@@ -54,7 +73,12 @@ namespace UE::DreamFX::Editor
 					return FValueLowering::ResolveDeclaredType(Declaration, Diagnostics, Type, bDataInterface);
 				};
 				FNiagaraTypeDefinition BaseType, OverrideType;
-				if (!ResolveType(*Existing, BaseType) || !ResolveType(Default, OverrideType)) { return false; }
+				const FString PreviousFile = Diagnostics.GetFile();
+				ON_SCOPE_EXIT { Diagnostics.SetFile(PreviousFile); };
+				if (!Existing->SourceFile.IsEmpty()) { Diagnostics.SetFile(Existing->SourceFile); }
+				if (!ResolveType(*Existing, BaseType)) { return false; }
+				Diagnostics.SetFile(Default.SourceFile.IsEmpty() ? PreviousFile : Default.SourceFile);
+				if (!ResolveType(Default, OverrideType)) { return false; }
 				if (BaseType != OverrideType)
 				{
 					Diagnostics.Error(TEXT("DFX3048"), Default.Location,

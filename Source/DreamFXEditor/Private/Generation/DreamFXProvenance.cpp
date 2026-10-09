@@ -38,7 +38,8 @@ namespace UE::DreamFX::Editor
 		// has no versions recorded, and treating "absent" as "unchanged" would make the check useless
 		// on exactly the assets that predate it.
 		// 1.2 -- dependency-aware source stamps and corrected generation/round-trip semantics.
-		return TEXT("1.2");
+		// 1.3 -- native emitter/source system inheritance and verified VM completion.
+		return TEXT("1.3");
 	}
 
 	FString FProvenance::HashWithSourceDependencies(const FString& SourceHash, const TMap<FString, FString>& Dependencies)

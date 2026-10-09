@@ -8,13 +8,26 @@ namespace UE::DreamFX::Editor
 {
 	void FSourceDependencyIndex::Refresh(const TArray<FString>& SourceFiles)
 	{
-		DependenciesBySource.Reset();
-		for (const FString& SourceFile : SourceFiles)
+		Reset();
+		TArray<FString> Pending;
+		for (const FString& File : SourceFiles)
 		{
-			if (!FPaths::GetExtension(SourceFile).Equals(TEXT("dfs"), ESearchCase::IgnoreCase))
+			if (FPaths::GetExtension(File).Equals(TEXT("dfs"), ESearchCase::IgnoreCase))
+			{
+				const FString FullPath = FPaths::ConvertRelativePathToFull(File);
+				TrackedSources.Add(FullPath);
+				Pending.AddUnique(FullPath);
+			}
+		}
+		TArray<FString> Visited;
+		while (!Pending.IsEmpty())
+		{
+			const FString SourceFile = Pending.Pop();
+			if (Visited.ContainsByPredicate([&SourceFile](const FString& File) { return FPaths::IsSamePath(File, SourceFile); }))
 			{
 				continue;
 			}
+			Visited.Add(SourceFile);
 			FDocument Document;
 			FDiagnosticSink Diagnostics;
 			if (!FParser::ParseFile(SourceFile, Document, Diagnostics))
@@ -22,6 +35,15 @@ namespace UE::DreamFX::Editor
 				continue; // The build of this source reports its parse error.
 			}
 			TArray<FString>& Dependencies = DependenciesBySource.FindOrAdd(SourceFile);
+			if (!Document.ParentPath.IsEmpty())
+			{
+				FString ParentFile, Error;
+				if (FDreamFXPaths::ResolveSourceReference(Document.ParentPath, SourceFile, TEXT(".dfs"), ParentFile, Error))
+				{
+					Dependencies.AddUnique(ParentFile);
+					Pending.Add(ParentFile);
+				}
+			}
 			for (const FEmitter& Emitter : Document.Emitters)
 			{
 				FString ReferencedFile, Error;
@@ -36,17 +58,35 @@ namespace UE::DreamFX::Editor
 
 	void FSourceDependencyIndex::FindDependents(const TArray<FString>& ChangedFiles, TSet<FString>& OutSources) const
 	{
-		for (const TPair<FString, TArray<FString>>& Source : DependenciesBySource)
+		// Reach a fixed point so a .dfe edit also reaches grandchildren through a .dfs parent.
+		// Keep this separate from source parsing: the old graph still works after a file is deleted.
+		TArray<FString> Invalidated = ChangedFiles;
+		bool bAdded;
+		do
 		{
-			for (const FString& Dependency : Source.Value)
+			bAdded = false;
+			for (const TPair<FString, TArray<FString>>& Source : DependenciesBySource)
 			{
-				if (ChangedFiles.ContainsByPredicate([&Dependency](const FString& Changed)
-					{ return FPaths::IsSamePath(Dependency, Changed); }))
+				if (Invalidated.ContainsByPredicate([&Source](const FString& File) { return FPaths::IsSamePath(File, Source.Key); }))
 				{
-					OutSources.Add(Source.Key);
-					break;
+					continue;
+				}
+				for (const FString& Dependency : Source.Value)
+				{
+					if (Invalidated.ContainsByPredicate([&Dependency](const FString& Changed)
+						{ return FPaths::IsSamePath(Dependency, Changed); }))
+					{
+						Invalidated.Add(Source.Key);
+						for (const FString& Tracked : TrackedSources)
+						{
+							if (FPaths::IsSamePath(Tracked, Source.Key)) { OutSources.Add(Tracked); break; }
+						}
+						bAdded = true;
+						break;
+					}
 				}
 			}
 		}
+		while (bAdded);
 	}
 }
