@@ -155,8 +155,9 @@ bool FDreamFXSystemSettingsFactsRegression::RunTest(const FString& Parameters)
 	using namespace UE::DreamFX::Editor;
 	using namespace UE::DreamFX::Editor::RoundTripRegression;
 	using namespace UE::DreamFX::Editor::ReviewFollowupRegression;
-	// Bounds remain authored configuration when the system is using dynamic bounds.
-	UNiagaraSystem* Original = Build(*this, TEXT("System(Name=\"Unused\",Root=\"Game\") { Settings={FixedBounds=box(-50,-60,-70,50,60,70);} Emitter E {} }"));
+	// Bounds remain authored configuration when the system is using dynamic bounds. A declared box
+	// implies the override, so a box that is meant to stay inert says so with UseFixedBounds = false.
+	UNiagaraSystem* Original = Build(*this, TEXT("System(Name=\"Unused\",Root=\"Game\") { Settings={FixedBounds=box(-50,-60,-70,50,60,70); UseFixedBounds=false;} Emitter E {} }"));
 	if (!TestNotNull(TEXT("original"), Original)) { return false; }
 	FGCObjectScopeGuard OriginalGuard(Original);
 	const FBoolProperty* FixedBoundsEnabled = FindFProperty<FBoolProperty>(Original->GetClass(), TEXT("bFixedBounds"));
@@ -166,6 +167,7 @@ bool FDreamFXSystemSettingsFactsRegression::RunTest(const FString& Parameters)
 	TestTrue(TEXT("facts include authored system configuration"), Baseline.Num() > 0);
 	const FDecompileResult Exported = Export(*this, Original);
 	TestTrue(TEXT("disabled authored bounds are present in the export"), Exported.Source.Contains(TEXT("FixedBounds = box(")));
+	TestTrue(TEXT("the export keeps them disabled explicitly"), Exported.Source.Contains(TEXT("UseFixedBounds = false;")));
 	UNiagaraSystem* Mirror = Build(*this, Exported.Source);
 	if (!TestNotNull(TEXT("mirror"), Mirror)) { return false; }
 	FGCObjectScopeGuard MirrorGuard(Mirror);
