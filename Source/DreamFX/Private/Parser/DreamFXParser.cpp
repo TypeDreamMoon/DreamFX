@@ -936,7 +936,6 @@ namespace UE::DreamFX
 			// and one always is when it has no short name to resolve by. Without the second case the
 			// prefix was not consumed at all and `disabled /Game/FX/X()` parsed as a single module
 			// named `disabled/Game/FX/X`, which then failed to resolve (plan-v5 R3).
-			const FSourceLocation DisabledLocation = Token.Location;
 			if (Token.IsIdentifier(TEXT("disabled"))
 				&& (Lexer.Peek(1).Kind == ETokenKind::Identifier || Lexer.Peek(1).IsSymbol(TEXT("/"))))
 			{
@@ -1039,17 +1038,6 @@ namespace UE::DreamFX
 			{
 				Diagnostics.Error(TEXT("DFX2023"), Statement.Location,
 					FString::Printf(TEXT("'%s' is a module call, so it cannot be given a type. Types are written only on assignments."),
-						*Statement.Name));
-				return false;
-			}
-
-			if (Statement.bDisabled && Statement.Kind != EStatementKind::ModuleCall)
-			{
-				// An assignment has nothing to disable -- it is written into the stack's own Set
-				// Parameters module, and turning that off would silently drop every other assignment
-				// beside it.
-				Diagnostics.Error(TEXT("DFX2024"), DisabledLocation,
-					FString::Printf(TEXT("'disabled' can only prefix a module call, and '%s' is an assignment."),
 						*Statement.Name));
 				return false;
 			}
@@ -1213,6 +1201,12 @@ namespace UE::DreamFX
 					{
 						for (FStatement& Statement : DefaultsBlock.Statements)
 						{
+							if (Statement.bDisabled)
+							{
+								Diagnostics.Error(TEXT("DFX2024"), Statement.Location,
+									TEXT("A Defaults declaration cannot be disabled; defaults are not executed stack nodes."));
+								continue;
+							}
 							if (Statement.Kind != EStatementKind::Assignment)
 							{
 								Diagnostics.Error(TEXT("DFX2016"), Statement.Location,
@@ -1492,7 +1486,7 @@ namespace UE::DreamFX
 					return false;
 				}
 
-				const FToken& ValueToken = Lexer.Peek();
+				const FToken ValueToken = Lexer.Peek();
 
 				// A dotted parameter name: "Emitter.PressureGrid" as one string, or as the same
 				// identifier-dot-identifier sequence an assignment's left side would be. Peeked
@@ -1524,6 +1518,39 @@ namespace UE::DreamFX
 				};
 
 				bool bOk = true;
+				auto ReadInteger = [this](int32& Out)
+				{
+					const bool bNegative = Lexer.TryConsumeSymbol(TEXT("-"));
+					if (Lexer.Peek().Kind != ETokenKind::Number)
+					{
+						return false;
+					}
+					const double Number = Lexer.Next().Number * (bNegative ? -1.0 : 1.0);
+					if (!FMath::IsFinite(Number) || Number < MIN_int32 || Number > MAX_int32
+						|| FMath::FloorToDouble(Number) != Number)
+					{
+						return false;
+					}
+					Out = static_cast<int32>(Number);
+					return true;
+				};
+				auto ReadBool = [this](TOptional<bool>& Out)
+				{
+					if (!Lexer.Peek().IsIdentifier(TEXT("true")) && !Lexer.Peek().IsIdentifier(TEXT("false")))
+					{
+						return false;
+					}
+					Out = Lexer.Next().Text == TEXT("true");
+					return true;
+				};
+				FSimulationStageExecutionSettings& Execution = OutSpec.Execution;
+				FStageIntegerBinding* IntegerBinding = nullptr;
+				if (Key == TEXT("ElementCountX")) { IntegerBinding = &Execution.ElementCountX; }
+				else if (Key == TEXT("ElementCountY")) { IntegerBinding = &Execution.ElementCountY; }
+				else if (Key == TEXT("ElementCountZ")) { IntegerBinding = &Execution.ElementCountZ; }
+				else if (Key == TEXT("OverrideGpuDispatchNumThreadsX")) { IntegerBinding = &Execution.OverrideGpuDispatchNumThreadsX; }
+				else if (Key == TEXT("OverrideGpuDispatchNumThreadsY")) { IntegerBinding = &Execution.OverrideGpuDispatchNumThreadsY; }
+				else if (Key == TEXT("OverrideGpuDispatchNumThreadsZ")) { IntegerBinding = &Execution.OverrideGpuDispatchNumThreadsZ; }
 				if (Key == TEXT("Iteration"))
 				{
 					bOk = ExpectIdentifier(OutSpec.Iteration);
@@ -1563,10 +1590,63 @@ namespace UE::DreamFX
 						bOk = ReadDottedName(OutSpec.EnabledBinding);
 					}
 				}
+				else if (IntegerBinding != nullptr)
+				{
+					if (ValueToken.Kind == ETokenKind::Number || ValueToken.IsSymbol(TEXT("-")))
+					{
+						int32 Number = 0;
+						bOk = ReadInteger(Number) && Number >= 0;
+						if (bOk) { IntegerBinding->Value = Number; }
+					}
+					else
+					{
+						bOk = ReadDottedName(IntegerBinding->Binding);
+					}
+				}
+				else if (Key == TEXT("DisablePartialParticleUpdate"))
+				{
+					bOk = ReadBool(Execution.DisablePartialParticleUpdate);
+				}
+				else if (Key == TEXT("ParticleIterationStateEnabled"))
+				{
+					bOk = ReadBool(Execution.ParticleIterationStateEnabled);
+				}
+				else if (Key == TEXT("ParticleIterationStateBinding"))
+				{
+					bOk = ReadDottedName(Execution.ParticleIterationStateBinding);
+				}
+				else if (Key == TEXT("ParticleIterationStateRange"))
+				{
+					FIntPoint Range;
+					bOk = Expect(TEXT("(")) && ReadInteger(Range.X) && Expect(TEXT(","))
+						&& ReadInteger(Range.Y) && Expect(TEXT(")"));
+					if (bOk) { Execution.ParticleIterationStateRange = Range; }
+				}
+				else if (Key == TEXT("GpuDispatchForceLinear"))
+				{
+					bOk = ReadBool(Execution.GpuDispatchForceLinear);
+				}
+				else if (Key == TEXT("OverrideGpuDispatchNumThreads"))
+				{
+					bOk = ReadBool(Execution.OverrideGpuDispatchNumThreads);
+				}
+				else if (Key == TEXT("DirectDispatchType"))
+				{
+					bOk = ExpectIdentifier(Execution.DirectDispatchType)
+						&& (Execution.DirectDispatchType == TEXT("OneD") || Execution.DirectDispatchType == TEXT("TwoD")
+							|| Execution.DirectDispatchType == TEXT("ThreeD") || Execution.DirectDispatchType == TEXT("Custom"));
+				}
+				else if (Key == TEXT("DirectDispatchElementType"))
+				{
+					bOk = ExpectIdentifier(Execution.DirectDispatchElementType)
+						&& (Execution.DirectDispatchElementType == TEXT("NumThreads")
+							|| Execution.DirectDispatchElementType == TEXT("NumThreadsNoClipping")
+							|| Execution.DirectDispatchElementType == TEXT("NumGroups"));
+				}
 				else
 				{
 					Diagnostics.Error(TEXT("DFX2026"), KeyLocation,
-						FString::Printf(TEXT("Unknown Stage argument '%s'. Expected Iteration, DataInterface, NumIterations, ExecuteBehavior or Enabled."),
+						FString::Printf(TEXT("Unknown Stage argument '%s'. Expected a stage iteration, enabled, dispatch or particle-state option; see the Stage language reference."),
 							*Key));
 					return false;
 				}
@@ -1574,7 +1654,7 @@ namespace UE::DreamFX
 				if (!bOk)
 				{
 					Diagnostics.Error(TEXT("DFX2026"), ValueToken.Location,
-						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: Iteration and ExecuteBehavior are identifiers, DataInterface is a dotted parameter name, NumIterations is an integer or a parameter name and Enabled is true/false or a parameter name."),
+						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: counts take non-negative int32 values or parameter names, flags take true/false, ranges take two integers, and enum options take a supported entry name."),
 							*Key));
 					return false;
 				}

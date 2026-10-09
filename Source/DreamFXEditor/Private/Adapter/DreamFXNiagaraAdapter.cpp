@@ -1196,6 +1196,22 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
+		// Unsaved builds and previews also own their asset identity. A second build must edit
+		// that object instead of constructing another UObject with the same package/name.
+		// /Temp callers own probe lifetimes and may intentionally recreate their fixed names.
+		if (UPackage* Package = !PackageName.StartsWith(TEXT("/Temp/")) ? FindPackage(nullptr, *PackageName) : nullptr)
+		{
+			if (UNiagaraSystem* Existing = FindObject<UNiagaraSystem>(Package, *AssetName))
+			{
+				return Existing;
+			}
+			if (FindObject<UObject>(Package, *AssetName) != nullptr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("'%s' already names a non-system object in memory."), *PackageName));
+				return nullptr;
+			}
+		}
+
 		FNiagaraExternalEditContext Context;
 		UNiagaraSystem* System = UNiagaraExternalEditUtilities::CreateNiagaraSystem(AssetName, PackagePath, nullptr, Context);
 		Drain(Context, OutErrors);
@@ -3679,6 +3695,42 @@ namespace UE::DreamFX::Editor
 			{
 				Summary.NumIterationsText = TEXT("<bound>");
 			}
+
+			FSimulationStageExecutionSettings& Execution = Summary.Execution;
+			Execution.DisablePartialParticleUpdate = Generic->bDisablePartialParticleUpdate != 0;
+			Execution.ParticleIterationStateEnabled = Generic->bParticleIterationStateEnabled != 0;
+			Execution.ParticleIterationStateBinding = ReadProtectedName(
+				&Generic->ParticleIterationStateBinding, FNiagaraVariableAttributeBinding::StaticStruct(), TEXT("RootName"));
+			Execution.ParticleIterationStateRange = Generic->ParticleIterationStateRange;
+			Execution.GpuDispatchForceLinear = Generic->bGpuDispatchForceLinear != 0;
+			Execution.OverrideGpuDispatchNumThreads = Generic->bOverrideGpuDispatchNumThreads != 0;
+			if (const UEnum* Dispatch = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraShader.ENiagaraGpuDispatchType")))
+			{
+				Execution.DirectDispatchType = Dispatch->GetNameStringByValue(static_cast<int64>(Generic->DirectDispatchType));
+			}
+			if (const UEnum* Elements = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraShader.ENiagaraDirectDispatchElementType")))
+			{
+				Execution.DirectDispatchElementType = Elements->GetNameStringByValue(static_cast<int64>(Generic->DirectDispatchElementType));
+			}
+			auto ReadIntegerBinding = [](const FNiagaraParameterBindingWithValue& Binding, FStageIntegerBinding& Out)
+			{
+				Out = FStageIntegerBinding();
+				if (Binding.HasDefaultValueEditorOnly() && Binding.GetDefaultValueEditorOnly().Num() == sizeof(int32))
+				{
+					int32 Value;
+					FMemory::Memcpy(&Value, Binding.GetDefaultValueEditorOnly().GetData(), sizeof(Value));
+					Out.Value = Value;
+				}
+				const FName Name = !Binding.AliasedParameter.GetName().IsNone()
+					? Binding.AliasedParameter.GetName() : Binding.ResolvedParameter.GetName();
+				Out.Binding = Name.IsNone() ? FString() : Name.ToString();
+			};
+			ReadIntegerBinding(Generic->ElementCountX, Execution.ElementCountX);
+			ReadIntegerBinding(Generic->ElementCountY, Execution.ElementCountY);
+			ReadIntegerBinding(Generic->ElementCountZ, Execution.ElementCountZ);
+			ReadIntegerBinding(Generic->OverrideGpuDispatchNumThreadsX, Execution.OverrideGpuDispatchNumThreadsX);
+			ReadIntegerBinding(Generic->OverrideGpuDispatchNumThreadsY, Execution.OverrideGpuDispatchNumThreadsY);
+			ReadIntegerBinding(Generic->OverrideGpuDispatchNumThreadsZ, Execution.OverrideGpuDispatchNumThreadsZ);
 		}
 	}
 
@@ -4373,6 +4425,26 @@ namespace UE::DreamFX::Editor
 		// The configuration lands here, after the stack: the data interface binding names a graph
 		// parameter the stack writes are what create, so resolving its type any earlier reads a
 		// graph that does not hold it yet.
+		// Reused stages start from the same authored defaults as new stages. Otherwise removing
+		// a binding or dispatch option from source leaves its previous value on the asset.
+		UNiagaraSimulationStageGeneric* Fresh = NewObject<UNiagaraSimulationStageGeneric>(GetTransientPackage());
+		static const FName AuthoredProperties[] = {
+			TEXT("bEnabled"), TEXT("EnabledBinding"), TEXT("IterationSource"), TEXT("NumIterations"),
+			TEXT("ExecuteBehavior"), TEXT("DataInterface"), TEXT("bDisablePartialParticleUpdate"),
+			TEXT("bParticleIterationStateEnabled"), TEXT("ParticleIterationStateBinding"), TEXT("ParticleIterationStateRange"),
+			TEXT("bGpuDispatchForceLinear"), TEXT("bOverrideGpuDispatchNumThreads"),
+			TEXT("OverrideGpuDispatchNumThreadsX"), TEXT("OverrideGpuDispatchNumThreadsY"), TEXT("OverrideGpuDispatchNumThreadsZ"),
+			TEXT("DirectDispatchType"), TEXT("DirectDispatchElementType"),
+			TEXT("ElementCountX"), TEXT("ElementCountY"), TEXT("ElementCountZ")
+		};
+		Stage->Modify();
+		for (FName PropertyName : AuthoredProperties)
+		{
+			if (const FProperty* Property = FindFProperty<FProperty>(Stage->GetClass(), PropertyName))
+			{
+				Property->CopyCompleteValue_InContainer(Stage, Fresh);
+			}
+		}
 		if (Spec.Enabled.IsSet())
 		{
 			Stage->bEnabled = Spec.Enabled.GetValue() ? 1 : 0;
@@ -4485,6 +4557,93 @@ namespace UE::DreamFX::Editor
 			Stage->EnabledBinding.SetValue(FName(*Spec.EnabledBinding), Instance.ToBase(),
 				ENiagaraRendererSourceDataMode::Emitter);
 #endif
+		}
+
+		const FSimulationStageExecutionSettings& Execution = Spec.Execution;
+		if (Execution.DisablePartialParticleUpdate.IsSet())
+		{
+			Stage->bDisablePartialParticleUpdate = Execution.DisablePartialParticleUpdate.GetValue();
+		}
+		if (Execution.ParticleIterationStateEnabled.IsSet())
+		{
+			Stage->bParticleIterationStateEnabled = Execution.ParticleIterationStateEnabled.GetValue();
+		}
+		if (Execution.ParticleIterationStateRange.IsSet())
+		{
+			Stage->ParticleIterationStateRange = Execution.ParticleIterationStateRange.GetValue();
+		}
+		if (!Execution.ParticleIterationStateBinding.IsEmpty())
+		{
+#if UE_VERSION_OLDER_THAN(5, 8, 0)
+			Stage->ParticleIterationStateBinding.SetValue(FName(*Execution.ParticleIterationStateBinding), Instance,
+				ENiagaraRendererSourceDataMode::Particles);
+#else
+			Stage->ParticleIterationStateBinding.SetValue(FName(*Execution.ParticleIterationStateBinding), Instance.ToBase(),
+				ENiagaraRendererSourceDataMode::Particles);
+#endif
+		}
+		if (Execution.GpuDispatchForceLinear.IsSet())
+		{
+			Stage->bGpuDispatchForceLinear = Execution.GpuDispatchForceLinear.GetValue();
+		}
+		if (Execution.OverrideGpuDispatchNumThreads.IsSet())
+		{
+			Stage->bOverrideGpuDispatchNumThreads = Execution.OverrideGpuDispatchNumThreads.GetValue();
+		}
+		auto SetEnum = [&OutErrors](const TCHAR* EnumPath, const FString& Name, auto& Target)
+		{
+			if (Name.IsEmpty()) { return true; }
+			const UEnum* Enum = FindObject<UEnum>(nullptr, EnumPath);
+			const int64 Value = Enum != nullptr ? Enum->GetValueByNameString(Name) : INDEX_NONE;
+			if (Value == INDEX_NONE)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Unknown stage enum entry '%s' for %s."), *Name, EnumPath));
+				return false;
+			}
+			using TEnum = typename TRemoveReference<decltype(Target)>::Type;
+			Target = static_cast<TEnum>(Value);
+			return true;
+		};
+		if (!SetEnum(TEXT("/Script/NiagaraShader.ENiagaraGpuDispatchType"), Execution.DirectDispatchType, Stage->DirectDispatchType)
+			|| !SetEnum(TEXT("/Script/NiagaraShader.ENiagaraDirectDispatchElementType"), Execution.DirectDispatchElementType, Stage->DirectDispatchElementType))
+		{
+			return false;
+		}
+		auto SetIntegerBinding = [&Instance, &OutErrors](const FStageIntegerBinding& Source, FNiagaraParameterBindingWithValue& Target)
+		{
+			if (Source.Value.IsSet())
+			{
+				const int32 Value = Source.Value.GetValue();
+				if (!Target.HasDefaultValueEditorOnly() || Target.GetDefaultValueEditorOnly().Num() != sizeof(int32))
+				{
+					OutErrors.Add(TEXT("Stage dispatch count is not backed by an int32 value."));
+					return false;
+				}
+				Target.SetDefaultValueEditorOnly(MakeArrayView(reinterpret_cast<const uint8*>(&Value), sizeof(Value)));
+			}
+			if (!Source.Binding.IsEmpty())
+			{
+				FString Resolved = Source.Binding;
+				if (Resolved.StartsWith(TEXT("Emitter.")))
+				{
+					Resolved = Instance.Emitter->GetUniqueEmitterName() + Resolved.RightChop(FCString::Strlen(TEXT("Emitter")));
+				}
+				// Thread-group sizes require static int bindings; element counts use ordinary int.
+				// Preserve the type supplied by this field's fresh stage default above.
+				const FNiagaraTypeDefinition Type = Target.GetDefaultAliasedParameter().GetType();
+				Target.AliasedParameter = FNiagaraVariableBase(Type, FName(*Source.Binding));
+				Target.ResolvedParameter = FNiagaraVariableBase(Type, FName(*Resolved));
+			}
+			return true;
+		};
+		if (!SetIntegerBinding(Execution.ElementCountX, Stage->ElementCountX)
+			|| !SetIntegerBinding(Execution.ElementCountY, Stage->ElementCountY)
+			|| !SetIntegerBinding(Execution.ElementCountZ, Stage->ElementCountZ)
+			|| !SetIntegerBinding(Execution.OverrideGpuDispatchNumThreadsX, Stage->OverrideGpuDispatchNumThreadsX)
+			|| !SetIntegerBinding(Execution.OverrideGpuDispatchNumThreadsY, Stage->OverrideGpuDispatchNumThreadsY)
+			|| !SetIntegerBinding(Execution.OverrideGpuDispatchNumThreadsZ, Stage->OverrideGpuDispatchNumThreadsZ))
+		{
+			return false;
 		}
 
 		// The end of the time slice: the stage moves to the engine's own id convention (its merge

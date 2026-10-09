@@ -4,6 +4,12 @@
 
 ### 修复
 
+- `.dfe` 内容参与宿主增量构建和 verify；监视器会重建引用它的宿主。`from` 按 Stage 名称合并，并按参数名合并 `Defaults`，类型冲突会报错。
+- `.dfm` 分量写入会保留未写分量并接入 Parameter Map Set；DynamicInput 的 Usage 数组通过 lint。移除系统或 emitter Settings 后，重建恢复引擎默认值。
+- 反编译保留禁用赋值、材质用户参数绑定和完整的 generic Stage 调度与粒子状态过滤设置；5.6 / 5.7 兼容后端保留 emitter 启用状态。
+- Bridge 全量 verify 同步执行只读验证；编辑器构建统一关闭并重开目标模块编辑器，取消关闭时中止。监视器发现新 DFX 根目录，生成资产警告等待编辑器初始化后注册。
+- `-CleanNew` 仅清理本次新建资产，扫描或 Git 检查失败时保留资产；驱动只读取本次独立日志。SimCache 采集失败或零帧不再误报等价。
+- CI 检查诊断文档、驱动回归和全部 DreamFX automation suites；新增生成、往返和工作区回归测试。
 - **5.6 / 5.7:静态开关暴露的条件输入现在看得见了**([#1](https://github.com/TypeDreamMoon/DreamFX/issues/1))。没有外部编辑 API 的引擎走 `Compat/` 那一层,
   而它枚举模块输入时在第一个 `UNiagaraStackFunctionInput` 就停手。模块输入是一棵**层级**:开关揭示的输入是
   该开关的**子节点**,不是它的兄弟——`InitializeParticle` 的 `Lifetime` 挂在 `LifetimeMode` 下,

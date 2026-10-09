@@ -9,7 +9,7 @@ Everything that can appear on the right of an `=`, and the rules that decide wha
 | | Rule |
 | --- | --- |
 | **L1** | A stack is an ordered statement block. Six of them: `SystemSpawn`, `SystemUpdate`, `EmitterSpawn`, `EmitterUpdate`, `ParticleSpawn`, `ParticleUpdate`. Writing order is module order. |
-| **L2** | Two statement forms: a module call, and an assignment. **Consecutive assignments fold into one Set Parameters module**; a module call breaks the run. A new attribute is declared by its first write. |
+| **L2** | Two statement forms: a module call, and an assignment. **Consecutive assignments with the same enabled state fold into one Set Parameters module**; a module call or a change of `disabled` state breaks the run. A new attribute is declared by its first write. |
 | **L3** | Four value modes: literal, linked, dynamic input, HLSL. |
 | **L4** | Module names resolve through `Settings.ModulePaths`; write a longer path only when a short name is ambiguous. |
 | **L5** | `#Region` is a comment. It does not reach the asset — the external edit API has no stack-note function. |

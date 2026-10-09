@@ -7,6 +7,7 @@
 #include "Schema/DreamFXIndexExport.h"
 #include "SourceFiles/DreamFXPaths.h"
 #include "UI/DreamFXAssetCommands.h"
+#include "UI/DreamFXEditorGeneration.h"
 #include "Workspace/DreamFXSourceWatcher.h"
 
 #include "Containers/Ticker.h"
@@ -206,7 +207,7 @@ namespace UE::DreamFX::Editor
 				return Result;
 			}
 
-			const FGenerateResult Generated = FGenerator::GenerateFromFile(SourceFile, Options, Result.Diagnostics);
+			const FGenerateResult Generated = FEditorGeneration::GenerateFromFile(SourceFile, Options, Result.Diagnostics);
 			Result.bOk = Generated.bSucceeded;
 			Result.Message = Generated.bSkipped ? TEXT("Already up to date.")
 				: Generated.bDrifted ? TEXT("The asset has drifted from its source.")
@@ -238,6 +239,17 @@ namespace UE::DreamFX::Editor
 				const bool bVerifyOnly = Action == TEXT("verify");
 				if (Scope == TEXT("all"))
 				{
+					if (bVerifyOnly)
+					{
+						const FVerifyBatchResult Verified = FDreamFXCommands::VerifyAllSources();
+						FActionResult Result;
+						Result.bOk = Verified.IsSuccessful();
+						Result.Message = FString::Printf(TEXT("Verified %d source(s): %d drifted, %d failed."),
+							Verified.Checked, Verified.Drifted, Verified.Failed);
+						Result.Diagnostics.Append(Verified.Diagnostics);
+						LogDiagnostics(Result.Diagnostics);
+						return Result;
+					}
 					// Through the watcher's queue rather than a loop here. The queue is what carries
 					// the module-before-emitter-before-system ordering and the bulk-batch gate, and it
 					// runs across ticks so the editor stays responsive -- which also means the result

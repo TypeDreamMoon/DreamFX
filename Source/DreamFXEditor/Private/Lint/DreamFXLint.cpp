@@ -186,12 +186,29 @@ namespace UE::DreamFX::Editor
 					Diagnostics.Error(TEXT("DFX3031"), Document.HeaderLocation,
 						TEXT("A DynamicInput must declare Settings.Output -- its return type cannot be inferred from the body."));
 				}
-				if (Usage != nullptr && Usage->Value.IsValid()
-					&& !Usage->Value->Text.Equals(TEXT("DynamicInput"), ESearchCase::IgnoreCase))
+				bool bValidUsage = true;
+				if (Usage != nullptr && Usage->Value.IsValid())
+				{
+					if (Usage->Value->Kind == EValueKind::Array)
+					{
+						bValidUsage = !Usage->Value->Elements.IsEmpty();
+						for (const FValuePtr& Element : Usage->Value->Elements)
+						{
+							EStackKind Stack;
+							bValidUsage &= Element.IsValid() && Element->Kind == EValueKind::Name
+								&& ParseStackKind(Element->Text, Stack);
+						}
+					}
+					else
+					{
+						bValidUsage = Usage->Value->Kind == EValueKind::Name
+							&& Usage->Value->Text.Equals(TEXT("DynamicInput"), ESearchCase::IgnoreCase);
+					}
+				}
+				if (!bValidUsage)
 				{
 					Diagnostics.Error(TEXT("DFX3032"), Usage->Location,
-						FString::Printf(TEXT("A DynamicInput's Usage must be DynamicInput, not '%s'."),
-							*Usage->Value->Text));
+						TEXT("A DynamicInput's Usage must be DynamicInput or a nonempty array of stack names."));
 				}
 			}
 

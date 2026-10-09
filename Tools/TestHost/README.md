@@ -82,8 +82,20 @@ pwsh -NoProfile -File I:\UnrealProject_Moon\DEV_58\DreamFXTestHost\Plugins\Dream
 ```
 
 Every `.skill/dfx.ps1` command takes `-Project` the same way (and finds the host by itself when it is run
-from inside the host's directory). `dfx.ps1 corpus DreamFX` runs every DreamFX automation test, not only the
-corpus suites.
+from inside the host's directory). `ci.ps1` checks diagnostic-document drift and the driver regressions,
+then runs lint, build, verify and `dfx.ps1 corpus DreamFX`: every DreamFX automation suite, including
+language, workspace and engine probes. Use `dfx.ps1 corpus` explicitly for only the corpus subset.
+
+The driver and L3 capture regressions also run without launching Unreal:
+
+```powershell
+pwsh -NoProfile -File Tests/Tools/Test-Driver.ps1
+python -B Tests/Tools/test_l3_equivalence.py
+```
+
+`-CleanNew` preserves all assets that existed before the command, including ignored or untracked files.
+Each commandlet run writes a unique `Saved/Logs/DreamFX-<id>.log`; an earlier project's log cannot supply
+its exit verdict. `ci.ps1 -SkipBuild -SkipCorpus` performs the checks that do not write packages.
 
 The editor target uses the **shared** build environment: engine modules already built in
 `Engine/Binaries/Win64` are linked against as they are, and only the host module and the plugin are compiled

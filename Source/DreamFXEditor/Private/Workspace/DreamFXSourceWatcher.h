@@ -22,6 +22,9 @@ namespace UE::DreamFX::Editor
 		static void Register();
 		static void Unregister();
 
+		/** Reconciles directory watches with current source roots, including newly created DFX folders. */
+		static void RefreshSourceRoots(bool bQueueNewSources = true);
+
 		/** Rebuilds every source queued by a save, ignoring the debounce. Used by the "build now" path. */
 		static void FlushPending();
 

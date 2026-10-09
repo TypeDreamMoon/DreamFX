@@ -303,19 +303,39 @@ namespace UE::DreamFX::Editor
 
 	void FDreamFXCommands::VerifyAll()
 	{
-		FDreamFXPaths::InvalidateSourceRoots();
+		const FVerifyBatchResult Result = VerifyAllSources();
+		LogDiagnostics(Result.Diagnostics);
+		UE_LOG(LogDreamFX, Display, TEXT("=== DreamFX verify: %d checked, %d drifted, %d failed ==="),
+			Result.Checked, Result.Drifted, Result.Failed);
 
+		if (Result.IsSuccessful())
+		{
+			Notify(FText::Format(
+				LOCTEXT("VerifyClean", "DreamFX: {0} source(s) verified, all assets in step."),
+				FText::AsNumber(Result.Checked)), /*bSuccess=*/true);
+			return;
+		}
+		Notify(FText::Format(
+			LOCTEXT("VerifyDrift", "DreamFX: {0} of {1} source(s) out of step ({2} failed). See the Output Log."),
+			FText::AsNumber(Result.Drifted), FText::AsNumber(Result.Checked), FText::AsNumber(Result.Failed)), /*bSuccess=*/false);
+	}
+
+	FVerifyBatchResult FDreamFXCommands::VerifyAllSources()
+	{
+		FDreamFXPaths::InvalidateSourceRoots();
 		TArray<FString> SourceFiles;
 		FDreamFXPaths::FindSourceFiles(SourceFiles);
+		return VerifySources(SourceFiles);
+	}
 
+	FVerifyBatchResult FDreamFXCommands::VerifySources(const TArray<FString>& SourceFiles)
+	{
 		FGenerateOptions Options;
 		Options.bVerifyOnly = true;
 		Options.bSave = false;
 		Options.bForce = true;
 
-		int32 Checked = 0;
-		int32 Drifted = 0;
-		int32 Failed = 0;
+		FVerifyBatchResult Batch;
 
 		for (const FString& SourceFile : SourceFiles)
 		{
@@ -327,36 +347,23 @@ namespace UE::DreamFX::Editor
 				continue;
 			}
 
-			++Checked;
+			++Batch.Checked;
 
 			FDiagnosticSink Diagnostics;
 			const FGenerateResult Result = FGenerator::GenerateFromFile(SourceFile, Options, Diagnostics);
-			LogDiagnostics(Diagnostics);
+			Batch.Diagnostics.Append(Diagnostics);
 
 			if (Result.bDrifted)
 			{
-				++Drifted;
+				++Batch.Drifted;
 			}
 			if (!Result.bSucceeded)
 			{
-				++Failed;
+				++Batch.Failed;
 			}
 		}
 
-		UE_LOG(LogDreamFX, Display, TEXT("=== DreamFX verify: %d checked, %d drifted, %d failed ==="),
-			Checked, Drifted, Failed);
-
-		if (Drifted == 0 && Failed == 0)
-		{
-			Notify(FText::Format(
-				LOCTEXT("VerifyClean", "DreamFX: {0} source(s) verified, all assets in step."),
-				FText::AsNumber(Checked)), /*bSuccess=*/true);
-			return;
-		}
-
-		Notify(FText::Format(
-			LOCTEXT("VerifyDrift", "DreamFX: {0} of {1} source(s) out of step ({2} failed). See the Output Log."),
-			FText::AsNumber(Drifted), FText::AsNumber(Checked), FText::AsNumber(Failed)), /*bSuccess=*/false);
+		return Batch;
 	}
 
 	void FDreamFXCommands::OpenWorkspace()
@@ -626,7 +633,7 @@ namespace UE::DreamFX::Editor
 		}
 
 		// A brand new root directory means the watcher is not watching it yet.
-		FDreamFXPaths::InvalidateSourceRoots();
+		FSourceWatcher::RefreshSourceRoots();
 
 		// --- 6. rebuild the asset from the text it just wrote -----------------------------------
 		FGenerateOptions Options;
@@ -703,41 +710,9 @@ namespace UE::DreamFX::Editor
 			return;
 		}
 
-		// A standalone script's editor edits a copy (FNiagaraScriptToolkit duplicates the asset and copies
-		// the duplicate back on Apply), so a rebuild under an open editor does not show there, and the next
-		// Apply stomps it. Close the editor first -- its own prompt decides what happens to unapplied edits,
-		// and the rebuild is then the last write -- and reopen it afterwards. Cancel on that prompt keeps the
-		// editor open and abandons the rebuild. System editors are live views over the asset and need none
-		// of this.
-		UAssetEditorSubsystem* Editors = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
-		bool bReopenEditor = false;
-
-		if (Editors != nullptr && Asset->IsA<UNiagaraScript>()
-			&& Editors->FindEditorForAsset(Asset, /*bFocusIfOpen=*/false) != nullptr)
-		{
-			Editors->CloseAllEditorsForAsset(Asset);
-			if (Editors->FindEditorForAsset(Asset, /*bFocusIfOpen=*/false) != nullptr)
-			{
-				Notify(FText::Format(LOCTEXT("RebuildNeedsClose", "'{0}' is still open, so it was not rebuilt. Close its editor, then rebuild again."),
-					FText::FromString(Asset->GetName())), /*bSuccess=*/false);
-				return;
-			}
-			bReopenEditor = true;
-		}
-
-		// Through the watcher's queue, exactly like a save -- the menu must not be able to succeed where a save
-		// fails -- which already forces the rebuild and reports it with the first error one click away.
-		// Flushing builds it now instead of after the debounce, so the editor reopens on the result.
-		const TWeakObjectPtr<UObject> WeakAsset(Asset);
+		// The queue uses the same script-editor protection as file saves and bridge builds.
 		FSourceWatcher::QueueFile(Stamp.SourceFullPath, /*bAnnounceSuccess=*/true);
 		FSourceWatcher::FlushPending();
-
-		// Reopened whether or not the build worked: a failed build leaves the asset as it was, and the author
-		// asked for a rebuild, not for the editor to go away.
-		if (bReopenEditor && WeakAsset.IsValid())
-		{
-			Editors->OpenEditorForAsset(WeakAsset.Get());
-		}
 	}
 
 	void FDreamFXCommands::VerifyAsset(UObject* Asset)

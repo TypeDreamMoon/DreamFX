@@ -36,6 +36,10 @@ Settings = {
 (L4). The engine defaults (`/Niagara/Modules`, `/Niagara/DynamicInputs`, `/Niagara/Functions`) stay on
 the list, so declaring your own folder adds to them rather than replacing them.
 
+Rebuilding resets omitted supported system and emitter settings to fresh-asset engine defaults,
+then applies the settings declared in the source. Removing a supported setting therefore clears its
+previous override; this reset covers the generator's mapped settings, not unrelated asset fields.
+
 ## `Properties` — user parameters
 
 ```cpp
@@ -157,10 +161,18 @@ Arguments are always named (DFX2008). Input names are normalised — Niagara's `
 written `LoopDuration`.
 
 `disabled` parks a module without deleting it: it stays in the stack, keeps its inputs, and does not
-run. That is Niagara's own "keep it but turn it off" state, and keeping the inputs is the whole reason
-to use it rather than commenting the line out. It prefixes a module call only — on an assignment it is
-DFX2024, because an assignment is folded into the stack's shared Set Parameters module and disabling
-that would drop every other assignment beside it.
+run. That is Niagara's own "keep it but turn it off" state. It also prefixes an assignment:
+
+```cpp
+Color Particles.Color = (1, 1, 1, 1);
+disabled Color Particles.Color = (1, 0, 0, 1);
+float Particles.CustomValue = 2.0;
+```
+
+Consecutive assignments fold only when their enabled state agrees. This example creates three Set
+Parameters nodes; the middle node remains disabled and the two surrounding nodes remain enabled.
+The decompiler preserves that state. A declaration in `Defaults` cannot be disabled (DFX2024), since
+a default is parameter metadata rather than an executed stack node.
 
 **Static switches gate other inputs, and on a module source order is write order.** An input that only
 exists once a switch is set has to be written after it:
@@ -284,6 +296,38 @@ which is how Ninja's debug slice came to draw over the fluid in every mirror.
 A stage of a custom C++ stage class (anything that is not the engine's generic stage) stays a gap
 with its own header line (DFX8016).
 
+Generic stages also preserve their dispatch and particle-filter configuration:
+
+| Argument | Value |
+| --- | --- |
+| `DirectDispatchType` | `OneD`, `TwoD`, `ThreeD`, or `Custom` |
+| `DirectDispatchElementType` | `NumThreads`, `NumThreadsNoClipping`, or `NumGroups` |
+| `ElementCountX`, `ElementCountY`, `ElementCountZ` | Non-negative integer fallback and/or a parameter name |
+| `OverrideGpuDispatchNumThreads` | `true` or `false` |
+| `OverrideGpuDispatchNumThreadsX`, `OverrideGpuDispatchNumThreadsY`, `OverrideGpuDispatchNumThreadsZ` | Non-negative integer fallback and/or a parameter name |
+| `GpuDispatchForceLinear`, `DisablePartialParticleUpdate` | `true` or `false` |
+| `ParticleIterationStateEnabled` | `true` or `false` |
+| `ParticleIterationStateBinding` | Particle attribute name, or `None` to clear |
+| `ParticleIterationStateRange` | Inclusive integer pair, such as `(1, 3)` |
+
+```cpp
+Stage Dispatch(
+    Iteration = DirectSet,
+    DirectDispatchType = TwoD,
+    ElementCountX = 128, ElementCountX = Emitter.Width,
+    ElementCountY = 64,
+    OverrideGpuDispatchNumThreads = true,
+    OverrideGpuDispatchNumThreadsX = 8,
+    OverrideGpuDispatchNumThreadsY = 8
+) = { ... }
+```
+
+As with `NumIterations`, repeating a count with a number and a parameter preserves both halves of
+the engine binding. Export writes values that differ from a fresh stage and preserves bindings.
+Removing an option resets it to the fresh-stage default on the next build; old bindings do not linger.
+Thread-group override parameters retain Niagara's `static int` type; element counts use ordinary
+`int`. `ParticleIterationStateBinding = None` explicitly clears the default particle attribute binding.
+
 ## `Defaults` — what a read produces when nothing wrote
 
 > Working since 2026-08-09. What looked like an API gap was an ordering bug: the writes were
@@ -346,6 +390,12 @@ says so in the file header rather than flattening it away.
 `Bind` is separate from property assignment because attribute bindings are not plain fields — the
 binding struct caches a display name, a data-set name and source-mode flags that only its own
 `SetValue` recomputes, so writing the serialised field would leave half a binding behind.
+
+Other binding structures, including a Sprite or Ribbon renderer's `MaterialUserParamBinding`, are
+carried as quoted JSON property values during export. User parameter bindings carry only their name,
+such as `"{\"parameter\":{\"name\":\"User.Material\"}}"`; the renderer supplies the fixed parameter type.
+This avoids serializing Niagara's process-local type index. A binding with an unexpected type reports
+an export gap. These bindings are separate from attribute `Bind` statements.
 
 **Declaration order is renderer order**, and there is no other addressing scheme. Reordering two
 renderer blocks repaints the effect.

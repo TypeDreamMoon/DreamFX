@@ -2,6 +2,7 @@
 
 #include "Settings/DreamFXEditorSettings.h"
 #include "SourceFiles/DreamFXPaths.h"
+#include "Workspace/DreamFXSourceWatcher.h"
 
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
@@ -261,6 +262,7 @@ namespace UE::DreamFX::Editor
 		// MakeDirectory may have just produced the project root that the cached scan missed, and a
 		// plugin can be enabled after the first scan. Both would show up as a missing folder.
 		FDreamFXPaths::InvalidateSourceRoots();
+		FSourceWatcher::RefreshSourceRoots();
 
 		const FString WorkspaceText = BuildWorkspaceJson(WorkspaceDirectory);
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "DreamFXDiagnostics.h"
 
 class UNiagaraEmitter;
 class UNiagaraSystem;
@@ -8,6 +9,16 @@ class UObject;
 
 namespace UE::DreamFX::Editor
 {
+	struct FVerifyBatchResult
+	{
+		int32 Checked = 0;
+		int32 Drifted = 0;
+		int32 Failed = 0;
+		FDiagnosticSink Diagnostics;
+
+		bool IsSuccessful() const { return Drifted == 0 && Failed == 0; }
+	};
+
 	/**
 	 * What every DreamFX menu entry actually does.
 	 *
@@ -23,6 +34,10 @@ namespace UE::DreamFX::Editor
 
 		/** Verifies every source against its generated asset. Writes nothing. */
 		static void VerifyAll();
+
+		/** Shared synchronous verification for menus and the bridge; never queues a build. */
+		static FVerifyBatchResult VerifyAllSources();
+		static FVerifyBatchResult VerifySources(const TArray<FString>& SourceFiles);
 
 		/** Rewrites `DFX/DreamFX.code-workspace` and opens it. */
 		static void OpenWorkspace();
