@@ -1,6 +1,7 @@
 #include "Generation/DreamFXModuleGenerator.h"
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
+#include "Algo/AnyOf.h"
 #include "Algo/Count.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Generation/DreamFXProvenance.h"
@@ -521,11 +522,16 @@ namespace UE::DreamFX::Editor
 			FString Working = Body;
 			TArray<FBodyToken> Tokens = TokenizeBody(Body);
 			TArray<bool> StatementStarts = FindUnconditionalStatementStarts(Tokens);
+			// Pin identity as Niagara judges it. UNiagaraNodeCustomHlsl::OnNewTypedPinAdded uniques a new
+			// pin with FNiagaraUtilities::GetUniqueName, which compares names with their FName number
+			// stripped: `Write_X_1` collides with `Write_X` and is renamed to `Write_X001`, leaving the
+			// body naming a pin that does not exist. Compare the same way, so no name is ever renamed.
+			auto PinIdentity = [](const FString& Name) { return FName(FName(*Name), 0); };
 			TSet<FName> Symbols;
-			for (const FString& Input : InputNames) { Symbols.Add(FName(*Input)); }
+			for (const FString& Input : InputNames) { Symbols.Add(PinIdentity(Input)); }
 			for (const FBodyToken& Token : Tokens)
 			{
-				if (Token.bIdentifier) { Symbols.Add(FName(*Token.Text)); }
+				if (Token.bIdentifier) { Symbols.Add(PinIdentity(Token.Text)); }
 			}
 			Symbols.Add(TEXT("Map")); Symbols.Add(TEXT("Output"));
 
@@ -644,13 +650,15 @@ namespace UE::DreamFX::Editor
 					const FString Base = AttributeName.Replace(TEXT("."), TEXT("_"));
 					for (int32 Suffix = 0;; ++Suffix)
 					{
-						Binding.Symbol = Suffix == 0 ? Base : FString::Printf(TEXT("%s_%d"), *Base, Suffix);
+						// `_v<N>`, never `_<N>`: a trailing `_<digits>` is an FName number, which is
+						// exactly the part the engine's uniquing ignores.
+						Binding.Symbol = Suffix == 0 ? Base : FString::Printf(TEXT("%s_v%d"), *Base, Suffix);
 						const FString Read = Binding.ReadPin(), Write = Binding.WritePin();
-						if (!Symbols.Contains(FName(*Read)) && !Symbols.Contains(FName(*Write))
-							&& !Symbols.Contains(FName(*(TEXT("In_") + Read))) && !Symbols.Contains(FName(*(TEXT("Out_") + Write))))
+						const FName Reserved[] = { PinIdentity(Read), PinIdentity(Write),
+							PinIdentity(TEXT("In_") + Read), PinIdentity(TEXT("Out_") + Write) };
+						if (!Algo::AnyOf(Reserved, [&Symbols](const FName& Name) { return Symbols.Contains(Name); }))
 						{
-							Symbols.Add(FName(*Read)); Symbols.Add(FName(*Write));
-							Symbols.Add(FName(*(TEXT("In_") + Read))); Symbols.Add(FName(*(TEXT("Out_") + Write)));
+							for (const FName& Name : Reserved) { Symbols.Add(Name); }
 							break;
 						}
 					}

@@ -160,6 +160,13 @@ bool FDreamFXBodyLexicalBindings::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("dotted custom output"), A) || !TestNotNull(TEXT("underscore custom output"), B)) { return false; }
 	TestNotEqual(TEXT("distinct attributes get distinct HLSL symbols"), A->PinName, B->PinName);
 	TestNotEqual(TEXT("generated symbol avoids a module input"), A->PinName, FName(TEXT("Write_Particles_A_B")));
+	// The engine's pin uniquing (direct backend) renames a pin whose name differs from an existing one
+	// only by an FName number; the body must still name the pins that actually exist.
+	for (const UEdGraphPin* Pin : { A, B })
+	{
+		TestTrue(FString::Printf(TEXT("body names created pin '%s'"), *Pin->PinName.ToString()),
+			Body(Custom).Contains(Pin->PinName.ToString()));
+	}
 	TestNull(TEXT("new custom attribute does not read uninitialized parameter map data"), AttributePin(Custom, EGPD_Input, TEXT("Particles.A.B")));
 	TestNull(TEXT("comment declaration is not a real attribute"), AttributePin(Custom, EGPD_Output, TEXT("Particles.CommentOnly")));
 	const auto* Read = AttributePin(Custom, EGPD_Input, TEXT("Particles.SpriteRotation"));
