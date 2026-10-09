@@ -205,7 +205,8 @@ namespace UE::DreamFX::Editor
 			{
 				UE_LOG(LogDreamFX, Warning, TEXT("Not represented in the export: %s"), *Feature);
 			}
-			NotifyWithFile(FText::FromString(Result.Message), Result.bSucceeded && Result.UnsupportedFeatures.IsEmpty(), Result.OutputPath);
+			NotifyWithFile(FText::FromString(Result.Message), Result.bSucceeded && Result.UnsupportedFeatures.IsEmpty(),
+				Result.bSucceeded ? Result.OutputPath : Result.ExistingSourcePath);
 			if (Result.bSucceeded) { FDreamFXLaunchUtils::LaunchTextFileInPreferredEditor(Result.OutputPath); }
 		}
 		/** The stamp, or nothing -- every per-asset command needs it and reports the same way when absent. */
@@ -380,6 +381,13 @@ namespace UE::DreamFX::Editor
 		if (FDreamFXPaths::IsDecompiledNamespaceAsset(PackagePath))
 		{
 			Result.Message = TEXT("This asset is already a DreamFX mirror. Edit its existing source instead of exporting it again.");
+			// The stamp, not a path guess: the mirror's source lives at the original asset's export
+			// path, which cannot be recovered from the mirror's own path.
+			FProvenanceStamp Stamp;
+			if (FProvenance::Read(Asset, Stamp) && FProvenance::ResolveSourceFile(Stamp, Result.ExistingSourcePath))
+			{
+				Result.Message += FString::Printf(TEXT(" Its source is '%s'."), *Result.ExistingSourcePath);
+			}
 			return Result;
 		}
 		FAssetRoot Root;

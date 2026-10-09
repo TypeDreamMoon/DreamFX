@@ -14,6 +14,8 @@ namespace UE::DreamFX::Editor
 	{
 		bool bSucceeded = false;
 		FString OutputPath;
+		/** A refused mirror export: the source that already builds the asset, when it is on disk. */
+		FString ExistingSourcePath;
 		FString Message;
 		TArray<FString> UnsupportedFeatures;
 		FDiagnosticSink Diagnostics;

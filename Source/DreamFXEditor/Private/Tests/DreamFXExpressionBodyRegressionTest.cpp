@@ -105,6 +105,14 @@ bool FDreamFXExpressionPrecisionAndCast::RunTest(const FString& Parameters)
 		TestEqual(TEXT("HLSL literal preserves source double precision"), FCString::Atod(*Rendered), Number);
 		TestTrue(TEXT("number remains a floating literal"), Rendered.Contains(TEXT(".")) || Rendered.Contains(TEXT("e")) || Rendered.Contains(TEXT("E")));
 	}
+	{
+		// Exact is not enough: the literal lands in generated HLSL and in every export of it.
+		FValue Tenth; Tenth.Kind = EValueKind::Number; Tenth.Number = 0.1;
+		FDiagnosticSink TenthDiagnostics;
+		FString TenthText;
+		TestTrue(TEXT("short decimal renders"), FExpressions::Render(Tenth, FNiagaraTypeDefinition::GetFloatDef(), TEXT("Probe"), TenthDiagnostics, TenthText));
+		TestEqual(TEXT("short decimal keeps its shortest exact spelling"), TenthText, FString(TEXT("0.1")));
+	}
 	FDiagnosticSink Diagnostics;
 	FValuePtr Cast = Value(*this, TEXT("int(-1.9)"));
 	if (!Cast) { return false; }

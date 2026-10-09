@@ -290,7 +290,9 @@ namespace
 			return 0;
 		}
 
-		if (!FFileHelper::SaveStringToFile(Result.Source, *OutputPath))
+		// The default AutoDetect writes UTF-16LE as soon as a name or description is not ASCII; every
+		// other DreamFX writer, and every editor the source is opened in, expects UTF-8.
+		if (!FFileHelper::SaveStringToFile(Result.Source, *OutputPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 		{
 			UE_LOG(LogDreamFX, Error, TEXT("Could not write '%s'."), *OutputPath);
 			return 1;

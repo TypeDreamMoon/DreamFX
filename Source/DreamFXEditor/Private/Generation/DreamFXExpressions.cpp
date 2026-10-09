@@ -60,7 +60,17 @@ namespace UE::DreamFX::Editor
 			// context, and `1/2` meaning zero is a bug nobody enjoys finding.
 			// FValue stores a double. SanitizeFloat uses fixed six-decimal formatting and rounds
 			// small (but perfectly representable) coefficients to zero before Niagara sees them.
-			FString Text = FString::Printf(TEXT("%.17g"), Number);
+			// The shortest of 15/16/17 significant digits that reads back as the same double: exact,
+			// and `0.1` stays `0.1` instead of `0.10000000000000001` in the HLSL and its export.
+			FString Text = FString::Printf(TEXT("%.15g"), Number);
+			if (FCString::Atod(*Text) != Number)
+			{
+				Text = FString::Printf(TEXT("%.16g"), Number);
+				if (FCString::Atod(*Text) != Number)
+				{
+					Text = FString::Printf(TEXT("%.17g"), Number);
+				}
+			}
 			if (!Text.Contains(TEXT(".")) && !Text.Contains(TEXT("e")) && !Text.Contains(TEXT("E")))
 			{
 				Text += TEXT(".0");
