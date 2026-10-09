@@ -24,6 +24,7 @@ namespace UE::DreamFX::Editor
 
 		const FBuiltin Builtins[] =
 		{
+			{ TEXT("int"),       1, 1 },
 			{ TEXT("normalize"), 1, 1 },
 			{ TEXT("saturate"),  1, 1 },
 			{ TEXT("clamp"),     3, 3 },
@@ -57,7 +58,19 @@ namespace UE::DreamFX::Editor
 		{
 			// Always emit a decimal point: HLSL's integer literals do not implicitly widen in every
 			// context, and `1/2` meaning zero is a bug nobody enjoys finding.
-			FString Text = FString::SanitizeFloat(Number);
+			// FValue stores a double. SanitizeFloat uses fixed six-decimal formatting and rounds
+			// small (but perfectly representable) coefficients to zero before Niagara sees them.
+			// The shortest of 15/16/17 significant digits that reads back as the same double: exact,
+			// and `0.1` stays `0.1` instead of `0.10000000000000001` in the HLSL and its export.
+			FString Text = FString::Printf(TEXT("%.15g"), Number);
+			if (FCString::Atod(*Text) != Number)
+			{
+				Text = FString::Printf(TEXT("%.16g"), Number);
+				if (FCString::Atod(*Text) != Number)
+				{
+					Text = FString::Printf(TEXT("%.17g"), Number);
+				}
+			}
 			if (!Text.Contains(TEXT(".")) && !Text.Contains(TEXT("e")) && !Text.Contains(TEXT("E")))
 			{
 				Text += TEXT(".0");
@@ -178,6 +191,20 @@ namespace UE::DreamFX::Editor
 							: FString::Printf(TEXT("Builtin '%s' takes %d to %d arguments, but %d were written."),
 								*Value.Text, Builtin->MinArguments, Builtin->MaxArguments, Count));
 					return false;
+				}
+
+				if (Value.Text == TEXT("int") && Value.Elements[0].IsValid()
+					&& Value.Elements[0]->Kind == EValueKind::Number)
+				{
+					FInputValue Converted;
+					if (!FValueLowering::Lower(Value, FNiagaraTypeDefinition::GetIntDef(), DisplayName, Diagnostics, Converted))
+					{
+						return false;
+					}
+					int32 Integer = 0;
+					FMemory::Memcpy(&Integer, Converted.LiteralBytes.GetData(), sizeof(Integer));
+					Out = FString::Printf(TEXT("int(%d)"), Integer);
+					return true;
 				}
 
 				TArray<FString> Arguments;

@@ -1,6 +1,7 @@
 #include "Generation/DreamFXModuleGenerator.h"
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
+#include "Algo/AnyOf.h"
 #include "Algo/Count.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Generation/DreamFXProvenance.h"
@@ -167,6 +168,7 @@ namespace UE::DreamFX::Editor
 						}
 						Result.AppendChar(Body[Index++]);
 					}
+					if (Index < Length) { Result.AppendChar(Body[Index++]); }
 					PreviousSignificant = TEXT('"');
 					continue;
 				}
@@ -244,44 +246,126 @@ namespace UE::DreamFX::Editor
 			/** What the body refers to after rewriting. */
 			FString BodyName() const { return bWritten ? WritePin() : ReadPin(); }
 
-			FString Sanitized() const { return FullName.Replace(TEXT("."), TEXT("_")); }
+			FString Symbol;
+			FString Sanitized() const { return Symbol; }
 		};
 
-		bool IsAssignmentOperatorAt(const FString& Text, int32 Index)
+		struct FBodyToken
 		{
-			// `=` but not `==`, or one of the compound forms. `>=` / `<=` / `!=` end in `=` too, so the
-			// character before matters as much as the one after.
-			while (Index < Text.Len() && FChar::IsWhitespace(Text[Index]))
-			{
-				++Index;
-			}
-			if (Index >= Text.Len())
-			{
-				return false;
-			}
+			FString Text;
+			int32 Start = 0;
+			int32 End = 0;
+			bool bIdentifier = false;
+		};
 
-			const TCHAR Character = Text[Index];
-			if (Character == TEXT('='))
+		/** Comments are trivia, strings are opaque, and operators are longest-match tokens. */
+		TArray<FBodyToken> TokenizeBody(const FString& Body)
+		{
+			TArray<FBodyToken> Tokens;
+			for (int32 Index = 0; Index < Body.Len();)
 			{
-				return Index + 1 >= Text.Len() || Text[Index + 1] != TEXT('=');
+				if (FChar::IsWhitespace(Body[Index])) { ++Index; continue; }
+				if (Body.Mid(Index, 2) == TEXT("//"))
+				{
+					while (Index < Body.Len() && Body[Index] != TEXT('\n')) { ++Index; }
+					continue;
+				}
+				if (Body.Mid(Index, 2) == TEXT("/*"))
+				{
+					Index += 2;
+					while (Index < Body.Len() && Body.Mid(Index, 2) != TEXT("*/")) { ++Index; }
+					Index = FMath::Min(Index + 2, Body.Len());
+					continue;
+				}
+				FBodyToken Token;
+				Token.Start = Index;
+				Token.bIdentifier = IsIdentifierStart(Body[Index]);
+				if (Body[Index] == TEXT('#'))
+				{
+					// Directive contents are not executable statements; a semicolon in a #define
+					// must not change the following statement's control-flow classification.
+					while (Index < Body.Len())
+					{
+						if (Body[Index] == TEXT('\n'))
+						{
+							int32 Previous = Index - 1;
+							if (Previous >= 0 && Body[Previous] == TEXT('\r')) { --Previous; }
+							if (Previous < 0 || Body[Previous] != TEXT('\\')) { break; }
+						}
+						++Index;
+					}
+				}
+				else if (Token.bIdentifier)
+				{
+					while (Index < Body.Len() && IsIdentifierBody(Body[Index])) { ++Index; }
+				}
+				else if (Body[Index] == TEXT('"') || Body[Index] == TEXT('\''))
+				{
+					const TCHAR Quote = Body[Index++];
+					while (Index < Body.Len())
+					{
+						if (Body[Index] == TEXT('\\')) { Index = FMath::Min(Index + 2, Body.Len()); }
+						else if (Body[Index++] == Quote) { break; }
+					}
+				}
+				else
+				{
+					int32 Width = 1;
+					for (const TCHAR* Operator : { TEXT("<<="), TEXT(">>="), TEXT("++"), TEXT("--"),
+						TEXT("+="), TEXT("-="), TEXT("*="), TEXT("/="), TEXT("%="), TEXT("&="), TEXT("|="),
+						TEXT("^="), TEXT("=="), TEXT("!="), TEXT("<="), TEXT(">="), TEXT("&&"), TEXT("||"), TEXT("<<"), TEXT(">>") })
+					{
+						const int32 CandidateWidth = FCString::Strlen(Operator);
+						if (Body.Mid(Index, CandidateWidth) == Operator) { Width = CandidateWidth; break; }
+					}
+					Index += Width;
+				}
+				Token.End = Index;
+				Token.Text = Body.Mid(Token.Start, Token.End - Token.Start);
+				Tokens.Add(MoveTemp(Token));
 			}
-			if (Character == TEXT('+') || Character == TEXT('-') || Character == TEXT('*') || Character == TEXT('/'))
-			{
-				return Index + 1 < Text.Len() && Text[Index + 1] == TEXT('=');
-			}
-			return false;
+			return Tokens;
 		}
 
-		/** True when the assignment at Index also reads the target: `+=` and friends, but not `=`. */
-		bool IsCompoundAssignmentAt(const FString& Text, int32 Index)
+		bool IsWriteOperator(const FString& Operator)
 		{
-			while (Index < Text.Len() && FChar::IsWhitespace(Text[Index]))
-			{
-				++Index;
-			}
-			return Index < Text.Len() && Text[Index] != TEXT('=');
+			return Operator == TEXT("=") || Operator == TEXT("++") || Operator == TEXT("--")
+				|| Operator == TEXT("+=") || Operator == TEXT("-=") || Operator == TEXT("*=")
+				|| Operator == TEXT("/=") || Operator == TEXT("%=") || Operator == TEXT("&=")
+				|| Operator == TEXT("|=") || Operator == TEXT("^=") || Operator == TEXT("<<=") || Operator == TEXT(">>=");
 		}
 
+		TArray<bool> FindUnconditionalStatementStarts(const TArray<FBodyToken>& Tokens)
+		{
+			TArray<bool> Starts;
+			int32 Braces = 0, Parentheses = 0;
+			bool bStart = true;
+			bool bMayHaveExited = false;
+			bool bHasConditionalPreprocessing = false;
+			for (const FBodyToken& Token : Tokens)
+			{
+				if (Token.Text.StartsWith(TEXT("#")))
+				{
+					FString Directive = Token.Text.Mid(1).TrimStart();
+					int32 End = 0;
+					while (End < Directive.Len() && IsIdentifierBody(Directive[End])) { ++End; }
+					Directive.LeftInline(End);
+					// Removing a conditional branch can change which statement a preceding unbraced
+					// `if` or loop controls, even after #endif. Do not infer definite writes beyond it.
+					bHasConditionalPreprocessing |= Directive == TEXT("if") || Directive == TEXT("ifdef") || Directive == TEXT("ifndef");
+					Starts.Add(false); bStart = true; continue;
+				}
+				Starts.Add(bStart && Braces == 0 && Parentheses == 0 && !bHasConditionalPreprocessing && !bMayHaveExited);
+				bMayHaveExited |= Token.Text == TEXT("return") || Token.Text == TEXT("discard");
+				bStart = false;
+				if (Token.Text == TEXT("{")) { ++Braces; }
+				if (Token.Text == TEXT("}")) { --Braces; bStart = Braces == 0; }
+				if (Token.Text == TEXT("(")) { ++Parentheses; }
+				if (Token.Text == TEXT(")")) { --Parentheses; }
+				if (Token.Text == TEXT(";") && Parentheses == 0) { bStart = true; }
+			}
+			return Starts;
+		}
 		/** The declared type of a common particle attribute, or an invalid type if it is not one. */
 		FNiagaraTypeDefinition FindKnownAttributeType(const FString& FullName)
 		{
@@ -350,6 +434,7 @@ namespace UE::DreamFX::Editor
 
 				if (Character == TEXT('/') && Index + 1 < Text.Len() && Text[Index + 1] == TEXT('*'))
 				{
+					Result.AppendChar(TEXT(' ')); // `return/*comment*/X` still has two tokens.
 					Index += 2;
 					while (Index + 1 < Text.Len() && !(Text[Index] == TEXT('*') && Text[Index + 1] == TEXT('/')))
 					{
@@ -424,252 +509,200 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
-		/**
-		 * Rewrites every `Particles.*` reference in the body to a pin name, collecting what has to be
-		 * wired up on either side.
-		 *
-		 * Two things make this more than a search and replace.
-		 *
-		 * *Which prefix is the attribute.* `Particles.Color.rgb` is a swizzle of `Particles.Color`,
-		 * while `Particles.Moon.SparkSeed` is one attribute with a dotted name. Nothing in the text
-		 * separates them, so the rule is longest-known-prefix: the longest dotted prefix that is either a
-		 * common Niagara attribute or one the body declared a type for wins. Nothing matching is an
-		 * error that says to write the type, rather than a guess that compiles into the wrong shape.
-		 *
-		 * *Read against write.* An attribute that is only ever assigned needs no read pin, and adding one
-		 * would make the module claim a dependency it does not have. An attribute reached by `+=`, or
-		 * read anywhere else in the body, needs both -- and both roles resolve to the single write pin
-		 * after a seeding assignment, so `+=`, repeated writes and conditional writes all behave the way
-		 * they read.
-		 */
-		bool BindParticleAttributes(const FString& Body, FDiagnosticSink& Diagnostics,
+		/** Rewrite attributes using token boundaries, retaining comments and ordinary HLSL locals. */
+		bool BindParticleAttributes(const FString& Body, const TSet<FString>& InputNames, FDiagnosticSink& Diagnostics,
 			const FSourceLocation& BodyLocation, TArray<FAttributeBinding>& OutBindings, FString& OutHlsl)
 		{
-			// Pass one: `float Particles.Moon.SparkSeed = ...` declares a type for an attribute the
-			// engine has never heard of. The type token is DreamFX's, not HLSL's, so it is consumed here.
-			TMap<FString, FNiagaraTypeDefinition> DeclaredTypes;
-			FString Working;
-			Working.Reserve(Body.Len());
-
+			struct FDeclaration
 			{
-				int32 Index = 0;
-				const int32 Length = Body.Len();
-				bool bAtStatementStart = true;
+				FNiagaraTypeDefinition Type;
+				bool bNewAttribute = false;
+			};
+			TMap<FString, FDeclaration> DeclaredTypes;
+			FString Working = Body;
+			TArray<FBodyToken> Tokens = TokenizeBody(Body);
+			TArray<bool> StatementStarts = FindUnconditionalStatementStarts(Tokens);
+			// Pin identity as Niagara judges it. UNiagaraNodeCustomHlsl::OnNewTypedPinAdded uniques a new
+			// pin with FNiagaraUtilities::GetUniqueName, which compares names with their FName number
+			// stripped: `Write_X_1` collides with `Write_X` and is renamed to `Write_X001`, leaving the
+			// body naming a pin that does not exist. Compare the same way, so no name is ever renamed.
+			auto PinIdentity = [](const FString& Name) { return FName(FName(*Name), 0); };
+			TSet<FName> Symbols;
+			for (const FString& Input : InputNames) { Symbols.Add(PinIdentity(Input)); }
+			for (const FBodyToken& Token : Tokens)
+			{
+				if (Token.bIdentifier) { Symbols.Add(PinIdentity(Token.Text)); }
+			}
+			Symbols.Add(TEXT("Map")); Symbols.Add(TEXT("Output"));
 
-				while (Index < Length)
+			// Recognize actual type names, never control-flow keywords such as `return` or `else`.
+			for (int32 Index = 0; Index + 3 < Tokens.Num(); ++Index)
+			{
+				const FBodyToken& TypeToken = Tokens[Index];
+				if (!TypeToken.bIdentifier || Tokens[Index + 1].Text != TEXT("Particles") || Tokens[Index + 2].Text != TEXT(".")) { continue; }
+				bool bTypeName = false;
+				for (const TCHAR* Name : { TEXT("float"), TEXT("int"), TEXT("int32"), TEXT("bool"), TEXT("Vector2"), TEXT("Vec2"),
+					TEXT("Vector"), TEXT("Vector3"), TEXT("Vec3"), TEXT("Vector4"), TEXT("Vec4"), TEXT("Color"), TEXT("LinearColor"), TEXT("Position"), TEXT("Quat") })
 				{
-					const TCHAR Character = Body[Index];
-
-					if (bAtStatementStart && IsIdentifierStart(Character))
-					{
-						const int32 TypeStart = Index;
-						int32 Probe = Index;
-						while (Probe < Length && IsIdentifierBody(Body[Probe]))
-						{
-							++Probe;
-						}
-						const FString TypeToken = Body.Mid(TypeStart, Probe - TypeStart);
-
-						int32 NameStart = Probe;
-						while (NameStart < Length && (Body[NameStart] == TEXT(' ') || Body[NameStart] == TEXT('\t')))
-						{
-							++NameStart;
-						}
-
-						if (NameStart > Probe && NameStart < Length
-							&& Body.Mid(NameStart).StartsWith(TEXT("Particles."), ESearchCase::CaseSensitive))
-						{
-							int32 NameEnd = NameStart;
-							while (NameEnd < Length && (IsIdentifierBody(Body[NameEnd]) || Body[NameEnd] == TEXT('.')))
-							{
-								++NameEnd;
-							}
-							const FString FullName = Body.Mid(NameStart, NameEnd - NameStart);
-
-							FParameterDecl Declaration;
-							Declaration.TypeName = TypeToken;
-							Declaration.Name = FullName;
-							Declaration.Location = BodyLocation;
-
-							FNiagaraTypeDefinition Type;
-							bool bIsDataInterface = false;
-							if (!FValueLowering::ResolveDeclaredType(Declaration, Diagnostics, Type, bIsDataInterface)
-								|| bIsDataInterface)
-							{
-								Diagnostics.Error(TEXT("DFX3045"), BodyLocation,
-									FString::Printf(TEXT("'%s' is not a type a particle attribute can have."), *TypeToken));
-								return false;
-							}
-
-							DeclaredTypes.Add(FullName, Type);
-							Index = NameStart; // Drop the type token; the rest of the statement stands.
-							bAtStatementStart = false;
-							continue;
-						}
-
-						Working.Append(TypeToken);
-						Index = Probe;
-						bAtStatementStart = false;
-						continue;
-					}
-
-					if (Character == TEXT(';') || Character == TEXT('{') || Character == TEXT('}'))
-					{
-						bAtStatementStart = true;
-					}
-					else if (!FChar::IsWhitespace(Character))
-					{
-						bAtStatementStart = false;
-					}
-
-					Working.AppendChar(Character);
-					++Index;
+					bTypeName |= TypeToken.Text.Equals(Name, ESearchCase::IgnoreCase);
 				}
+				if (!bTypeName) { continue; }
+				FString Name = TEXT("Particles");
+				int32 End = Index + 2;
+				while (End + 1 < Tokens.Num() && Tokens[End].Text == TEXT(".") && Tokens[End + 1].bIdentifier)
+				{
+					Name += TEXT(".") + Tokens[End + 1].Text;
+					End += 2;
+				}
+				FParameterDecl Declaration;
+				Declaration.TypeName = TypeToken.Text;
+				Declaration.Name = Name;
+				Declaration.Location = BodyLocation;
+				FDeclaration Resolved;
+				bool bDataInterface = false;
+				if (!FValueLowering::ResolveDeclaredType(Declaration, Diagnostics, Resolved.Type, bDataInterface)) { return false; }
+				const FNiagaraTypeDefinition Known = FindKnownAttributeType(Name);
+				const FDeclaration* Earlier = DeclaredTypes.Find(Name);
+				if ((Known.IsValid() && Known != Resolved.Type) || (Earlier && Earlier->Type != Resolved.Type))
+				{
+					Diagnostics.Error(TEXT("DFX3057"), BodyLocation,
+						FString::Printf(TEXT("Attribute '%s' is declared with conflicting types."), *Name));
+					return false;
+				}
+				Resolved.bNewAttribute = !Known.IsValid() && !Earlier && End < Tokens.Num() && Tokens[End].Text == TEXT("=");
+				if (Resolved.bNewAttribute && !StatementStarts[Index])
+				{
+					Diagnostics.Error(TEXT("DFX3057"), BodyLocation,
+						FString::Printf(TEXT("New attribute '%s' needs an unconditional whole-value initializer before conditional writes. To read an attribute supplied by an earlier module, declare its type without an initializer first."), *Name));
+					return false;
+				}
+				if (!Earlier) { DeclaredTypes.Add(Name, Resolved); }
+				// Replace only the type token with whitespace, preserving offsets and comment separation.
+				for (int32 Position = TypeToken.Start; Position < TypeToken.End; ++Position) { Working[Position] = TEXT(' '); }
 			}
 
-			// Pass two: find the references, decide read against write, and rewrite.
+			Tokens = TokenizeBody(Working);
+			StatementStarts = FindUnconditionalStatementStarts(Tokens);
+			TArray<int32> Matching;
+			Matching.Init(INDEX_NONE, Tokens.Num());
+			TArray<int32> Open;
+			for (int32 Index = 0; Index < Tokens.Num(); ++Index)
+			{
+				if (Tokens[Index].Text == TEXT("(") || Tokens[Index].Text == TEXT("[")) { Open.Add(Index); }
+				else if ((Tokens[Index].Text == TEXT(")") || Tokens[Index].Text == TEXT("]")) && !Open.IsEmpty())
+				{
+					const int32 Start = Open.Pop(EAllowShrinking::No);
+					Matching[Start] = Index; Matching[Index] = Start;
+				}
+			}
 			TMap<FString, int32> BindingIndices;
+			TArray<int32> InitializedAt;
 			FString Result;
-			Result.Reserve(Working.Len());
-
-			int32 Index = 0;
-			const int32 Length = Working.Len();
-			TCHAR PreviousSignificant = TEXT('\0');
-
-			while (Index < Length)
+			int32 CopiedUntil = 0;
+			for (int32 Index = 0; Index + 2 < Tokens.Num(); ++Index)
 			{
-				const TCHAR Character = Working[Index];
-
-				if (Character == TEXT('/') && Index + 1 < Length && Working[Index + 1] == TEXT('/'))
+				if (Tokens[Index].Text != TEXT("Particles") || Tokens[Index + 1].Text != TEXT(".")
+					|| (Index > 0 && Tokens[Index - 1].Text == TEXT("."))) { continue; }
+				FString Chain = TEXT("Particles");
+				FString AttributeName;
+				FNiagaraTypeDefinition Type;
+				int32 AttributeEnd = INDEX_NONE;
+				int32 ChainEnd = Index + 1;
+				while (ChainEnd + 1 < Tokens.Num() && Tokens[ChainEnd].Text == TEXT(".") && Tokens[ChainEnd + 1].bIdentifier)
 				{
-					while (Index < Length && Working[Index] != TEXT('\n'))
-					{
-						Result.AppendChar(Working[Index++]);
-					}
-					continue;
+					Chain += TEXT(".") + Tokens[ChainEnd + 1].Text;
+					const FDeclaration* Declaration = DeclaredTypes.Find(Chain);
+					const FNiagaraTypeDefinition Candidate = Declaration ? Declaration->Type : FindKnownAttributeType(Chain);
+					if (Candidate.IsValid()) { AttributeName = Chain; Type = Candidate; AttributeEnd = ChainEnd + 2; }
+					ChainEnd += 2;
 				}
-				if (Character == TEXT('/') && Index + 1 < Length && Working[Index + 1] == TEXT('*'))
+				if (AttributeEnd == INDEX_NONE)
 				{
-					Result.AppendChar(Working[Index++]);
-					Result.AppendChar(Working[Index++]);
-					while (Index < Length && !(Working[Index] == TEXT('*') && Index + 1 < Length && Working[Index + 1] == TEXT('/')))
-					{
-						Result.AppendChar(Working[Index++]);
-					}
-					continue;
+					Diagnostics.Error(TEXT("DFX3046"), BodyLocation,
+						FString::Printf(TEXT("'%s' is not a particle attribute DreamFX knows the type of. Write its type at first use, for example `float %s = ...;`."), *Chain, *Chain));
+					return false;
 				}
-
-				if (PreviousSignificant != TEXT('.') && IsIdentifierStart(Character)
-					&& Working.Mid(Index).StartsWith(TEXT("Particles."), ESearchCase::CaseSensitive))
+				int32 LvalueEnd = ChainEnd;
+				while (LvalueEnd < Tokens.Num())
 				{
-					int32 ChainEnd = Index;
-					while (ChainEnd < Length && (IsIdentifierBody(Working[ChainEnd]) || Working[ChainEnd] == TEXT('.')))
+					if (Tokens[LvalueEnd].Text == TEXT("[") && Matching[LvalueEnd] != INDEX_NONE) { LvalueEnd = Matching[LvalueEnd] + 1; }
+					else if (LvalueEnd + 1 < Tokens.Num() && Tokens[LvalueEnd].Text == TEXT(".") && Tokens[LvalueEnd + 1].bIdentifier) { LvalueEnd += 2; }
+					else { break; }
+				}
+				const bool bPartial = LvalueEnd != AttributeEnd;
+				int32 LvalueStart = Index;
+				while (LvalueStart > 0 && Tokens[LvalueStart - 1].Text == TEXT("(") && Matching[LvalueStart - 1] == LvalueEnd)
+				{
+					--LvalueStart; ++LvalueEnd;
+				}
+				const FString Operator = LvalueEnd < Tokens.Num() ? Tokens[LvalueEnd].Text : FString();
+				const bool bPrefix = LvalueStart > 0 && (Tokens[LvalueStart - 1].Text == TEXT("++") || Tokens[LvalueStart - 1].Text == TEXT("--"));
+				const bool bWritten = bPrefix || IsWriteOperator(Operator);
+				const bool bWholeAssignment = bWritten && !bPrefix && Operator == TEXT("=") && !bPartial;
+				const bool bGuaranteed = bWholeAssignment && StatementStarts[LvalueStart];
+				int32& BindingIndex = BindingIndices.FindOrAdd(AttributeName, INDEX_NONE);
+				if (BindingIndex == INDEX_NONE)
+				{
+					BindingIndex = OutBindings.Num();
+					FAttributeBinding Binding;
+					Binding.FullName = AttributeName;
+					Binding.Type = Type;
+					const FString Base = AttributeName.Replace(TEXT("."), TEXT("_"));
+					for (int32 Suffix = 0;; ++Suffix)
 					{
-						++ChainEnd;
-					}
-					const FString Chain = Working.Mid(Index, ChainEnd - Index);
-
-					// Longest known prefix wins, so a swizzle stays a swizzle.
-					FString AttributeName;
-					FNiagaraTypeDefinition AttributeType;
-					for (int32 Cut = Chain.Len(); Cut > 0; --Cut)
-					{
-						if (Cut < Chain.Len() && Chain[Cut] != TEXT('.'))
+						// `_v<N>`, never `_<N>`: a trailing `_<digits>` is an FName number, which is
+						// exactly the part the engine's uniquing ignores.
+						Binding.Symbol = Suffix == 0 ? Base : FString::Printf(TEXT("%s_v%d"), *Base, Suffix);
+						const FString Read = Binding.ReadPin(), Write = Binding.WritePin();
+						const FName Reserved[] = { PinIdentity(Read), PinIdentity(Write),
+							PinIdentity(TEXT("In_") + Read), PinIdentity(TEXT("Out_") + Write) };
+						if (!Algo::AnyOf(Reserved, [&Symbols](const FName& Name) { return Symbols.Contains(Name); }))
 						{
-							continue;
-						}
-						const FString Candidate = Chain.Left(Cut);
-						if (const FNiagaraTypeDefinition* Declared = DeclaredTypes.Find(Candidate))
-						{
-							AttributeName = Candidate;
-							AttributeType = *Declared;
+							for (const FName& Name : Reserved) { Symbols.Add(Name); }
 							break;
 						}
-						const FNiagaraTypeDefinition Known = FindKnownAttributeType(Candidate);
-						if (Known.IsValid())
-						{
-							AttributeName = Candidate;
-							AttributeType = Known;
-							break;
-						}
 					}
-
-					if (AttributeName.IsEmpty())
-					{
-						Diagnostics.Error(TEXT("DFX3046"), BodyLocation,
-							FString::Printf(TEXT("'%s' is not a particle attribute DreamFX knows the type of. Write the type at its first use in the body -- `float %s = ...;` -- the way a .dfs declares a new attribute."),
-								*Chain, *Chain));
-						return false;
-					}
-
-					const int32 Suffix = ChainEnd - Index - AttributeName.Len();
-					const bool bIsAssignmentTarget = Suffix == 0 && IsAssignmentOperatorAt(Working, ChainEnd);
-					const bool bCompound = bIsAssignmentTarget && IsCompoundAssignmentAt(Working, ChainEnd);
-
-					int32& BindingIndex = BindingIndices.FindOrAdd(AttributeName, INDEX_NONE);
-					if (BindingIndex == INDEX_NONE)
-					{
-						BindingIndex = OutBindings.Num();
-						FAttributeBinding Binding;
-						Binding.FullName = AttributeName;
-						Binding.Type = AttributeType;
-						OutBindings.Add(MoveTemp(Binding));
-					}
-
-					FAttributeBinding& Binding = OutBindings[BindingIndex];
-					Binding.bWritten |= bIsAssignmentTarget;
-					Binding.bRead |= !bIsAssignmentTarget || bCompound;
-
-					// Placeholder: which pin a reference resolves to depends on whether the attribute is
-					// written *anywhere*, which is not known until the whole body has been read.
-					Result.Append(FString::Printf(TEXT("\x1b%d\x1b"), BindingIndex));
-					Result.Append(Working.Mid(Index + AttributeName.Len(), Suffix));
-					Index = ChainEnd;
-					PreviousSignificant = TEXT(')');
-					continue;
+					OutBindings.Add(MoveTemp(Binding));
+					InitializedAt.Add(INDEX_NONE);
 				}
-
-				if (IsIdentifierStart(Character))
+				FAttributeBinding& Binding = OutBindings[BindingIndex];
+				const bool bAlreadyInitialized = InitializedAt[BindingIndex] != INDEX_NONE && Tokens[Index].Start >= InitializedAt[BindingIndex];
+				Binding.bWritten |= bWritten;
+				Binding.bRead |= !bAlreadyInitialized && (!bWholeAssignment || !bGuaranteed);
+				if (bGuaranteed && InitializedAt[BindingIndex] == INDEX_NONE)
 				{
-					const int32 Start = Index;
-					while (Index < Length && IsIdentifierBody(Working[Index]))
+					// Reads inside this initializer still need the incoming value; later statements do not.
+					for (int32 End = LvalueEnd + 1; End < Tokens.Num(); ++End)
 					{
-						++Index;
+						if (Tokens[End].Text == TEXT(";")) { InitializedAt[BindingIndex] = Tokens[End].End; break; }
 					}
-					Result.Append(Working.Mid(Start, Index - Start));
-					PreviousSignificant = Working[Index - 1];
-					continue;
 				}
-
-				if (!FChar::IsWhitespace(Character))
-				{
-					PreviousSignificant = Character;
-				}
-				Result.AppendChar(Character);
-				++Index;
+				Result += Working.Mid(CopiedUntil, Tokens[Index].Start - CopiedUntil);
+				Result += FString::Printf(TEXT("\x1b%d\x1b"), BindingIndex);
+				CopiedUntil = Tokens[AttributeEnd - 1].End;
+				Index = AttributeEnd - 1;
 			}
-
-			for (int32 BindingIndex = 0; BindingIndex < OutBindings.Num(); ++BindingIndex)
-			{
-				Result.ReplaceInline(*FString::Printf(TEXT("\x1b%d\x1b"), BindingIndex),
-					*OutBindings[BindingIndex].BodyName(), ESearchCase::CaseSensitive);
-			}
-
-			// Seed each written attribute's output from its input, so the body's reads see the value the
-			// stack handed in and every later write accumulates onto it.
+			Result += Working.Mid(CopiedUntil);
 			FString Prologue;
-			for (const FAttributeBinding& Binding : OutBindings)
+			for (int32 Index = 0; Index < OutBindings.Num(); ++Index)
 			{
+				const FAttributeBinding& Binding = OutBindings[Index];
+				const FDeclaration* Declaration = DeclaredTypes.Find(Binding.FullName);
+				if (Declaration && Declaration->bNewAttribute && Binding.bRead)
+				{
+					Diagnostics.Error(TEXT("DFX3057"), BodyLocation,
+						FString::Printf(TEXT("New attribute '%s' is read before its initializer completes. Initialize it from other values, or declare its type without an initializer to read an existing attribute."), *Binding.FullName));
+					return false;
+				}
+				Result.ReplaceInline(*FString::Printf(TEXT("\x1b%d\x1b"), Index), *Binding.BodyName(), ESearchCase::CaseSensitive);
 				if (Binding.bWritten && Binding.bRead)
 				{
-					Prologue.Append(FString::Printf(TEXT("%s = %s;\n"), *Binding.WritePin(), *Binding.ReadPin()));
+					Prologue += FString::Printf(TEXT("%s = %s;\n"), *Binding.WritePin(), *Binding.ReadPin());
 				}
 			}
-
 			OutHlsl = Prologue + Result;
 			return true;
 		}
-
 		/** Where a .dfm's asset lives. Shared by both configurations, so the two agree on the path. */
 		bool ResolveTargetPath(const FDocument& Document, FDiagnosticSink& Diagnostics,
 			FString& OutFullAssetPath, FString& OutPackagePath, FString& OutAssetName)
@@ -958,6 +991,11 @@ namespace UE::DreamFX::Editor
 			if (Declaration.DefaultValue.IsValid())
 			{
 				const FString DisplayName = FString::Printf(TEXT("%s.%s"), *AssetName, *Declaration.Name);
+				if (!FValueLowering::ValidateObjectDefaultType(Input.Type, DisplayName,
+					Declaration.DefaultValue->Location, Diagnostics))
+				{
+					return Result;
+				}
 				if (!FValueLowering::Lower(*Declaration.DefaultValue, Input.Type, DisplayName, Diagnostics, Input.Default))
 				{
 					return Result;
@@ -989,7 +1027,7 @@ namespace UE::DreamFX::Editor
 		FString Hlsl = NormalizeModuleInputReferences(Document.Body, InputNames);
 
 		TArray<FAttributeBinding> Attributes;
-		if (!BindParticleAttributes(Hlsl, Diagnostics, Document.BodyLocation, Attributes, Hlsl))
+		if (!BindParticleAttributes(Hlsl, InputNames, Diagnostics, Document.BodyLocation, Attributes, Hlsl))
 		{
 			return Result;
 		}
@@ -1053,7 +1091,8 @@ namespace UE::DreamFX::Editor
 				return Result;
 			}
 
-			if (FProvenance::IsUpToDate(Script, Document.SourceHash) && !Options.bForce)
+			if (FProvenance::IsUpToDate(Script, Document.SourceHash)
+				&& FProvenance::IsSourceLocationCurrent(Script, Document.SourceFilePath) && !Options.bForce)
 			{
 				Result.bSucceeded = true;
 				Result.bSkipped = true;
@@ -1331,6 +1370,12 @@ namespace UE::DreamFX::Editor
 			return Result;
 		}
 
+		FString FinalizeError;
+		if (!Surgeon->FinalizeParameterMapPins(*Graph, FinalizeError))
+		{
+			Diagnostics.Error(TEXT("DFX5106"), Document.BodyLocation, FinalizeError);
+			return Result;
+		}
 		Graph->NotifyGraphChanged();
 		Script->SetLatestSource(Source);
 		Script->RequestCompile(FGuid());
@@ -1358,20 +1403,9 @@ namespace UE::DreamFX::Editor
 		// ---------------------------------------------------------------- stamp and save
 
 		FProvenanceStamp Stamp;
-		Stamp.SourceFullPath = Document.SourceFilePath;
+		FProvenance::SetSourceLocation(Stamp, Document.SourceFilePath);
 		Stamp.SourceHash = Document.SourceHash;
 		Stamp.GeneratorVersion = FProvenance::GetGeneratorVersion();
-
-		FSourceRoot OwningRoot;
-		if (FDreamFXPaths::FindOwningRoot(Document.SourceFilePath, OwningRoot))
-		{
-			Stamp.SourceRelativePath = Document.SourceFilePath;
-			FPaths::MakePathRelativeTo(Stamp.SourceRelativePath, *(OwningRoot.Directory / TEXT("")));
-		}
-		else
-		{
-			Stamp.SourceRelativePath = FPaths::GetCleanFilename(Document.SourceFilePath);
-		}
 
 		FProvenance::Write(Script, Stamp);
 

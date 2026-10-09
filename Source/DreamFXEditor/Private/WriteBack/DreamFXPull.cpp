@@ -2304,7 +2304,7 @@ namespace UE::DreamFX::Editor
 		if (Result.Undeclared > 0)
 		{
 			UE_LOG(LogDreamFX, Display,
-				TEXT("pull: %d stored value(s) are not declared in this text, so nothing was written for them. pull rewrites what a text already declares and never adds structure on its own -- write them into the text (decompile -NoDefaults prints every input a module has), or let the build safety gate (DFX8017) decide which of them a rebuild would actually drop."),
+				TEXT("pull: %d stored value(s) are not declared in this text, so nothing was written for them. pull rewrites what a text already declares and never adds structure on its own -- write them into the text (decompile -NoDefaults prints every input a module has), or let the build safety gate (DFX8018) decide which of them a rebuild would actually drop."),
 				Result.Undeclared);
 		}
 
@@ -2332,7 +2332,7 @@ namespace UE::DreamFX::Editor
 			{
 				continue;
 			}
-			Diagnostics.Info(TEXT("DFX7105"), Edit.Location, Note(FString::Printf(
+			Diagnostics.Info(TEXT("DFX7116"), Edit.Location, Note(FString::Printf(
 				TEXT("pull: %s: %s -> %s"), *Edit.Address, *Edit.Old.TrimEnd(), *Edit.Text)));
 		}
 

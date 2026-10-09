@@ -186,6 +186,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'dfx-lib.ps1')
 
 # ---------------------------------------------------------------- project & engine
 
@@ -225,7 +226,7 @@ function Resolve-EngineRoot {
     if ($Explicit) { return (Resolve-Path -LiteralPath $Explicit).Path }
     if ($env:UE_ENGINE_ROOT) { return (Resolve-Path -LiteralPath $env:UE_ENGINE_ROOT).Path }
 
-    $association = (Get-Content -LiteralPath $UprojectPath -Raw | ConvertFrom-Json).EngineAssociation
+    $association = (Get-Content -LiteralPath $UprojectPath -Raw -Encoding UTF8 | ConvertFrom-Json).EngineAssociation
     if (-not $association) { throw "The .uproject has no EngineAssociation. Pass -Engine." }
 
     # A source build registers its root under a GUID association; an installed build uses a
@@ -459,54 +460,47 @@ $arguments += @('-unattended', '-nopause', '-nosplash', '-nullrhi')
 # ---------------------------------------------------------------- snapshot for -CleanNew
 
 function Get-AssetSnapshot {
-    param([string]$Root)
+    param([string]$Root, [switch]$RequireComplete)
     $map = @{}
+    # An incomplete snapshot cannot establish which assets are safe to remove, so -CleanNew fails
+    # closed. Without it the snapshot only feeds the "assets written" report, and one unreadable
+    # directory under Plugins/ must not fail every build.
+    $scanErrors = if ($RequireComplete) { 'Stop' } else { 'SilentlyContinue' }
     foreach ($dir in @((Join-Path $Root 'Content'), (Join-Path $Root 'Plugins'))) {
         if (-not (Test-Path -LiteralPath $dir)) { continue }
-        foreach ($file in Get-ChildItem -LiteralPath $dir -Filter '*.uasset' -File -Recurse -ErrorAction SilentlyContinue) {
+        foreach ($file in Get-ChildItem -LiteralPath $dir -Filter '*.uasset' -File -Recurse -ErrorAction $scanErrors) {
             $map[$file.FullName] = $file.LastWriteTimeUtc
         }
     }
     return $map
 }
 
-$before = if ($CleanNew -or $Command -eq 'build') { Get-AssetSnapshot -Root $projectRoot } else { @{} }
+$trackAssets = $CleanNew -or $Command -eq 'build'
+$before = if ($trackAssets) { Get-AssetSnapshot -Root $projectRoot -RequireComplete:$CleanNew } else { @{} }
 
 # ---------------------------------------------------------------- run
 
+# A unique log ties the completion verdict to this process. An old project log must
+# never turn a startup failure into a successful build.
+$engineLog = Join-Path $projectRoot ('Saved/Logs/DreamFX-' + [guid]::NewGuid().ToString('N') + '.log')
+$arguments += "-abslog=$engineLog"
 $output = & $editorCmd @arguments 2>&1
 $exit = $LASTEXITCODE
 
-# The commandlet's own return value, taken from the line the engine prints when it honours the exit
-# request:  "Engine exit requested (reason: Commandlet DreamFXCommandlet_0 finished execution
-# (result 0))".  That number is what the commandlet returned, which is the error count -- the thing
-# a CI gate is actually asking about.
-#
-# It is preferred over the process exit code because on this project the two disagree: `verify -All`
-# reliably returns 0, logs no error in any category, shuts down cleanly (LogExit: Exiting., log file
-# closed) and still leaves the process at 3.  Ruled out by measurement, not assumed: an abort during
-# teardown (the shutdown is clean and byte-identical to a run that exits 0), a side effect of the
-# stats report verify skips (BuildReport only reads), unsaved dirty packages (`build -All -NoSave`
-# exits 0), Angelscript's warnings (`lint -All` carries the same ten and exits 0), and the verify
-# path itself (a single-file verify exits 0).  Something downstream of the commandlet corrupts the
-# code without saying so.
-#
-# This is not a way of ignoring failures: a non-zero result still fails, and a run that never reaches
-# the line keeps whatever the process reported.  It replaces a proxy with the value the proxy was
-# standing in for.
-# The line is written to the project log, not to stdout, so it is read back from there.
-$engineLog = Join-Path $projectRoot ('Saved/Logs/' + [IO.Path]::GetFileNameWithoutExtension($uproject) + '.log')
+# Honor this run's DreamFX result, retaining process failures except the documented
+# exit-3 anomaly after a clean shutdown. Keep the unique log for diagnosis.
 if (Test-Path -LiteralPath $engineLog) {
-    $reported = Select-String -LiteralPath $engineLog -Pattern 'finished execution \(result (\d+)\)' |
-        Select-Object -Last 1
-    if ($reported) {
-        $commandletResult = [int]$reported.Matches[0].Groups[1].Value
-        if ($commandletResult -ne $exit) {
-            Write-Host "dfx: process exit $exit, commandlet returned $commandletResult -- using the commandlet's" -ForegroundColor DarkYellow
-        }
-        $exit = $commandletResult
+    $resolvedExit = Get-DreamFXExitCode -ProcessExit $exit -LogLines @(Get-Content -LiteralPath $engineLog -Encoding UTF8)
+    if ($resolvedExit -ne $exit) {
+        Write-Host "dfx: process exit $exit, DreamFX result $resolvedExit from $engineLog" -ForegroundColor DarkYellow
     }
+    $exit = $resolvedExit
 }
+
+# Each run has its own log; keep the recent ones for diagnosis instead of letting them pile up.
+Get-ChildItem -LiteralPath (Split-Path -Parent $engineLog) -Filter 'DreamFX-*.log' -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 20 |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 if ($Raw) {
     $output | ForEach-Object { $_ }
@@ -562,30 +556,39 @@ else {
 
 # ---------------------------------------------------------------- asset report
 
-if ($before.Count -gt 0) {
-    $after = Get-AssetSnapshot -Root $projectRoot
-    $touched = @()
-    foreach ($path in $after.Keys) {
-        if (-not $before.ContainsKey($path) -or $before[$path] -ne $after[$path]) { $touched += $path }
-    }
+if ($trackAssets) {
+    $after = Get-AssetSnapshot -Root $projectRoot -RequireComplete:$CleanNew
+    $touched = @(Get-DreamFXAssetChanges -Before $before -After $after)
 
     if ($touched.Count -gt 0) {
         Write-Host ''
         Write-Host 'Assets written to disk by this run:' -ForegroundColor DarkGray
 
-        foreach ($path in $touched | Sort-Object) {
+        foreach ($change in $touched) {
+            $path = $change.Path
             $relative = [System.IO.Path]::GetRelativePath($projectRoot, $path) -replace '\\', '/'
+
+            # Git-untracked is not the same as created by this run. The snapshot
+            # decides whether cleanup is allowed; Git additionally protects tracked assets.
+            $ageLabel = if ($change.Existed) { 'EXISTING' } else { 'NEW' }
 
             # Query from the asset's own directory, not the project root: plugins are frequently
             # their own repositories, and asking the project root about a plugin file returns
             # "fatal: not a git repository" -- which reads identically to "tracked and unchanged"
             # and would make -CleanNew skip exactly the files it exists to remove.
             $assetDir = Split-Path -Parent $path
-            $repoRoot = & git -C $assetDir rev-parse --show-toplevel 2>$null
+            $repoRoot = & git -C $assetDir rev-parse --show-toplevel 2>&1
+            $repoExit = $LASTEXITCODE
 
-            if (-not $repoRoot) {
+            if ($repoExit -ne 0) {
+                # Only the expected non-repository failure permits cleanup. Unknown
+                # git errors (permissions, unsafe ownership, etc.) must fail closed.
+                if (($repoRoot -join "`n") -notmatch 'not a git repository') {
+                    Write-Warning "Cannot determine version-control status of '$relative'; preserved. $repoRoot"
+                    continue
+                }
                 Write-Host "  $relative  [written, not under version control]" -ForegroundColor Green
-                if ($CleanNew) {
+                if ($CleanNew -and -not $change.Existed) {
                     Remove-Item -LiteralPath $path -Force
                     Write-Host '    deleted (-CleanNew)' -ForegroundColor DarkGray
                 }
@@ -594,18 +597,26 @@ if ($before.Count -gt 0) {
 
             # --ignored=matching reports individual ignored files rather than collapsing them into
             # their ignored parent directory.
-            $status = & git -C $assetDir status --porcelain --untracked-files=all --ignored=matching -- $path 2>$null
+            $status = & git -C $assetDir status --porcelain --untracked-files=all --ignored=matching -- $path 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Cannot determine version-control status of '$relative'; preserved. $status"
+                continue
+            }
 
             $ignored = $false
             if (-not $status) {
-                & git -C $assetDir check-ignore -q -- $path 2>$null
+                & git -C $assetDir check-ignore -q -- $path
+                if ($LASTEXITCODE -gt 1) {
+                    Write-Warning "Cannot determine ignore status of '$relative'; preserved."
+                    continue
+                }
                 $ignored = $LASTEXITCODE -eq 0
             }
 
             if ($status -match '^\?\?' -or $status -match '^!!' -or $ignored) {
-                $label = if ($ignored -or $status -match '^!!') { 'NEW (gitignored)' } else { 'NEW (untracked)' }
+                $label = if ($ignored -or $status -match '^!!') { "$ageLabel (gitignored)" } else { "$ageLabel (untracked)" }
                 Write-Host "  $relative  [$label]" -ForegroundColor Green
-                if ($CleanNew) {
+                if ($CleanNew -and -not $change.Existed) {
                     Remove-Item -LiteralPath $path -Force
                     Write-Host '    deleted (-CleanNew)' -ForegroundColor DarkGray
                 }

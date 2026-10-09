@@ -70,7 +70,7 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Eng
 ## 2. `-Apply` 的语义
 
 - **不带 `-Apply`**：读资产、解析文本、算出每处要写的字面量，打印
-  `文件(行,列): info DFX7105: pull: <模块>.<输入>: <旧字面量> -> <新值>`，然后停手。
+  `文件(行,列): info DFX7116: pull: <模块>.<输入>: <旧字面量> -> <新值>`，然后停手。
   文本一个字节都不动（报告文件除外）。
 - **带 `-Apply`**：先备份，再按**字面量自己的字节区间**做替换，然后**必须**能重新解析通过才落盘；
   解析不过就报 `DFX7110` 并放弃（文件保持原样）。
@@ -89,7 +89,7 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Eng
 |---|---|---|---|
 | `decompile` | 资产 → 文本 | 活输入的 **pin** | 写出结构；`-NoDefaults` 把**每个输入的名字**都写进文本（值取 pin） |
 | **`pull`** | 资产 → 文本 | rapid-iteration **store** | 只改文本里**已经写着**的字面量的值 |
-| `build` | 文本 → 资产 | 文本 | 写资产；**安全闸 DFX8017** 拦住「重建会丢掉文本表达不了的事实」的保存 |
+| `build` | 文本 → 资产 | 文本 | 写资产；**安全闸 DFX8018** 拦住「重建会丢掉文本表达不了的事实」的保存 |
 
 关系是三句话：
 
@@ -101,7 +101,7 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Eng
    `MeshYaw: 0000B4C2 -> 00000000`（§6.8 第 6 行）；`pull` 把 `-90.0` 写进文本；再 `build` 就是干净通过 ——
    值变了但**文本写了**，规则 3 放行。
 3. **文本没声明、store 里有的那些，`pull` 只报告不动手**（`DFX7106`）。
-   里面哪些是「重建真的会丢」由安全闸（`DFX8017`）判定：值恰好等于模块默认值的那些，
+   里面哪些是「重建真的会丢」由安全闸（`DFX8018`）判定：值恰好等于模块默认值的那些，
    重建时会按默认值补回来，事实相同、不会丢（§6.8 的「读数注意」实测：37 条里只有 8 条真丢）。
    `pull` 不去复算模块默认值 —— 那是第二个探测系统、第二个默认值表，会和安全闸的口径漂移。
 
@@ -140,7 +140,7 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Eng
 |---|---|
 | 不新增实参、不新增/删除模块、不动任何结构 | `DFX7106`（store 里有、文本没声明的那条） |
 | 事件栈 `OnEvent`、模拟阶段 `Stage` | `DFX7111`（v1 不寻址：它们要经 focus slice 读，是另一套机制） |
-| 渲染器属性、系统/发射器 `Settings` | 不在范围内 —— 它们不是「调用的实参」。这类事实由安全闸（`DFX8017`）覆盖 |
+| 渲染器属性、系统/发射器 `Settings` | 不在范围内 —— 它们不是「调用的实参」。这类事实由安全闸（`DFX8018`）覆盖 |
 | 赋值语句的值（Set Parameters 入口、`Defaults = {}` 块） | v1 不寻址 |
 | `from "..."` 引进来、但本文件没写的 stack | 只读本文件写得出来的 stack（`Emitter.FromPath` 时记一条 Verbose） |
 | 模块输入之外的东西（`di` / `compiled` / `user` 事实族） | 不读、不报 |
@@ -277,7 +277,7 @@ $ dfx decompile <原资产> -NoDefaults -Out Saved/pull-probe/NS_Effects1_Mesh.d
   导出 SHA256 = 3E3A1DC4…
 
 $ dfx pull <文本> -Asset <原资产>          # dry run
-  NS_Effects1_Mesh.dfs(106,27): info DFX7105: pull: Sprite_Atlas_Size.MeshYaw: 0.0 -> -90.0
+  NS_Effects1_Mesh.dfs(106,27): info DFX7116: pull: Sprite_Atlas_Size.MeshYaw: 0.0 -> -90.0
   pull: 1 literal(s) would be written and nothing was: this is a dry run.
   === DreamFX pull: 14 value(s) compared, 1 to write, 5 not declared, 1 not writable, 0 stack(s) not addressed | dry run ===
   SHA256 不变
@@ -285,7 +285,7 @@ $ dfx pull <文本> -Asset <原资产>          # dry run
 $ dfx pull <文本> -Asset <原资产> -Apply
   pull: wrote 1 literal(s) into '…NS_Effects1_Mesh.dfs'. The file it was is at
         'C:/CrossingVoid/Saved/DreamFX/Pull/Saved/pull-probe/NS_Effects1_Mesh.dfs'.
-  NS_Effects1_Mesh.dfs(106,27): info DFX7105: pull: Sprite_Atlas_Size.MeshYaw: 0.0 -> -90.0
+  NS_Effects1_Mesh.dfs(106,27): info DFX7116: pull: Sprite_Atlas_Size.MeshYaw: 0.0 -> -90.0
   === DreamFX pull: 14 value(s) compared, 1 written, 5 not declared, 1 not writable, 0 stack(s) not addressed | applied ===
 
   整文件 Compare-Object（备份 vs 写回后）：只有一行
@@ -417,7 +417,7 @@ $ Build.bat CrossingVoidEditor Win64 Development -MaxParallelActions=2 -WaitMute
 11. **基线是位置寻址的，对重新排序的渲染器不成立**（§4c）。文本里调整渲染器顺序之后，那一轮的
     渲染器属性会被当脏值处理（会写，只是可能多写）。
 12. **结构编辑之后的闭环是「重建不掉 fact」，不是「渲染器重编译后完全一致」。** 语料里的断言是
-    「同一个资产原地重建，没有任何 fact 的地址还在却消失了」（那正是安全闸 `DFX8017` 拦的东西），
+    「同一个资产原地重建，没有任何 fact 的地址还在却消失了」（那正是安全闸 `DFX8018` 拦的东西），
     而且它把三种结果分开报：地址还在（失败）、地址整块没了（文本自己的决定，闸的规则 1 也忽略）、
     地址没了但同一个值在**去掉脚本标签的同一地址**下还在（重建把两份相同的常量合成一份）。
     第三种只报不判失败 —— 它没销毁任何东西，而安全闸不区分这一种；这是两个东西**唯一**已知的口径差。
@@ -434,7 +434,7 @@ $ Build.bat CrossingVoidEditor Win64 Development -MaxParallelActions=2 -WaitMute
 |---|---|---|
 | 1 | `pull T1`（干跑，默认不开 `-Structure`） | `warning DFX7113: pull: Motes.ParticleUpdate: the asset has ScaleColor that the text does not ... so -Structure writes that difference ... Nothing in this stack was addressed.` ＋ `info DFX7107: ... (4 compared, 6 not declared, 0 not writable, 0 withheld). No bytes written.`；**T1 的 SHA256 前后不变** |
 | 2 | `pull T1 -Structure -Apply` | `info DFX7112: pull: Motes.ParticleUpdate: +ScaleColor:             ScaleColor@1.1(ScaleRGB = (1.0, 1.0, 1.0), ScaleAlpha = 1.0);`；`=== DreamFX pull: 5 compared, 0 written, 12 not declared, 0 not writable, 0 withheld, 0 stack(s) not addressed, 1 line(s) added, 0 removed, 0 structure(s) refused \| applied \| structure \| baseline recorded ===`；行数 34 → 35，`Compare-Object` **只有这一行** |
-| 3 | `build T1 -Force`（结构编辑之后） | `=== DreamFX done: 1 built, 0 up to date, 0 failed \| 0 error(s), 1 warning(s) ===`，exit 0；**没有任何 `build safety` 行、没有 `DFX8017`**，`Saved/DreamFX/BuildSafety/` **没有被创建**（那个目录只在闸报事时才写）。唯一的 warning 是 `DFX7102`（SpawnRate 没有上限），编辑前那份 fixture 也一样 |
+| 3 | `build T1 -Force`（结构编辑之后） | `=== DreamFX done: 1 built, 0 up to date, 0 failed \| 0 error(s), 1 warning(s) ===`，exit 0；**没有任何 `build safety` 行、没有 `DFX8018`**，`Saved/DreamFX/BuildSafety/` **没有被创建**（那个目录只在闸报事时才写）。唯一的 warning 是 `DFX7102`（SpawnRate 没有上限），编辑前那份 fixture 也一样 |
 | 4 | `pull T1 -Apply`（文本已经和资产一致） | `info DFX7107: ... (7 compared, 12 not declared, 0 not writable, 0 withheld). No bytes written.`；**SHA256 相同、mtime 相同**（`32072A08…` / `16:39:41`），基线文件写好 |
 | 5 | 手工把文本里 `WarmupTime = 0.5` 改成 `0.9`，再 `pull T1 -Apply` | `info DFX7115: pull: Settings.WarmupTime differs from this text but the asset has not moved since the last apply, so the text's value stands.` ＋ `(7 compared, 12 not declared, 0 not writable, 1 withheld)`；**SHA256 不变**，文件里仍是 `WarmupTime = 0.9;`（文本赢） |
 | 6 | `lint -All` | `0 error(s), 91 warning(s)`，exit 0（91 是全树既有的 lint 警告；两条来自本轮探针文件） |

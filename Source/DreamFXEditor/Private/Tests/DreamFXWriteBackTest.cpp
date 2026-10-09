@@ -278,7 +278,7 @@ namespace UE::DreamFX::Editor::WriteBackTests
 	 * Rebuilds the SAME asset from the text a pull just produced, and reports what the rebuild lost.
 	 *
 	 * This is the acceptance's closure condition written as an assertion. The build safety gate
-	 * (DFX8017) refuses a save when a rebuild drops a fact the text cannot express, so "no fact
+	 * (DFX8018) refuses a save when a rebuild drops a fact the text cannot express, so "no fact
 	 * disappeared that the rebuild does not still carry" is very nearly "the gate would not have
 	 * fired".
 	 *
@@ -722,7 +722,7 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 		//
 		// Comparing two different objects would answer a different question. `DescribeSystemFacts` reads
 		// an asset's own state, and the state that matters is the one a following `dfx build` leaves
-		// behind: that is what the build safety gate (DFX8017) looks at, one capture on either side of
+		// behind: that is what the build safety gate (DFX8018) looks at, one capture on either side of
 		// its own rebuild. So this is that comparison, made directly.
 		const FRebuildLosses Losses = RebuildInPlaceAndCheckForLosses(*this, Parameters, Path, NewText,
 			SourceText, System, TEXT("the rebuild pull's text asked for"));

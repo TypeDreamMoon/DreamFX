@@ -8,6 +8,8 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/Paths.h"
+#include "Misc/CoreDelegates.h"
+#include "Misc/EngineVersionComparison.h"
 #include "NiagaraSystem.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/UObjectGlobals.h"
@@ -21,6 +23,16 @@ namespace UE::DreamFX::Editor
 	{
 		FDelegateHandle GAssetOpenedHandle;
 		FDelegateHandle GObjectModifiedHandle;
+		FDelegateHandle GPostEngineInitHandle;
+
+		FSimpleMulticastDelegate& PostEngineInitDelegate()
+		{
+#if UE_VERSION_OLDER_THAN(5, 8, 0)
+			return FCoreDelegates::OnPostEngineInit;
+#else
+			return FCoreDelegates::GetOnPostEngineInit();
+#endif
+		}
 
 		/**
 		 * Assets already warned about this session.
@@ -50,9 +62,9 @@ namespace UE::DreamFX::Editor
 			// The source path is the actionable part of the message, so make it one click away.
 			// Through the same launch chain the menus use (plan-v3 E5): the OS default handler for a
 			// .dfs is whatever happens to be registered, which on most machines is nothing at all.
-			if (!Stamp.SourceFullPath.IsEmpty())
+			FString SourcePath;
+			if (FProvenance::ResolveSourceFile(Stamp, SourcePath))
 			{
-				const FString SourcePath = Stamp.SourceFullPath;
 				Info.HyperlinkText = LOCTEXT("DreamFXOpenSource", "Open source file");
 				Info.Hyperlink = FSimpleDelegate::CreateLambda([SourcePath]()
 				{
@@ -110,21 +122,31 @@ namespace UE::DreamFX::Editor
 
 	void FGeneratedAssetGuard::Register()
 	{
-		if (GEditor == nullptr)
+		if (GObjectModifiedHandle.IsValid())
 		{
 			return;
 		}
-
-		if (UAssetEditorSubsystem* Subsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+		UAssetEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
+		if (Subsystem == nullptr)
 		{
-			GAssetOpenedHandle = Subsystem->OnAssetOpenedInEditor().AddStatic(&OnAssetOpened);
+			// The module's Default loading phase precedes creation of GEditor.
+			if (!GPostEngineInitHandle.IsValid())
+			{
+				GPostEngineInitHandle = PostEngineInitDelegate().AddStatic(&FGeneratedAssetGuard::Register);
+			}
+			return;
 		}
 
+		PostEngineInitDelegate().Remove(GPostEngineInitHandle);
+		GPostEngineInitHandle.Reset();
+		GAssetOpenedHandle = Subsystem->OnAssetOpenedInEditor().AddStatic(&OnAssetOpened);
 		GObjectModifiedHandle = FCoreUObjectDelegates::OnObjectModified.AddStatic(&OnObjectModified);
 	}
 
 	void FGeneratedAssetGuard::Unregister()
 	{
+		PostEngineInitDelegate().Remove(GPostEngineInitHandle);
+		GPostEngineInitHandle.Reset();
 		if (GEditor != nullptr)
 		{
 			if (UAssetEditorSubsystem* Subsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
@@ -134,6 +156,8 @@ namespace UE::DreamFX::Editor
 		}
 
 		FCoreUObjectDelegates::OnObjectModified.Remove(GObjectModifiedHandle);
+		GAssetOpenedHandle.Reset();
+		GObjectModifiedHandle.Reset();
 		GWarnedAssets.Reset();
 	}
 }

@@ -14,9 +14,18 @@ namespace UE::DreamFX::Editor
 	{
 		/** Source path relative to its DFX root, e.g. "Systems/NS_ToonHitSpark.dfs". */
 		FString SourceRelativePath;
-		/** Absolute source path, for diagnostics and for opening the file from the editor guardrail. */
+		/**
+		 * The DFX root that owned the source: `Game` for the project root, `Plugin.<Name>` for a plugin
+		 * root, empty when the source lived outside every root. Together with SourceRelativePath this is
+		 * the portable location: the same checkout at another absolute path names the same source.
+		 */
+		FString SourceRoot;
+		/**
+		 * Absolute source path on the machine that built the asset. A hint for diagnostics and for
+		 * opening the file; resolve through FProvenance::ResolveSourceFile rather than reading it raw.
+		 */
 		FString SourceFullPath;
-		/** Hash of the source text at generation time. Equal hash means the rebuild can be skipped. */
+		/** Hash of source text and source dependencies at generation time. */
 		FString SourceHash;
 		/** Generator version. Bumping it forces every asset to regenerate on the next build. */
 		FString GeneratorVersion;
@@ -50,11 +59,33 @@ namespace UE::DreamFX::Editor
 		/** Bump when the generator's output changes in a way that must invalidate cached assets. */
 		static const TCHAR* GetGeneratorVersion();
 
+		/** Stable across checkout locations and dependency discovery order; no dependencies preserves the raw hash. */
+		static FString HashWithSourceDependencies(const FString& SourceHash, const TMap<FString, FString>& Dependencies);
+
 		static void Write(UObject* Asset, const FProvenanceStamp& Stamp);
 		static bool Read(const UObject* Asset, FProvenanceStamp& OutStamp);
 		static void Clear(UObject* Asset);
 
 		/** True when the asset was generated from this source and the source has not changed since. */
 		static bool IsUpToDate(const UObject* Asset, const FString& SourceHash);
+
+		/** Fills SourceFullPath, SourceRoot and SourceRelativePath for a source file. */
+		static void SetSourceLocation(FProvenanceStamp& Stamp, const FString& SourceFilePath);
+
+		/**
+		 * A moved or renamed source must refresh the stored location even when its text is unchanged.
+		 *
+		 * Compared by root and root-relative path, not by absolute path: another checkout of the same
+		 * tree (a teammate, CI, the test host) names the same source, and treating it as moved would
+		 * make every build on every machine rebuild and resave every asset. Sources outside any DFX
+		 * root have no portable location and fall back to the absolute path.
+		 */
+		static bool IsSourceLocationCurrent(const UObject* Asset, const FString& SourceFilePath);
+
+		/**
+		 * The stamped source on this checkout: the recorded absolute path when it exists, otherwise the
+		 * same root-relative path under the current root of the same name.
+		 */
+		static bool ResolveSourceFile(const FProvenanceStamp& Stamp, FString& OutFile);
 	};
 }

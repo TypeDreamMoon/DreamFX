@@ -54,6 +54,8 @@ The merge granularity is the *block*, not the module:
 | --- | --- |
 | `Settings` | per key — names are unambiguous, so an override replaces just that setting |
 | each stack | **whole block replaced** if the host declares it; otherwise the `.dfe`'s is kept |
+| named `Stage` stacks | matched by name; an override replaces that stage in place, and new names append in declaration order |
+| `Defaults` | matched by full parameter name; overrides replace values in place, new names append, and unmentioned defaults remain. An override must keep the base parameter's type (DFX3048) |
 | renderers | **all or nothing** — declaring any renderer replaces every one |
 
 Stacks are replaced wholesale because per-module merging needs a module identity the language does not
@@ -62,6 +64,9 @@ and guessing wrong silently reorders somebody's effect.
 
 Renderers are all-or-nothing for the same reason from the other side: they are addressed by
 declaration order, so replacing one of three would silently renumber the other two.
+
+Build and verify include the contents of referenced `.dfe` files in the source fingerprint. Editing a
+base invalidates every host that uses it even when the host text has not changed.
 
 ## User parameters
 

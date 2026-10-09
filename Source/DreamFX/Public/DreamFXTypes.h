@@ -182,6 +182,7 @@ namespace UE::DreamFX
 		FString Name;
 		FValuePtr Value;
 		FSourceLocation Location;
+		FString SourceFile;
 	};
 
 	/**
@@ -199,6 +200,7 @@ namespace UE::DreamFX
 		FValuePtr DefaultValue;
 		TArray<FAttribute> Attributes;
 		FSourceLocation Location;
+		FString SourceFile;
 
 		DREAMFX_API const FAttribute* FindAttribute(const TCHAR* Key) const;
 		DREAMFX_API bool HasAttribute(const TCHAR* Key) const;
@@ -216,6 +218,7 @@ namespace UE::DreamFX
 	{
 		EStatementKind Kind = EStatementKind::ModuleCall;
 		FSourceLocation Location;
+		FString SourceFile;
 
 		/** Module name or path for ModuleCall; fully qualified assignment target otherwise. */
 		FString Name;
@@ -241,7 +244,8 @@ namespace UE::DreamFX
 		 * without losing its inputs. Without a spelling for it the decompiler had to drop the flag,
 		 * and a re-import silently switched six third-party modules back on.
 		 *
-		 * ModuleCall statements only.
+		 * Also applies to assignments. Consecutive assignments fold only while their enabled
+		 * state agrees, so a disabled assignment never disables an active neighbour.
 		 */
 		bool bDisabled = false;
 
@@ -310,6 +314,7 @@ namespace UE::DreamFX
 		/** Reserved `MaterialParam X = V;` entries (L8). Parsed, rejected at lowering in v1. */
 		TArray<FPropertyEntry> MaterialParameters;
 		FSourceLocation Location;
+		FString SourceFile;
 	};
 
 	/**
@@ -335,16 +340,35 @@ namespace UE::DreamFX
 		TOptional<int32> MinSpawnNumber;
 	};
 
+	/** An integer fallback and an optional parameter overriding it, as stored by Niagara. */
+	struct FStageIntegerBinding
+	{
+		TOptional<int32> Value;
+		FString Binding;
+	};
+
+	/** Generic stage execution controls, separate from its stack and identity. */
+	struct FSimulationStageExecutionSettings
+	{
+		TOptional<bool> DisablePartialParticleUpdate;
+		TOptional<bool> ParticleIterationStateEnabled;
+		FString ParticleIterationStateBinding;
+		TOptional<FIntPoint> ParticleIterationStateRange;
+		TOptional<bool> GpuDispatchForceLinear;
+		TOptional<bool> OverrideGpuDispatchNumThreads;
+		FString DirectDispatchType;
+		FString DirectDispatchElementType;
+		FStageIntegerBinding ElementCountX;
+		FStageIntegerBinding ElementCountY;
+		FStageIntegerBinding ElementCountZ;
+		FStageIntegerBinding OverrideGpuDispatchNumThreadsX;
+		FStageIntegerBinding OverrideGpuDispatchNumThreadsY;
+		FStageIntegerBinding OverrideGpuDispatchNumThreadsZ;
+	};
+
 	/**
-	 * The arguments of a `Stage(...)` block. Only meaningful on a stack whose Kind is
-	 * SimulationStage.
-	 *
-	 * Name is the stage's display name and its rebuild identity (usage ids are guids no rebuild can
-	 * reproduce; the name is the spelling that survives the original/mirror boundary). Everything
-	 * else defaults to the engine's own defaults on the generic stage class, and an unset optional
-	 * keeps them -- the census (stages-census-2026-08-12) is what decided which knobs earn a
-	 * spelling: iteration source, the bound data interface, the iteration count and the enabled
-	 * flag are all in real content; the rest arrives when an asset-level diff shows a non-default.
+	 * Arguments of a Stage block. Name identifies the stage across rebuilds; omitted configuration
+	 * starts from a fresh generic stage's defaults, including when the existing stage is reused.
 	 */
 	struct FSimulationStageSpec
 	{
@@ -379,6 +403,7 @@ namespace UE::DreamFX
 		 */
 		FString EnabledBinding;
 		FString NumIterationsBinding;
+		FSimulationStageExecutionSettings Execution;
 	};
 
 	struct FStack
@@ -419,6 +444,12 @@ namespace UE::DreamFX
 		/** `Emitter Flash from "DFX/Emitters/E_MoonFlashCard"` -- copy semantics in v1 (R3). */
 		FString FromPath;
 		FSourceLocation FromLocation;
+		/** Origin of FromPath, preserved when a system inherits this emitter from another .dfs. */
+		FString FromSourceFile;
+		/** Native Niagara parent asset; distinct from source-file copy/merge. */
+		FString NativeParentPath;
+		FString NativeParentVersion;
+		FSourceLocation NativeParentLocation;
 
 		TArray<FPropertyEntry> Settings;
 
@@ -459,6 +490,9 @@ namespace UE::DreamFX
 		/** `Root="Plugin.MoonToon"` -- empty means the project content root. */
 		FString Root;
 		FSourceLocation HeaderLocation;
+		/** Optional .dfs source parent, resolved relative to this source before source-root lookup. */
+		FString ParentPath;
+		FSourceLocation ParentLocation;
 
 		/** Absolute path of the file this was parsed from. */
 		FString SourceFilePath;

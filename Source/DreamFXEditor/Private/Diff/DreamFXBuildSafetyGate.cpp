@@ -526,13 +526,13 @@ namespace UE::DreamFX::Editor
 
 		if (!bForceFromCommandLine)
 		{
-			Diagnostics.Error(TEXT("DFX8017"), Location, FString::Printf(
+			Diagnostics.Error(TEXT("DFX8018"), Location, FString::Printf(
 				TEXT("'%s' was not saved: rebuilding it would drop %d fact(s) this source cannot express, and a save would destroy them. They are listed above, and the asset still holds every one of them. -Force writes anyway; full lists in %s"),
 				*AssetPath, Reported.Num(), *DumpPattern));
 			return false;
 		}
 
-		Diagnostics.Warning(TEXT("DFX8017"), Location, FString::Printf(
+		Diagnostics.Warning(TEXT("DFX8018"), Location, FString::Printf(
 			TEXT("'%s' was saved with -Force after dropping %d fact(s) this source cannot express -- the asset no longer holds them. They are listed above; full lists in %s"),
 			*AssetPath, Reported.Num(), *DumpPattern));
 		return true;

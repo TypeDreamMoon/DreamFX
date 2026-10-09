@@ -5,8 +5,11 @@
 #include "EdGraphSchema_Niagara.h"
 #include "ViewModels/Stack/NiagaraParameterHandle.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
+#include "DataHierarchyViewModelBase.h"
 #include "NiagaraCommon.h"
 #include "NiagaraEditorUtilities.h"
+#include "NiagaraSystemEditorData.h"
+#include "ViewModels/HierarchyEditor/NiagaraUserParametersHierarchyViewModel.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraDataInterfaceCurveBase.h"
 #include "NiagaraEmitter.h"
@@ -15,6 +18,7 @@
 #include "NiagaraExternalSystemEditorUtilities.h"
 #include "NiagaraGraph.h"
 #include "NiagaraNodeFunctionCall.h"
+#include "NiagaraNodeOutput.h"
 #include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
 #include "NiagaraScriptSource.h"
@@ -32,9 +36,11 @@
 #include "JsonObjectConverter.h"
 #include "Misc/EngineVersionComparison.h"
 #include "Misc/PackageName.h"
+#include "Misc/ScopeExit.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/Package.h"
+#include "UObject/GCObjectScopeGuard.h"
 #include "UObject/SavePackage.h"
 #include "UObject/UObjectArray.h"
 #include "UObject/UObjectIterator.h"
@@ -1193,6 +1199,22 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
+		// Unsaved builds and previews also own their asset identity. A second build must edit
+		// that object instead of constructing another UObject with the same package/name.
+		// /Temp callers own probe lifetimes and may intentionally recreate their fixed names.
+		if (UPackage* Package = !PackageName.StartsWith(TEXT("/Temp/")) ? FindPackage(nullptr, *PackageName) : nullptr)
+		{
+			if (UNiagaraSystem* Existing = FindObject<UNiagaraSystem>(Package, *AssetName))
+			{
+				return Existing;
+			}
+			if (FindObject<UObject>(Package, *AssetName) != nullptr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("'%s' already names a non-system object in memory."), *PackageName));
+				return nullptr;
+			}
+		}
+
 		FNiagaraExternalEditContext Context;
 		UNiagaraSystem* System = UNiagaraExternalEditUtilities::CreateNiagaraSystem(AssetName, PackagePath, nullptr, Context);
 		Drain(Context, OutErrors);
@@ -1487,6 +1509,39 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::ClearScriptStack(const FStackAddress& ScriptAddress, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("ClearScriptStack"));
+		if (ScriptAddress.System && !ScriptAddress.EmitterName.IsNone())
+		{
+			for (FNiagaraEmitterHandle& Handle : ScriptAddress.System->GetEmitterHandles())
+			{
+				if (Handle.GetName() != ScriptAddress.EmitterName) { continue; }
+				FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData();
+				if (Data && Data->GetParent().Emitter)
+				{
+					// A declared DSL stack replaces the complete inherited block. Stock Niagara's
+					// UI deletion guard prohibits removing inherited nodes. Clear against a temporary
+					// detached view, then restore BOTH parent records so Niagara can merge subsequent
+					// parent edits and recognize these nodes as local removals.
+					DropSharedContext(ScriptAddress.System);
+					const FVersionedNiagaraEmitter Parent = Data->VersionedParent;
+					const FVersionedNiagaraEmitter Snapshot = Data->VersionedParentAtLastMerge;
+					const bool bWasEnabled = Handle.GetIsEnabled();
+					FGCObjectScopeGuard ParentGuard(Parent.Emitter);
+					FGCObjectScopeGuard SnapshotGuard(Snapshot.Emitter);
+					Data->VersionedParent = FVersionedNiagaraEmitter();
+					Data->VersionedParentAtLastMerge = FVersionedNiagaraEmitter();
+					Handle.SetIsEnabled(true, *ScriptAddress.System, false);
+					ON_SCOPE_EXIT
+					{
+						DropSharedContext(ScriptAddress.System);
+						Data->VersionedParent = Parent;
+						Data->VersionedParentAtLastMerge = Snapshot;
+						Handle.SetIsEnabled(bWasEnabled, *ScriptAddress.System, false);
+					};
+					return ClearScriptStack(ScriptAddress, OutErrors);
+				}
+				break;
+			}
+		}
 
 #if DREAMFX_HAS_NIAGARA_FAST_EDIT
 		// Same classification as RemoveModule: the engine refreshes the group it emptied before
@@ -1518,17 +1573,59 @@ namespace UE::DreamFX::Editor
 #endif
 	}
 
+	namespace
+	{
+		/** Defined further down, next to the other graph lookups. */
+		UNiagaraGraph* GraphForAddress(const FStackAddress& Address);
+
+		bool ReadGraphParameterDefaults(const UNiagaraGraph* Graph, TArray<FParameterDefault>& OutDefaults,
+			TArray<FString>& OutErrors, bool bIncludeFail)
+		{
+			if (Graph == nullptr)
+			{
+				OutErrors.Add(TEXT("Emitter has no parameter graph, so its parameter defaults cannot be read."));
+				return false;
+			}
+			for (const auto& Entry : Graph->GetAllMetaData())
+			{
+				const UNiagaraScriptVariable* Variable = Entry.Value;
+				if (Variable == nullptr || (!bIncludeFail && Variable->DefaultMode == ENiagaraDefaultMode::FailIfPreviouslyNotSet))
+				{
+					continue;
+				}
+				FParameterDefault& Default = OutDefaults.AddDefaulted_GetRef();
+				Default.Variable = Variable->Variable;
+				Default.Mode = FromNiagaraDefaultMode(Variable->DefaultMode);
+				Default.Binding = Variable->DefaultBinding.GetName();
+				if (Default.Mode == FParameterDefault::EMode::Value)
+				{
+					FNiagaraExt_VariableValue Value;
+					Value.Set(Default.Variable.GetType(), Variable->GetDefaultValueVariant());
+					FromVariableValue(Value, Default.Value);
+				}
+			}
+			return true;
+		}
+	}
+
+	bool FNiagaraAdapter::GetParameterDefaults(const UNiagaraEmitter* Emitter, const FGuid& Version,
+		TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors, bool bIncludeFail)
+	{
+		const FVersionedNiagaraEmitterData* Data = Emitter ? Emitter->GetEmitterData(Version) : nullptr;
+		const UNiagaraScriptSource* Source = Data ? Cast<UNiagaraScriptSource>(Data->GraphSource) : nullptr;
+		return ReadGraphParameterDefaults(Source ? Source->NodeGraph.Get() : nullptr, OutDefaults, OutErrors, bIncludeFail);
+	}
+
 	bool FNiagaraAdapter::GetParameterDefaults(const FStackAddress& EmitterAddress,
-		TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors)
+		TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors, bool bIncludeFail)
 	{
 		FOpTimer OpTimer(TEXT("read: GetParameterDefaults"));
 
 #if !DREAMFX_HAS_NIAGARA_FAST_EDIT
-		// Stock engine: no reader for a graph parameter's default. Reporting none is honest rather
-		// than merely convenient -- the export then carries no Defaults block, which matches what the
-		// writer below can reproduce. An asset authored on MoonEngine WITH defaults round-trips
-		// lossily here, and that is the documented limit of the stock-engine path.
-		return true;
+		// Script-variable metadata is public even on stock engines. Read without creating a view
+		// model or refreshing the graph: native inheritance needs the untouched parent defaults
+		// before child link writes change their modes.
+		return ReadGraphParameterDefaults(GraphForAddress(EmitterAddress), OutDefaults, OutErrors, bIncludeFail);
 #else
 		FEditContext ContextHolder(EmitterAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
@@ -1547,14 +1644,26 @@ namespace UE::DreamFX::Editor
 				FromVariableValue(Entry.Value, Out.Value);
 			}
 		}
+		// The fast external reader deliberately omits Fail for export. Native snapshots retain
+		// those modes too: a new child link must not silently make a required prior write optional.
+		if (bIncludeFail)
+		{
+			if (const UNiagaraGraph* Graph = GraphForAddress(EmitterAddress))
+			{
+				for (const auto& Entry : Graph->GetAllMetaData())
+				{
+					const UNiagaraScriptVariable* Variable = Entry.Value;
+					if (Variable != nullptr && Variable->DefaultMode == ENiagaraDefaultMode::FailIfPreviouslyNotSet)
+					{
+						FParameterDefault& Default = OutDefaults.AddDefaulted_GetRef();
+						Default.Variable = Variable->Variable;
+						Default.Mode = FParameterDefault::EMode::Fail;
+					}
+				}
+			}
+		}
 		return Drain(Context, OutErrors);
 #endif
-	}
-
-	namespace
-	{
-		/** Defined further down, next to the other graph lookups. */
-		UNiagaraGraph* GraphForAddress(const FStackAddress& Address);
 	}
 
 	bool FNiagaraAdapter::SetParameterDefault(const FStackAddress& EmitterAddress,
@@ -1927,6 +2036,143 @@ namespace UE::DreamFX::Editor
 		return true;
 	}
 
+	bool FNiagaraAdapter::SetUserVariableOrganization(UNiagaraSystem* System,
+		const TArray<FUserVariablePlacement>& Placements, TArray<FString>& OutErrors)
+	{
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot organize user variables on a null system."));
+			return false;
+		}
+
+		// Resolve every placement to its script variable before mutating anything, so one
+		// dangling name fails the whole call and leaves the previous arrangement untouched.
+		struct FResolvedPlacement
+		{
+			UNiagaraScriptVariable* Variable = nullptr;
+			FString GroupPath;
+			int32 SortPriority = 0;
+			int32 PlanIndex = 0;
+			int32 GroupOrdinal = 0;
+		};
+		TArray<FResolvedPlacement> Resolved;
+		Resolved.Reserve(Placements.Num());
+
+		for (int32 Index = 0; Index < Placements.Num(); ++Index)
+		{
+			const FUserVariablePlacement& Placement = Placements[Index];
+			const FNiagaraVariable Variable(Placement.Type, Placement.Name);
+			UNiagaraScriptVariable* ScriptVariable =
+				FNiagaraEditorUtilities::UserParameters::GetScriptVariableForUserParameter(Variable, *System);
+			if (ScriptVariable == nullptr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("User parameter '%s' has no script variable to organize."),
+					*Placement.Name.ToString()));
+				return false;
+			}
+			Resolved.Add({ScriptVariable, Placement.GroupPath, Placement.SortPriority, Index});
+		}
+
+		// Two-level order, kept separate on purpose: groups come in plan first-appearance order,
+		// and members come after their group's own members, ordered by SortPriority with plan
+		// order breaking ties. Sorting group and member order in one composite key lets a member's
+		// SortPriority compete with another group's placement, which scrambles the tree.
+		TMap<FString, int32> GroupOrdinals;
+		for (FResolvedPlacement& Placement : Resolved)
+		{
+			Placement.GroupOrdinal = GroupOrdinals.FindOrAdd(Placement.GroupPath, GroupOrdinals.Num());
+		}
+		Resolved.StableSort([](const FResolvedPlacement& Left, const FResolvedPlacement& Right)
+		{
+			if (Left.GroupOrdinal != Right.GroupOrdinal)
+			{
+				return Left.GroupOrdinal < Right.GroupOrdinal;
+			}
+			return Left.SortPriority < Right.SortPriority;
+		});
+
+		UNiagaraSystemEditorData* EditorData = Cast<UNiagaraSystemEditorData>(System->GetEditorData());
+		if (EditorData == nullptr)
+		{
+			OutErrors.Add(TEXT("The system has no editor data to hold a user parameter hierarchy."));
+			return false;
+		}
+
+		UHierarchyRoot* Root = EditorData->UserParameterHierarchy;
+		if (Root == nullptr)
+		{
+			Root = NewObject<UHierarchyRoot>(EditorData, TEXT("UserParameterHierarchy"));
+			EditorData->UserParameterHierarchy = Root;
+		}
+
+		EditorData->Modify();
+		Root->Modify();
+		// The plan is the whole truth about organization, so the tree rebuilds from scratch:
+		// hand-made arrangement in the editor does not survive a rebuild, exactly like every
+		// other property the source owns.
+		Root->EmptyAllData();
+
+		// UNiagaraHierarchyUserParameter carries no exported API in stock 5.8 -- its Initialize
+		// and StaticClass are module-private -- so the leaf node is built through reflection:
+		// look the class up, new it against the root, write its one UPROPERTY reference, and set
+		// the guid identity the panel maps back to the variable. Exactly what the engine's own
+		// Initialize does.
+		UClass* UserParameterItemType = FindFirstObjectSafe<UClass>(TEXT("NiagaraHierarchyUserParameter"));
+		const FObjectProperty* ReferenceProperty = UserParameterItemType
+			? CastField<FObjectProperty>(UserParameterItemType->FindPropertyByName(TEXT("UserParameterScriptVariable")))
+			: nullptr;
+		if (UserParameterItemType == nullptr || ReferenceProperty == nullptr)
+		{
+			OutErrors.Add(TEXT("The engine exposes no UNiagaraHierarchyUserParameter class or its UserParameterScriptVariable property; user parameter groups cannot be written."));
+			return false;
+		}
+
+		auto MakeParameterItem = [&Root, UserParameterItemType, ReferenceProperty](
+			UNiagaraScriptVariable* ScriptVariable) -> UHierarchyElement*
+		{
+			UHierarchyItem* Item = NewObject<UHierarchyItem>(Root, UserParameterItemType, NAME_None);
+			// Container form: Item is the owning object, not the property's memory address --
+			// the plain SetObjectPropertyValue would overwrite the object header.
+			ReferenceProperty->SetObjectPropertyValue_InContainer(Item, ScriptVariable);
+			Item->SetIdentity(FHierarchyElementIdentity({ScriptVariable->Metadata.GetVariableGuid()}, {}));
+			return Item;
+		};
+
+		auto FindOrCreateCategory = [&Root](UHierarchyElement* Parent, const FString& Segment) -> UHierarchyElement*
+		{
+			const FHierarchyElementIdentity Identity(TArray<FGuid>(), {FName(*Segment)});
+			if (UHierarchyElement* Existing = Parent->FindChildWithIdentity(Identity))
+			{
+				return Existing;
+			}
+			UHierarchyCategory* Category = NewObject<UHierarchyCategory>(Root);
+			Category->SetCategoryName(FName(*Segment));
+			Category->SetIdentity(Identity);
+			Parent->GetChildrenMutable().Add(Category);
+			return Category;
+		};
+
+		for (const FResolvedPlacement& Placement : Resolved)
+		{
+			UHierarchyElement* Parent = Root;
+			if (!Placement.GroupPath.IsEmpty())
+			{
+				// Nested groups compose with '|', so a single Group("A|B") attribute and a
+				// Group("A") { Group("B") { ... } } nesting land in the same tree shape.
+				TArray<FString> Segments;
+				Placement.GroupPath.ParseIntoArray(Segments, TEXT("|"));
+				for (FString& Segment : Segments)
+				{
+					Parent = FindOrCreateCategory(Parent, Segment);
+				}
+			}
+
+			Parent->GetChildrenMutable().Add(MakeParameterItem(Placement.Variable));
+		}
+
+		return true;
+	}
+
 	bool FNiagaraAdapter::SetUserDataInterfaceProperties(UNiagaraSystem* System, FName Name,
 		const FNiagaraTypeDefinition& Type, const FString& PropertiesJson, TArray<FString>& OutErrors)
 	{
@@ -2030,6 +2276,55 @@ namespace UE::DreamFX::Editor
 				break;
 			}
 		}
+		return true;
+	}
+
+	bool FNiagaraAdapter::ResetEmitterFromParent(UNiagaraSystem* System, FName EmitterName,
+		UNiagaraEmitter* Parent, const FGuid& ParentVersion, TArray<FString>& OutErrors)
+	{
+		if (!System || (Parent && (!Parent->bIsInheritable || !Parent->FindVersionData(ParentVersion))))
+		{
+			OutErrors.Add(TEXT("Cannot reset an emitter: invalid system or parent version."));
+			return false;
+		}
+		// A view model created for the old instance must not outlive the replacement.
+		DropSharedContext(System);
+		FEpochGuard Epoch(System);
+		System->Modify();
+		const FName ObjectName = MakeUniqueObjectName(System, UNiagaraEmitter::StaticClass(), EmitterName);
+		UNiagaraEmitter* Template = Parent;
+		if (!Parent)
+		{
+			Template = NewObject<UNiagaraEmitter>(GetTransientPackage(), NAME_None, RF_Transactional);
+			UNiagaraEmitterFactoryNew::InitializeEmitter(Template, false);
+		}
+		// Duplicate even a blank template, like Niagara's AddEmitterHandle. PostDuplicate
+		// initializes runtime/stat state that InitializeEmitter alone does not populate.
+		UNiagaraEmitter* Instance = UNiagaraEmitter::CreateWithParentAndOwner(
+			FVersionedNiagaraEmitter(Template, Parent ? ParentVersion : Template->GetExposedVersion().VersionGuid),
+			System, ObjectName, ~(RF_Public | RF_Standalone));
+		if (!Parent) { Instance->GetLatestEmitterData()->RemoveParent(); }
+		Instance->SetUniqueEmitterName(EmitterName.ToString());
+		const FVersionedNiagaraEmitter Versioned(Instance, Instance->GetExposedVersion().VersionGuid);
+		FNiagaraEmitterHandle* Existing = System->GetEmitterHandles().FindByPredicate(
+			[EmitterName](const FNiagaraEmitterHandle& Handle) { return Handle.GetName() == EmitterName; });
+		if (Existing)
+		{
+#if UE_VERSION_OLDER_THAN(5, 8, 0)
+			Existing->GetInstance() = Versioned;
+#else
+			Existing->SetInstance(Versioned);
+#endif
+			Existing->SetEmitterMode(*System, ENiagaraEmitterMode::Standard);
+			Existing->SetIsEnabled(true, *System, false);
+		}
+		else
+		{
+			FNiagaraEmitterHandle Handle(Versioned);
+			System->AddEmitterHandleDirect(Handle);
+		}
+		System->InvalidateCachedData();
+		System->MarkPackageDirty();
 		return true;
 	}
 
@@ -3081,12 +3376,16 @@ namespace UE::DreamFX::Editor
 	{
 		if (System == nullptr)
 		{
-			return true;
+			OutStaleScripts.Add(TEXT("No system to verify"));
+			return false;
 		}
 
 		TArray<TTuple<FString, UNiagaraScript*>> Scripts;
+		TSet<UNiagaraScript*> RequiresCpuByteCode;
 		Scripts.Emplace(TEXT("SystemSpawn"), System->GetSystemSpawnScript());
 		Scripts.Emplace(TEXT("SystemUpdate"), System->GetSystemUpdateScript());
+		RequiresCpuByteCode.Add(System->GetSystemSpawnScript());
+		RequiresCpuByteCode.Add(System->GetSystemUpdateScript());
 		for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
 		{
 			// A disabled emitter's scripts are legitimately left however they were.
@@ -3104,6 +3403,10 @@ namespace UE::DreamFX::Editor
 			for (UNiagaraScript* Script : EmitterScripts)
 			{
 				Scripts.Emplace(Handle.GetName().ToString(), Script);
+				if (Data->SimTarget == ENiagaraSimTarget::CPUSim)
+				{
+					RequiresCpuByteCode.Add(Script);
+				}
 			}
 		}
 
@@ -3113,7 +3416,14 @@ namespace UE::DreamFX::Editor
 			// AreScriptAndSourceSynchronized recomputes the compile id from the live graphs and
 			// compares it to the id the stored VM was compiled under -- the same judgement a compile
 			// request makes, asked after the fact.
-			if (Script != nullptr && !Script->AreScriptAndSourceSynchronized())
+			if (Script == nullptr)
+			{
+				OutStaleScripts.Add(Entry.Get<0>() + TEXT("/missing script"));
+				continue;
+			}
+			const bool bHasExecutable = Script->GetVMExecutableDataCompilationId().IsValid()
+				&& (!RequiresCpuByteCode.Contains(Script) || Script->GetVMExecutableData().HasByteCode());
+			if (!bHasExecutable || !Script->AreScriptAndSourceSynchronized())
 			{
 				OutStaleScripts.Add(FString::Printf(TEXT("%s/%s"), *Entry.Get<0>(), *Script->GetName()));
 			}
@@ -3539,6 +3849,42 @@ namespace UE::DreamFX::Editor
 			{
 				Summary.NumIterationsText = TEXT("<bound>");
 			}
+
+			FSimulationStageExecutionSettings& Execution = Summary.Execution;
+			Execution.DisablePartialParticleUpdate = Generic->bDisablePartialParticleUpdate != 0;
+			Execution.ParticleIterationStateEnabled = Generic->bParticleIterationStateEnabled != 0;
+			Execution.ParticleIterationStateBinding = ReadProtectedName(
+				&Generic->ParticleIterationStateBinding, FNiagaraVariableAttributeBinding::StaticStruct(), TEXT("RootName"));
+			Execution.ParticleIterationStateRange = Generic->ParticleIterationStateRange;
+			Execution.GpuDispatchForceLinear = Generic->bGpuDispatchForceLinear != 0;
+			Execution.OverrideGpuDispatchNumThreads = Generic->bOverrideGpuDispatchNumThreads != 0;
+			if (const UEnum* Dispatch = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraShader.ENiagaraGpuDispatchType")))
+			{
+				Execution.DirectDispatchType = Dispatch->GetNameStringByValue(static_cast<int64>(Generic->DirectDispatchType));
+			}
+			if (const UEnum* Elements = FindObject<UEnum>(nullptr, TEXT("/Script/NiagaraShader.ENiagaraDirectDispatchElementType")))
+			{
+				Execution.DirectDispatchElementType = Elements->GetNameStringByValue(static_cast<int64>(Generic->DirectDispatchElementType));
+			}
+			auto ReadIntegerBinding = [](const FNiagaraParameterBindingWithValue& Binding, FStageIntegerBinding& Out)
+			{
+				Out = FStageIntegerBinding();
+				if (Binding.HasDefaultValueEditorOnly() && Binding.GetDefaultValueEditorOnly().Num() == sizeof(int32))
+				{
+					int32 Value;
+					FMemory::Memcpy(&Value, Binding.GetDefaultValueEditorOnly().GetData(), sizeof(Value));
+					Out.Value = Value;
+				}
+				const FName Name = !Binding.AliasedParameter.GetName().IsNone()
+					? Binding.AliasedParameter.GetName() : Binding.ResolvedParameter.GetName();
+				Out.Binding = Name.IsNone() ? FString() : Name.ToString();
+			};
+			ReadIntegerBinding(Generic->ElementCountX, Execution.ElementCountX);
+			ReadIntegerBinding(Generic->ElementCountY, Execution.ElementCountY);
+			ReadIntegerBinding(Generic->ElementCountZ, Execution.ElementCountZ);
+			ReadIntegerBinding(Generic->OverrideGpuDispatchNumThreadsX, Execution.OverrideGpuDispatchNumThreadsX);
+			ReadIntegerBinding(Generic->OverrideGpuDispatchNumThreadsY, Execution.OverrideGpuDispatchNumThreadsY);
+			ReadIntegerBinding(Generic->OverrideGpuDispatchNumThreadsZ, Execution.OverrideGpuDispatchNumThreadsZ);
 		}
 	}
 
@@ -3809,6 +4155,72 @@ namespace UE::DreamFX::Editor
 			}
 			return OutputNode;
 		}
+
+		/** A declared OnEvent replaces the inherited group, including its graph-only dependencies. */
+		bool RemoveInheritedEventGroup(UNiagaraSystem& System, const FVersionedNiagaraEmitter& Instance,
+			UNiagaraGraph& Graph, TArray<FString>& OutErrors)
+		{
+			FVersionedNiagaraEmitterData* Data = Instance.GetEmitterData();
+			TSet<FGuid> UsageIds;
+			for (const FNiagaraEventScriptProperties& Event : Data->EventHandlerScriptProps)
+			{
+				// The engine removal dereferences every Script. Reject malformed groups before
+				// touching either their properties or graph instead of partially replacing them.
+				if (Event.Script == nullptr || UsageIds.Contains(Event.Script->GetUsageId()))
+				{
+					OutErrors.Add(TEXT("Cannot replace inherited events: the parent group has a missing script or duplicate usage id."));
+					return false;
+				}
+				UsageIds.Add(Event.Script->GetUsageId());
+			}
+
+			auto GatherUpstream = [&Graph](UEdGraphNode* Start, TSet<UEdGraphNode*>& Visited)
+			{
+				TArray<UEdGraphNode*> Pending = { Start };
+				while (!Pending.IsEmpty())
+				{
+					UEdGraphNode* Node = Pending.Pop(EAllowShrinking::No);
+					if (Node == nullptr || Node->GetGraph() != &Graph || Visited.Contains(Node)) { continue; }
+					Visited.Add(Node);
+					for (const UEdGraphPin* Pin : Node->Pins)
+					{
+						if (Pin == nullptr || Pin->Direction != EGPD_Input) { continue; }
+						for (const UEdGraphPin* Link : Pin->LinkedTo)
+						{
+							if (Link != nullptr) { Pending.Add(Link->GetOwningNode()); }
+						}
+					}
+				}
+			};
+			TSet<UEdGraphNode*> EventNodes;
+			for (UEdGraphNode* Node : Graph.Nodes)
+			{
+				if (const UNiagaraNodeOutput* Output = Cast<UNiagaraNodeOutput>(Node);
+					Output != nullptr && Output->GetUsage() == ENiagaraScriptUsage::ParticleEventScript)
+				{
+					GatherUpstream(Node, EventNodes);
+				}
+			}
+			// A parameter input or dynamic input graph can feed more than one output. Keep any
+			// event dependency still referenced by a node outside the group being replaced.
+			TSet<UEdGraphNode*> RetainedNodes;
+			for (UEdGraphNode* Node : Graph.Nodes)
+			{
+				if (!EventNodes.Contains(Node)) { GatherUpstream(Node, RetainedNodes); }
+			}
+
+			DropSharedContext(&System);
+			Graph.Modify();
+			for (const FGuid& UsageId : UsageIds)
+			{
+				Instance.Emitter->RemoveEventHandlerByUsageId(UsageId, Instance.Version);
+			}
+			for (UEdGraphNode* Node : EventNodes)
+			{
+				if (!RetainedNodes.Contains(Node)) { Graph.RemoveNode(Node); }
+			}
+			return true;
+		}
 	}
 
 	bool FNiagaraAdapter::AddEventHandler(const FStackAddress& EmitterAddress,
@@ -3866,15 +4278,23 @@ namespace UE::DreamFX::Editor
 		System->Modify();
 		Emitter->Modify();
 
-		// Regeneration: one zero-id handler at most, so a rebuild lands on the same identity instead
-		// of accreting one handler per build. The engine's removal derefs Script unchecked, hence the
-		// guard on ours being the one to remove.
-		for (const FNiagaraEventScriptProperties& Existing : Data->EventHandlerScriptProps)
+		if (Data->GetParent().Emitter != nullptr)
 		{
-			if (Existing.Script != nullptr && Existing.Script->GetUsageId() == FGuid())
+			// Native handlers normally have nonzero ids, and there can be several. Keeping them
+			// while adding the DSL's zero-id handler would execute both parent and child groups.
+			if (!RemoveInheritedEventGroup(*System, Instance, *Graph, OutErrors)) { return false; }
+		}
+		else
+		{
+			// Ordinary regeneration keeps the zero-id output addressable for the caller's stack
+			// clear. The engine removal dereferences Script unchecked, so guard the match.
+			for (const FNiagaraEventScriptProperties& Existing : Data->EventHandlerScriptProps)
 			{
-				Emitter->RemoveEventHandlerByUsageId(FGuid(), Instance.Version);
-				break;
+				if (Existing.Script != nullptr && Existing.Script->GetUsageId() == FGuid())
+				{
+					Emitter->RemoveEventHandlerByUsageId(FGuid(), Instance.Version);
+					break;
+				}
 			}
 		}
 
@@ -4233,6 +4653,26 @@ namespace UE::DreamFX::Editor
 		// The configuration lands here, after the stack: the data interface binding names a graph
 		// parameter the stack writes are what create, so resolving its type any earlier reads a
 		// graph that does not hold it yet.
+		// Reused stages start from the same authored defaults as new stages. Otherwise removing
+		// a binding or dispatch option from source leaves its previous value on the asset.
+		UNiagaraSimulationStageGeneric* Fresh = NewObject<UNiagaraSimulationStageGeneric>(GetTransientPackage());
+		static const FName AuthoredProperties[] = {
+			TEXT("bEnabled"), TEXT("EnabledBinding"), TEXT("IterationSource"), TEXT("NumIterations"),
+			TEXT("ExecuteBehavior"), TEXT("DataInterface"), TEXT("bDisablePartialParticleUpdate"),
+			TEXT("bParticleIterationStateEnabled"), TEXT("ParticleIterationStateBinding"), TEXT("ParticleIterationStateRange"),
+			TEXT("bGpuDispatchForceLinear"), TEXT("bOverrideGpuDispatchNumThreads"),
+			TEXT("OverrideGpuDispatchNumThreadsX"), TEXT("OverrideGpuDispatchNumThreadsY"), TEXT("OverrideGpuDispatchNumThreadsZ"),
+			TEXT("DirectDispatchType"), TEXT("DirectDispatchElementType"),
+			TEXT("ElementCountX"), TEXT("ElementCountY"), TEXT("ElementCountZ")
+		};
+		Stage->Modify();
+		for (FName PropertyName : AuthoredProperties)
+		{
+			if (const FProperty* Property = FindFProperty<FProperty>(Stage->GetClass(), PropertyName))
+			{
+				Property->CopyCompleteValue_InContainer(Stage, Fresh);
+			}
+		}
 		if (Spec.Enabled.IsSet())
 		{
 			Stage->bEnabled = Spec.Enabled.GetValue() ? 1 : 0;
@@ -4345,6 +4785,93 @@ namespace UE::DreamFX::Editor
 			Stage->EnabledBinding.SetValue(FName(*Spec.EnabledBinding), Instance.ToBase(),
 				ENiagaraRendererSourceDataMode::Emitter);
 #endif
+		}
+
+		const FSimulationStageExecutionSettings& Execution = Spec.Execution;
+		if (Execution.DisablePartialParticleUpdate.IsSet())
+		{
+			Stage->bDisablePartialParticleUpdate = Execution.DisablePartialParticleUpdate.GetValue();
+		}
+		if (Execution.ParticleIterationStateEnabled.IsSet())
+		{
+			Stage->bParticleIterationStateEnabled = Execution.ParticleIterationStateEnabled.GetValue();
+		}
+		if (Execution.ParticleIterationStateRange.IsSet())
+		{
+			Stage->ParticleIterationStateRange = Execution.ParticleIterationStateRange.GetValue();
+		}
+		if (!Execution.ParticleIterationStateBinding.IsEmpty())
+		{
+#if UE_VERSION_OLDER_THAN(5, 8, 0)
+			Stage->ParticleIterationStateBinding.SetValue(FName(*Execution.ParticleIterationStateBinding), Instance,
+				ENiagaraRendererSourceDataMode::Particles);
+#else
+			Stage->ParticleIterationStateBinding.SetValue(FName(*Execution.ParticleIterationStateBinding), Instance.ToBase(),
+				ENiagaraRendererSourceDataMode::Particles);
+#endif
+		}
+		if (Execution.GpuDispatchForceLinear.IsSet())
+		{
+			Stage->bGpuDispatchForceLinear = Execution.GpuDispatchForceLinear.GetValue();
+		}
+		if (Execution.OverrideGpuDispatchNumThreads.IsSet())
+		{
+			Stage->bOverrideGpuDispatchNumThreads = Execution.OverrideGpuDispatchNumThreads.GetValue();
+		}
+		auto SetEnum = [&OutErrors](const TCHAR* EnumPath, const FString& Name, auto& Target)
+		{
+			if (Name.IsEmpty()) { return true; }
+			const UEnum* Enum = FindObject<UEnum>(nullptr, EnumPath);
+			const int64 Value = Enum != nullptr ? Enum->GetValueByNameString(Name) : INDEX_NONE;
+			if (Value == INDEX_NONE)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Unknown stage enum entry '%s' for %s."), *Name, EnumPath));
+				return false;
+			}
+			using TEnum = typename TRemoveReference<decltype(Target)>::Type;
+			Target = static_cast<TEnum>(Value);
+			return true;
+		};
+		if (!SetEnum(TEXT("/Script/NiagaraShader.ENiagaraGpuDispatchType"), Execution.DirectDispatchType, Stage->DirectDispatchType)
+			|| !SetEnum(TEXT("/Script/NiagaraShader.ENiagaraDirectDispatchElementType"), Execution.DirectDispatchElementType, Stage->DirectDispatchElementType))
+		{
+			return false;
+		}
+		auto SetIntegerBinding = [&Instance, &OutErrors](const FStageIntegerBinding& Source, FNiagaraParameterBindingWithValue& Target)
+		{
+			if (Source.Value.IsSet())
+			{
+				const int32 Value = Source.Value.GetValue();
+				if (!Target.HasDefaultValueEditorOnly() || Target.GetDefaultValueEditorOnly().Num() != sizeof(int32))
+				{
+					OutErrors.Add(TEXT("Stage dispatch count is not backed by an int32 value."));
+					return false;
+				}
+				Target.SetDefaultValueEditorOnly(MakeArrayView(reinterpret_cast<const uint8*>(&Value), sizeof(Value)));
+			}
+			if (!Source.Binding.IsEmpty())
+			{
+				FString Resolved = Source.Binding;
+				if (Resolved.StartsWith(TEXT("Emitter.")))
+				{
+					Resolved = Instance.Emitter->GetUniqueEmitterName() + Resolved.RightChop(FCString::Strlen(TEXT("Emitter")));
+				}
+				// Thread-group sizes require static int bindings; element counts use ordinary int.
+				// Preserve the type supplied by this field's fresh stage default above.
+				const FNiagaraTypeDefinition Type = Target.GetDefaultAliasedParameter().GetType();
+				Target.AliasedParameter = FNiagaraVariableBase(Type, FName(*Source.Binding));
+				Target.ResolvedParameter = FNiagaraVariableBase(Type, FName(*Resolved));
+			}
+			return true;
+		};
+		if (!SetIntegerBinding(Execution.ElementCountX, Stage->ElementCountX)
+			|| !SetIntegerBinding(Execution.ElementCountY, Stage->ElementCountY)
+			|| !SetIntegerBinding(Execution.ElementCountZ, Stage->ElementCountZ)
+			|| !SetIntegerBinding(Execution.OverrideGpuDispatchNumThreadsX, Stage->OverrideGpuDispatchNumThreadsX)
+			|| !SetIntegerBinding(Execution.OverrideGpuDispatchNumThreadsY, Stage->OverrideGpuDispatchNumThreadsY)
+			|| !SetIntegerBinding(Execution.OverrideGpuDispatchNumThreadsZ, Stage->OverrideGpuDispatchNumThreadsZ))
+		{
+			return false;
 		}
 
 		// The end of the time slice: the stage moves to the engine's own id convention (its merge
@@ -4494,6 +5021,7 @@ namespace UE::DreamFX::Editor
 		FCompileStateInfo& OutState, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("CompileAndWait"));
+		OutState = FCompileStateInfo();
 		if (System == nullptr)
 		{
 			OutErrors.Add(TEXT("Cannot compile a null system."));
@@ -4503,8 +5031,19 @@ namespace UE::DreamFX::Editor
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete begin '%s'"), *System->GetName());
 		System->WaitForCompilationComplete(bIncludingGpuShaders, /*bShowProgress=*/false);
 		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE WaitForCompilationComplete end '%s'"), *System->GetName());
+		if (System->HasActiveCompilations() || System->NeedsRequestCompile())
+		{
+			OutState.StatusName = TEXT("CompilationPending");
+			OutState.bIsStale = true;
+			OutErrors.Add(TEXT("Niagara returned from its compile wait with work still active or queued. The new VM has not been installed; the build cannot be saved as successful."));
+			return false;
+		}
 
-		RefreshRendererBindings(System);
+		// Check before refreshing bindings: that refresh can legitimately dirty the system scripts,
+		// and FinalizeBuild performs one more compile in that case. A stale VM at this point is not
+		// that convergence case: no successful result was installed for the graph we just waited on.
+		TArray<FString> StaleScripts;
+		const bool bExecutableCurrent = VerifyCompiledStateCurrent(System, StaleScripts);
 
 		FNiagaraExternalEditContext Context(System);
 		FNiagaraExt_SystemCompileState State;
@@ -4516,7 +5055,7 @@ namespace UE::DreamFX::Editor
 			: FString::FromInt(static_cast<int32>(State.AggregateStatus));
 		OutState.bHasErrors = State.bHasErrors;
 		OutState.bHasWarnings = State.bHasWarnings;
-		OutState.bIsStale = State.bIsStale;
+		OutState.bIsStale = State.bIsStale || !bExecutableCurrent;
 
 		for (const FNiagaraExt_ScriptCompileInfo& Script : State.Scripts)
 		{
@@ -4538,8 +5077,19 @@ namespace UE::DreamFX::Editor
 			State.AggregateStatus == ENiagaraExt_ScriptCompileStatus::UpToDateWithWarnings ||
 			State.AggregateStatus == ENiagaraExt_ScriptCompileStatus::ComputeUpToDateWithWarnings;
 
-		Drain(Context, OutErrors);
-		return bStatusOk && !State.bHasErrors;
+		if (!bExecutableCurrent)
+		{
+			OutErrors.Add(FString::Printf(TEXT("Niagara VM data is missing or does not match its source after compilation: %s."),
+				*FString::Join(StaleScripts, TEXT(", "))));
+		}
+		const bool bContextOk = Drain(Context, OutErrors);
+		const bool bSucceeded = bContextOk && bStatusOk && !State.bHasErrors
+			&& !State.bIsCompiling && !State.bIsStale && bExecutableCurrent;
+		if (bSucceeded)
+		{
+			RefreshRendererBindings(System);
+		}
+		return bSucceeded;
 	}
 
 	bool FNiagaraAdapter::CompileAndWait(UNiagaraSystem* System, bool bIncludingGpuShaders,

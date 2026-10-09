@@ -7,6 +7,7 @@
 #include "Schema/DreamFXIndexExport.h"
 #include "SourceFiles/DreamFXPaths.h"
 #include "UI/DreamFXAssetCommands.h"
+#include "UI/DreamFXEditorGeneration.h"
 #include "Workspace/DreamFXSourceWatcher.h"
 
 #include "Containers/Ticker.h"
@@ -155,6 +156,7 @@ namespace UE::DreamFX::Editor
 		{
 			bool bOk = false;
 			FString Message;
+			FString OutputPath;
 			FDiagnosticSink Diagnostics;
 		};
 
@@ -206,7 +208,7 @@ namespace UE::DreamFX::Editor
 				return Result;
 			}
 
-			const FGenerateResult Generated = FGenerator::GenerateFromFile(SourceFile, Options, Result.Diagnostics);
+			const FGenerateResult Generated = FEditorGeneration::GenerateFromFile(SourceFile, Options, Result.Diagnostics);
 			Result.bOk = Generated.bSucceeded;
 			Result.Message = Generated.bSkipped ? TEXT("Already up to date.")
 				: Generated.bDrifted ? TEXT("The asset has drifted from its source.")
@@ -238,6 +240,17 @@ namespace UE::DreamFX::Editor
 				const bool bVerifyOnly = Action == TEXT("verify");
 				if (Scope == TEXT("all"))
 				{
+					if (bVerifyOnly)
+					{
+						const FVerifyBatchResult Verified = FDreamFXCommands::VerifyAllSources();
+						FActionResult Result;
+						Result.bOk = Verified.IsSuccessful();
+						Result.Message = FString::Printf(TEXT("Verified %d source(s): %d drifted, %d failed."),
+							Verified.Checked, Verified.Drifted, Verified.Failed);
+						Result.Diagnostics.Append(Verified.Diagnostics);
+						LogDiagnostics(Result.Diagnostics);
+						return Result;
+					}
 					// Through the watcher's queue rather than a loop here. The queue is what carries
 					// the module-before-emitter-before-system ordering and the bulk-batch gate, and it
 					// runs across ticks so the editor stays responsive -- which also means the result
@@ -257,17 +270,13 @@ namespace UE::DreamFX::Editor
 				{
 					return Fail(FString::Printf(TEXT("Could not load '%s'."), *AssetPath));
 				}
-				if (UNiagaraSystem* System = Cast<UNiagaraSystem>(Asset))
-				{
-					FDreamFXCommands::ExportSystem(System);
-					return Succeed(TEXT("Exported."));
-				}
-				if (UNiagaraEmitter* Emitter = Cast<UNiagaraEmitter>(Asset))
-				{
-					FDreamFXCommands::ExportEmitter(Emitter);
-					return Succeed(TEXT("Exported."));
-				}
-				return Fail(TEXT("Only a Niagara system or emitter can be exported."));
+				const FAssetExportResult Exported = FDreamFXCommands::ExportAsset(Asset);
+				FActionResult Result;
+				Result.bOk = Exported.bSucceeded;
+				Result.Message = Exported.Message;
+				Result.OutputPath = Exported.OutputPath;
+				Result.Diagnostics.Append(Exported.Diagnostics);
+				return Result;
 			}
 
 			if (Action == TEXT("adopt"))
@@ -347,7 +356,7 @@ namespace UE::DreamFX::Editor
 				*Action));
 		}
 
-		void RespondTo(const FString& RequestId, const FActionResult& Result, double DurationMs)
+		FString SerializeResponse(const FString& RequestId, const FActionResult& Result, double DurationMs)
 		{
 			FString Text;
 			const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Text);
@@ -357,10 +366,17 @@ namespace UE::DreamFX::Editor
 			Writer->WriteValue(TEXT("ok"), Result.bOk);
 			Writer->WriteValue(TEXT("durationMs"), static_cast<int32>(DurationMs));
 			Writer->WriteValue(TEXT("message"), Result.Message);
+			if (!Result.OutputPath.IsEmpty()) { Writer->WriteValue(TEXT("outputPath"), Result.OutputPath); }
 			WriteDiagnosticsArray(Writer, Result.Diagnostics);
 			Writer->WriteObjectEnd();
 			Writer->Close();
 
+			return Text;
+		}
+
+		void RespondTo(const FString& RequestId, const FActionResult& Result, double DurationMs)
+		{
+			const FString Text = SerializeResponse(RequestId, Result, DurationMs);
 			WriteFileAtomically(FPaths::Combine(ResponsesDir(), RequestId + TEXT(".json")), Text);
 
 			// Also published standalone, so a client that was not the one who asked -- or one that
@@ -508,6 +524,14 @@ namespace UE::DreamFX::Editor
 		return BridgeDir();
 	}
 
+	FString FBridgeService::ExecuteRequest(const TSharedPtr<FJsonObject>& Request)
+	{
+		FString RequestId;
+		if (Request.IsValid()) { Request->TryGetStringField(TEXT("requestId"), RequestId); }
+		const double Start = FPlatformTime::Seconds();
+		const FActionResult Result = Request.IsValid() ? Dispatch(Request) : Fail(TEXT("The request is not valid JSON."));
+		return SerializeResponse(RequestId, Result, (FPlatformTime::Seconds() - Start) * 1000.0);
+	}
 	void FBridgeService::Register()
 	{
 		IFileManager& Files = IFileManager::Get();

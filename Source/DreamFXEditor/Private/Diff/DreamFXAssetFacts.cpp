@@ -77,12 +77,12 @@ namespace UE::DreamFX::Editor
 
 	/** One fact per top-level reflected property, skipping transients and an explicit list. */
 	void AppendPropertyFacts(const FString& Prefix, const void* Container, const UStruct* Struct,
-		const TSet<FName>& Skip, const FString& SelfPackage, TArray<FString>& OutFacts)
+		const TSet<FName>& Skip, const FString& SelfPackage, TArray<FString>& OutFacts, EPropertyFlags SkipFlags = CPF_None)
 	{
 		for (TFieldIterator<FProperty> It(Struct); It; ++It)
 		{
 			FProperty* Property = *It;
-			if (Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated)
+			if (Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_Deprecated | SkipFlags)
 				|| Skip.Contains(Property->GetFName()))
 			{
 				continue;
@@ -293,8 +293,11 @@ namespace UE::DreamFX::Editor
 			TEXT("ThumbnailImage"), TEXT("PreviewMoviePath"),
 		};
 
+		// Editor-only metadata (descriptions, library visibility, categories) is not effect state, and an
+		// original and its mirror legitimately differ there: asset-diff would report noise and the gate
+		// has nothing to protect, since a rebuild never writes it.
 		AppendPropertyFacts(TEXT("system"), System, UNiagaraSystem::StaticClass(), SystemSkip, SelfPackage,
-			OutFacts);
+			OutFacts, CPF_EditorOnly);
 
 		// Identity, wiring and editor bookkeeping. Graphs and scripts are deliberately absent as
 		// objects -- their observable content arrives through the parameter stores here, the export

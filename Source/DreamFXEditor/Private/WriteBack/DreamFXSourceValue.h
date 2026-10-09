@@ -44,6 +44,9 @@ namespace UE::DreamFX::Editor
 	/** The `{"refPath": "..."}` shape the external edit API round-trips object references through. */
 	bool TryReadReferenceObject(const TSharedPtr<FJsonValue>& Value, FString& OutPackagePath);
 
+	/** Any text as a DSL string literal: quoted, with backslash, quote, newline, carriage return and tab escaped. */
+	FString QuoteSourceString(FString Value);
+
 	/** JSON text as a DSL string literal: compacted onto one line and escaped. */
 	bool JsonTextToSourceString(const FString& JsonText, FString& OutLiteral);
 
@@ -60,6 +63,14 @@ namespace UE::DreamFX::Editor
 	 */
 	bool TryWriteNumberTuple(const FString& PropertyName, const TSharedPtr<FJsonObject>& Object,
 		FString& OutLiteral);
+
+	/**
+	 * An array of asset-carrying structs (`Meshes`, `OverrideMaterials`) as a plain array of quoted
+	 * paths. Refused when any element carries a non-default field besides its reference, so a custom
+	 * pivot, scale or material binding is never flattened away.
+	 */
+	bool TryWriteReferenceArray(const UClass* PropertyClass, const FString& Key,
+		const TArray<TSharedPtr<FJsonValue>>& Elements, FString& OutSource);
 
 	/**
 	 * One property value as the right-hand side of `Key = <this>;`.

@@ -320,42 +320,36 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
-	bool FDreamFXPaths::ResolveSourceReference(const FString& Reference, const FString& ReferencingFile,
-		const TCHAR* Extension, FString& OutFullPath, FString& OutError)
+	void FDreamFXPaths::GetSourceReferenceCandidates(const FString& Reference, const FString& ReferencingFile,
+		const TCHAR* Extension, TArray<FString>& OutCandidates)
 	{
 		FString Relative = Reference.TrimStartAndEnd();
-		if (Relative.IsEmpty())
-		{
-			OutError = TEXT("Empty source reference.");
-			return false;
-		}
-
+		if (Relative.IsEmpty()) { return; }
 		if (!FPaths::GetExtension(Relative).Equals(FString(Extension).RightChop(1), ESearchCase::IgnoreCase))
 		{
 			Relative += Extension;
 		}
-
-		TArray<FString> Candidates;
-
-		// Relative to the referencing file first: that is what a reader assumes a bare path means.
 		if (!ReferencingFile.IsEmpty())
 		{
-			Candidates.Add(FPaths::ConvertRelativePathToFull(FPaths::GetPath(ReferencingFile), Relative));
+			OutCandidates.AddUnique(FPaths::ConvertRelativePathToFull(FPaths::GetPath(ReferencingFile), Relative));
 		}
-
 		for (const FSourceRoot& Root : GetSourceRoots())
 		{
-			Candidates.Add(FPaths::ConvertRelativePathToFull(Root.Directory / Relative));
-
-			// `DFX/Emitters/E_Flash` names the root directory explicitly; accept that spelling too,
-			// because it is how the plan document writes it.
+			OutCandidates.AddUnique(FPaths::ConvertRelativePathToFull(Root.Directory / Relative));
 			FString WithoutDfxPrefix = Relative;
 			if (WithoutDfxPrefix.RemoveFromStart(TEXT("DFX/"), ESearchCase::IgnoreCase))
 			{
-				Candidates.Add(FPaths::ConvertRelativePathToFull(Root.Directory / WithoutDfxPrefix));
+				OutCandidates.AddUnique(FPaths::ConvertRelativePathToFull(Root.Directory / WithoutDfxPrefix));
 			}
 		}
+	}
 
+	bool FDreamFXPaths::ResolveSourceReference(const FString& Reference, const FString& ReferencingFile,
+		const TCHAR* Extension, FString& OutFullPath, FString& OutError)
+	{
+		TArray<FString> Candidates;
+		GetSourceReferenceCandidates(Reference, ReferencingFile, Extension, Candidates);
+		if (Candidates.IsEmpty()) { OutError = TEXT("Empty source reference."); return false; }
 		for (const FString& Candidate : Candidates)
 		{
 			if (FPaths::FileExists(Candidate))
@@ -366,7 +360,7 @@ namespace UE::DreamFX::Editor
 		}
 
 		OutError = FString::Printf(TEXT("Could not find '%s'. Looked in: %s"),
-			*Relative, *FString::Join(Candidates, TEXT(", ")));
+			*Reference, *FString::Join(Candidates, TEXT(", ")));
 		return false;
 	}
 

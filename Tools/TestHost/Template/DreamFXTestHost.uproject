@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{486FC676-41CB-DA5E-D95C-8AA1D8EB76B0}",
+	"Category": "",
+	"Description": "Minimal host project that builds DreamFX on its own and runs its gate (lint, build, verify, corpus), isolated from any working project. Generated from Plugins/DreamFX/Tools/TestHost/Template by New-DreamFXTestHost.ps1; see Tools/TestHost/README.md.",
+	"Modules": [
+		{
+			"Name": "DreamFXTestHost",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "DreamFX",
+			"Enabled": true
+		}
+	]
+}

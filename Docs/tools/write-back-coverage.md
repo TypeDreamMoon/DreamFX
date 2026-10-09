@@ -577,7 +577,7 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 
 ### 6.8 已实现：build 侧安全闸
 
-> 分支 `feat/build-safety-gate`，诊断 `DFX8017`。§6.1 按「用 `DescribeSystemFacts`、不要用文本」
+> 分支 `feat/build-safety-gate`，诊断 `DFX8018`。§6.1 按「用 `DescribeSystemFacts`、不要用文本」
 > 落地，§6.2 的系统级属性补盲一并在内。**下面这一节是新增实测，不改变 §1–§7 原有内容。**
 
 **语义（第二轮：只抓「文本管不到的地方发生的漂移」）**
@@ -664,7 +664,7 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 
 ### 6.9 已实现：`pull`（资产 → 文本）
 
-> 分支 `feat/pull`，命令 `dfx pull`，诊断 `DFX7105`–`DFX7111`。**完整语义、边界与实测在
+> 分支 `feat/pull`，命令 `dfx pull`，诊断 `DFX7106`–`DFX7116`。**完整语义、边界与实测在
 > [`pull.md`](pull.md)**；本节只记它和本文前几节的关系，以及实测纠正/确认了哪些结论。
 
 - **§6.4 的两次「建议改成」按原样落地了一半，另一半换了个做法。** 建议是把 `-NoDefaults` 从
@@ -709,7 +709,7 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
   「L1 是导出 vs 导出」那条盲区的反面**：这次是资产级断言（`DescribeSystemFacts`）把它捞出来的。
 - **§6.6 提出的第二条验收标准（`asset-diff` fact 集合相等）本轮在语料里落地了，但换了个更准的口径。**
   不是「两个资产 fact 全等」，而是「**同一个**资产原地重建之后，没有任何 fact 的地址还在却消失了」——
-  那正是安全闸 `DFX8017` 拦的东西，而且它比闸更严（闸按规则 1 忽略只在一侧出现的结构）。
+  那正是安全闸 `DFX8018` 拦的东西，而且它比闸更严（闸按规则 1 忽略只在一侧出现的结构）。
   §6.8 记的「原地重建只丢 8 条」在这里得到解释：那些「丢」是值等于模块默认值的常量，重建时被默认值
   补回、fact 相同。
 - **一处只有实测才会发现的口径差 —— 已定论（本轮，分支 `feat/collapsed-copy-drift`）。**
@@ -722,7 +722,7 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
      `build safety: '…' held 187 fact(s), the rebuild produces 195; of the 1 fact(s) it no longer holds
      exactly, 1 are drift inside a structure the rebuild kept, 9 gained.` ＋
      `lost | ri system-spawn Constants.Atlas2D_Mesh.EmitterState.Loop Duration (NiagaraFloat) : 0000A040
-     -> one copy fewer` ＋ `error DFX8017: … was not saved …`
+     -> one copy fewer` ＋ `error DFX8018: … was not saved …`
      （原始日志 `CollapseProbe/A3-refusal-before-fix.log`）。
   2. **但这条差异的触发窗口比上一轮写的窄，而且只有实测看得出来。** 副本只活在**写它的那个会话**里：
      同一会话里 `SaveSystem` 之后，连会话内的那份 `ri system-spawn` 也没了（实测

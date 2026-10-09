@@ -11,16 +11,21 @@
 #include "Dom/JsonObject.h"
 #include "Misc/PackageName.h"
 #include "HAL/PlatformMemory.h"
+#include "JsonObjectConverter.h"
+#include "NiagaraCommon.h"
 #include "NiagaraDataInterfaceCurve.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "NiagaraTypes.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/GCObjectScopeGuard.h"
+#include "UObject/StrongObjectPtr.h"
+#include "UObject/StructOnScope.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace UE::DreamFX::Editor
@@ -697,6 +702,22 @@ namespace UE::DreamFX::Editor
 				return;
 			}
 
+			bool bWroteBox = false;
+			bool bWroteFixedBoundsFlag = false;
+			const bool bHasFixedBoundsFlag = Mappings.ContainsByPredicate(
+				[](const TPair<const TCHAR*, const TCHAR*>& Mapping) { return FCString::Strcmp(Mapping.Key, TEXT("UseFixedBounds")) == 0; });
+			ON_SCOPE_EXIT
+			{
+				// The generator turns the override on for a declared box unless the source says
+				// otherwise, so a box held with the flag off must say so or the rebuild makes it live.
+				bool bFlag = false;
+				if (bHasFixedBoundsFlag && bWroteBox && !bWroteFixedBoundsFlag
+					&& (!Current->TryGetBoolField(TEXT("bFixedBounds"), bFlag) || !bFlag))
+				{
+					OutLines.Add(TEXT("UseFixedBounds = false;"));
+				}
+			};
+
 			for (const TPair<const TCHAR*, const TCHAR*>& Mapping : Mappings)
 			{
 				const TSharedPtr<FJsonValue> Value = FindJsonValueByPath(Current, Mapping.Value);
@@ -719,11 +740,10 @@ namespace UE::DreamFX::Editor
 				{
 				case EJson::Object:
 				{
-					// The one struct with a DSL spelling: an FBox as `box(min..., max...)`. Written
-					// only when it is live -- an emitter computes its own bounds unless
-					// CalculateBoundsMode is Fixed, a system unless bFixedBounds is set -- because a
-					// stale authored box under dynamic bounds is inert noise. Everything else
-					// object-shaped still has no spelling and falls through.
+					// The one struct with a DSL spelling: an FBox as `box(min..., max...)`.
+					// A system retains its authored box while fixed bounds are disabled; preserve
+					// that non-default configuration for a later re-enable. Emitters still require
+					// CalculateBoundsMode=Fixed. Other object-shaped settings have no spelling.
 					//
 					// This closes what the field table's old comment called deliberate: the box was
 					// left out because this function only wrote scalars, and the cost surfaced as
@@ -736,11 +756,6 @@ namespace UE::DreamFX::Editor
 					if (!Value->TryGetObject(Box)
 						|| !(*Box)->TryGetObjectField(TEXT("Min"), Min)
 						|| !(*Box)->TryGetObjectField(TEXT("Max"), Max))
-					{
-						continue;
-					}
-					bool bSystemFlag = false;
-					if (Current->TryGetBoolField(TEXT("bFixedBounds"), bSystemFlag) && !bSystemFlag)
 					{
 						continue;
 					}
@@ -788,6 +803,8 @@ namespace UE::DreamFX::Editor
 				}
 
 				OutLines.Add(FString::Printf(TEXT("%s = %s;"), Mapping.Key, *Text));
+				bWroteBox |= Value->Type == EJson::Object && FCString::Strcmp(Mapping.Key, TEXT("FixedBounds")) == 0;
+				bWroteFixedBoundsFlag |= FCString::Strcmp(Mapping.Key, TEXT("UseFixedBounds")) == 0;
 			}
 			(void)Writer;
 		}
@@ -801,6 +818,76 @@ namespace UE::DreamFX::Editor
 		 * `RenderJsonPropertyAsSource`, so that the reader and the writer of a value can never
 		 * disagree about how it is written.
 		 */
+		bool NormalizeUserParameterBinding(TSharedPtr<FJsonValue>& Value,
+			const TSharedPtr<FJsonValue>& Default)
+		{
+			const TSharedPtr<FJsonObject>* Parameter = nullptr;
+			const TSharedPtr<FJsonObject>* DefaultParameter = nullptr;
+			if (!Value.IsValid() || Value->Type != EJson::Object
+				|| !Default.IsValid() || Default->Type != EJson::Object
+				|| !Value->AsObject()->TryGetObjectField(TEXT("parameter"), Parameter)
+				|| !Default->AsObject()->TryGetObjectField(TEXT("parameter"), DefaultParameter))
+			{
+				return false;
+			}
+			FString Name;
+			const TSharedPtr<FJsonValue> Type = (*Parameter)->TryGetField(TEXT("typeDefHandle"));
+			const TSharedPtr<FJsonValue> DefaultType = (*DefaultParameter)->TryGetField(TEXT("typeDefHandle"));
+			if (!(*Parameter)->TryGetStringField(TEXT("name"), Name) || !Type.IsValid() || !DefaultType.IsValid()
+				|| !FJsonValue::CompareEqual(*Type, *DefaultType))
+			{
+				return false;
+			}
+			// Niagara serializes TypeDefHandle as a process-local registry index. These bindings
+			// have a fixed renderer-defined type (MaterialInterface for Sprite/Ribbon); import only
+			// the name so the fresh renderer keeps that type in every editor session.
+			const TSharedRef<FJsonObject> StableParameter = MakeShared<FJsonObject>();
+			StableParameter->SetStringField(TEXT("name"), Name);
+			const TSharedRef<FJsonObject> StableBinding = MakeShared<FJsonObject>();
+			StableBinding->SetObjectField(TEXT("parameter"), StableParameter);
+			Value = MakeShared<FJsonValueObject>(StableBinding);
+			return true;
+		}
+
+		/** Normalize bindings at every struct/array depth, including mesh OverrideMaterials. */
+		bool NormalizeRendererBindings(const FProperty* Property, const void* DefaultData,
+			TSharedPtr<FJsonValue>& Value)
+		{
+			if (Property == nullptr || !Value.IsValid()) { return true; }
+			if (const FStructProperty* Struct = CastField<FStructProperty>(Property))
+			{
+				if (Struct->Struct == FNiagaraUserParameterBinding::StaticStruct())
+				{
+					return DefaultData != nullptr && NormalizeUserParameterBinding(Value,
+						FJsonObjectConverter::UPropertyToJsonValue(const_cast<FProperty*>(Property), DefaultData));
+				}
+				if (Value->Type != EJson::Object) { return true; }
+				for (auto& Field : Value->AsObject()->Values)
+				{
+					const FProperty* Member = FindFProperty<FProperty>(Struct->Struct, FName(*Field.Key));
+					if (!NormalizeRendererBindings(Member,
+						Member != nullptr && DefaultData != nullptr ? Member->ContainerPtrToValuePtr<void>(DefaultData) : nullptr,
+						Field.Value)) { return false; }
+				}
+			}
+			else if (const FArrayProperty* Array = CastField<FArrayProperty>(Property))
+			{
+				const FStructProperty* Inner = CastField<FStructProperty>(Array->Inner);
+				if (Inner != nullptr && Value->Type == EJson::Array)
+				{
+					// Import constructs fresh elements, even when the renderer CDO array is empty.
+					FStructOnScope ElementDefaults(Inner->Struct);
+					TArray<TSharedPtr<FJsonValue>> Elements = Value->AsArray();
+					for (TSharedPtr<FJsonValue>& Element : Elements)
+					{
+						if (!NormalizeRendererBindings(Inner, ElementDefaults.GetStructMemory(), Element)) { return false; }
+					}
+					Value = MakeShared<FJsonValueArray>(MoveTemp(Elements));
+				}
+			}
+			return true;
+		}
+
 		void WriteChangedRendererProperties(const UClass* RendererClass, const FString& Json,
 			const FString& DefaultsJson, TArray<FString>& OutLines, TArray<FString>& OutGaps)
 		{
@@ -829,7 +916,7 @@ namespace UE::DreamFX::Editor
 
 			for (const FString& Key : Keys)
 			{
-				const TSharedPtr<FJsonValue> Value = Current->TryGetField(Key);
+				TSharedPtr<FJsonValue> Value = Current->TryGetField(Key);
 				if (!Value.IsValid() || Value->IsNull())
 				{
 					continue;
@@ -846,8 +933,25 @@ namespace UE::DreamFX::Editor
 
 				// Attribute bindings are a `Bind X -> Y` statement, not a property assignment. They are
 				// emitted from the live struct further down, so skipping them here is not a gap.
-				if (Key.EndsWith(TEXT("Binding"), ESearchCase::CaseSensitive))
+				const FStructProperty* Property = FindFProperty<FStructProperty>(RendererClass, FName(*Key));
+				if (Property != nullptr && Property->Struct == FNiagaraVariableAttributeBinding::StaticStruct())
 				{
+					continue;
+				}
+				// The plain-path spelling is judged on the raw value, before bindings are normalized: a
+				// default user-parameter binding still compares equal to a fresh element's there.
+				FString ReferenceArray;
+				if (Value->Type == EJson::Array && TryWriteReferenceArray(RendererClass, Key, Value->AsArray(), ReferenceArray))
+				{
+					OutLines.Add(FString::Printf(TEXT("%s = %s;"), *Key, *ReferenceArray));
+					continue;
+				}
+				const FProperty* RendererProperty = FindFProperty<FProperty>(RendererClass, FName(*Key));
+				if (!NormalizeRendererBindings(RendererProperty,
+					RendererProperty != nullptr ? RendererProperty->ContainerPtrToValuePtr<void>(RendererClass->GetDefaultObject()) : nullptr,
+					Value))
+				{
+					OutGaps.AddUnique(FString::Printf(TEXT("renderer property '%s' contains a user parameter binding with a non-default or unreadable type"), *Key));
 					continue;
 				}
 
@@ -910,7 +1014,9 @@ namespace UE::DreamFX::Editor
 			// birth velocity 2273 (=136500 * 1/60) original vs 4529 (=136500 * 1/30) mirror.
 			{ TEXT("FixedTickDelta"),     TEXT("bFixedTickDelta") },
 			{ TEXT("FixedTickDeltaTime"), TEXT("FixedTickDeltaTime") },
-			// Same story as the emitter's row: the box only writes when bFixedBounds is set.
+			// Preserve non-default authored bounds even while the system flag is disabled; the flag
+			// then has to be written too, because a declared box turns it on (WriteChangedSettings).
+			{ TEXT("UseFixedBounds"),     TEXT("bFixedBounds") },
 			{ TEXT("FixedBounds"),        TEXT("FixedBounds") },
 		};
 
@@ -1235,7 +1341,11 @@ namespace UE::DreamFX::Editor
 
 				TArray<TTuple<FName, FInputValue>> Values;
 				Errors.Reset();
-				FNiagaraAdapter::GetModuleInputValues(ModuleAddress, Values, Errors);
+				if (!FNiagaraAdapter::GetModuleInputValues(ModuleAddress, Values, Errors))
+				{
+					Result.UnsupportedFeatures.AddUnique(FString::Printf(TEXT("inputs of module '%s' could not be read: %s"),
+						*Module.ModuleName.ToString(), *FString::Join(Errors, TEXT(" | "))));
+				}
 
 				// -DreamFXTraceInputs names every input the reader returned, before any gate
 				// touches it. The suppression trace below only sees values that were SET and then
@@ -1298,7 +1408,8 @@ namespace UE::DreamFX::Editor
 							continue;
 						}
 
-						Writer.Line(FString::Printf(TEXT("%s%s = %s;"),
+						Writer.Line(FString::Printf(TEXT("%s%s%s = %s;"),
+							Module.bEnabled ? TEXT("") : TEXT("disabled "),
 							*Prefix, *ToNameToken(Entry.Get<0>().ToString()), *AssignedSource));
 					}
 					continue;
@@ -1317,6 +1428,8 @@ namespace UE::DreamFX::Editor
 					bHasLiveVersion = FNiagaraAdapter::GetModuleScriptVersion(ModuleAddress, LiveVersion, Errors);
 					if (!bHasLiveVersion)
 					{
+						Result.UnsupportedFeatures.AddUnique(FString::Printf(TEXT("version of module '%s' could not be read"),
+							*Module.ModuleName.ToString()));
 						UE_LOG(LogDreamFX, Warning, TEXT("Could not read the script version of module '%s': %s"),
 							*Module.ModuleName.ToString(), *FString::Join(Errors, TEXT(" | ")));
 					}
@@ -1616,6 +1729,26 @@ namespace UE::DreamFX::Editor
 			Writer.Blank();
 		}
 
+		struct FInheritedEmitterExport
+		{
+			FString HeaderSuffix;
+			FString SettingsJson;
+			TStrongObjectPtr<UNiagaraSystem> ParentHost;
+			TArray<FParameterDefault> ParameterDefaults;
+			TSet<FName> IdenticalStacks;
+			bool bIdenticalRenderers = false;
+			bool bReady = false;
+		};
+
+		void NoteInheritanceLimit(FName EmitterName, const FString& Detail,
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
+		{
+			const FString Message = FString::Printf(TEXT("Emitter '%s' retains its native parent, but %s"),
+				*EmitterName.ToString(), *Detail);
+			Result.UnsupportedFeatures.AddUnique(Message);
+			Diagnostics.Warning(TEXT("DFX8014"), FSourceLocation(), Message);
+		}
+
 		/**
 		 * A whole `Emitter ... { ... }` block, header line included.
 		 *
@@ -1645,7 +1778,7 @@ namespace UE::DreamFX::Editor
 			FModuleLibrary& Modules, const FStackAddress& EmitterAddress, const FEmitterInfo& Info,
 			FDecompileResult& Result, FDiagnosticSink& Diagnostics, bool bSystemScope = false,
 			const TMap<FName, FStackAddress>* StackAddressOverrides = nullptr,
-			bool bLeaveOpen = false)
+			bool bLeaveOpen = false, const FInheritedEmitterExport* Inherited = nullptr)
 		{
 			TArray<FString> Errors;
 
@@ -1666,7 +1799,8 @@ namespace UE::DreamFX::Editor
 				const FString* Defaults = Modules.GetEmitterDefaults(DefaultsError);
 
 				TArray<FString> Lines;
-				WriteChangedSettings(Writer, Json, Defaults ? *Defaults : FString(),
+				WriteChangedSettings(Writer, Json, Inherited != nullptr ? Inherited->SettingsJson
+					: Defaults ? *Defaults : FString(),
 					EmitterSettingFields, Lines);
 				if (Lines.Num() > 0)
 				{
@@ -1694,6 +1828,15 @@ namespace UE::DreamFX::Editor
 				TArray<FString> Lines;
 				for (const FParameterDefault& Default : ParameterDefaults)
 				{
+					const FParameterDefault* ParentDefault = Inherited != nullptr && Inherited->bReady
+						? Inherited->ParameterDefaults.FindByPredicate([&](const FParameterDefault& Candidate)
+							{ return Candidate.Variable == Default.Variable; }) : nullptr;
+					if (ParentDefault != nullptr && ParentDefault->Mode == Default.Mode
+						&& ((Default.Mode == FParameterDefault::EMode::Value && ParentDefault->Value.Equals(Default.Value))
+							|| (Default.Mode == FParameterDefault::EMode::Binding && ParentDefault->Binding == Default.Binding)))
+					{
+						continue;
+					}
 					const FString Name = ToNameToken(Default.Variable.GetName().ToString());
 					const FString TypeName = FValueLowering::DescribeDeclaredType(Default.Variable.GetType());
 
@@ -1742,7 +1885,8 @@ namespace UE::DreamFX::Editor
 
 		for (const FScriptStackInfo& Stack : Info.Stacks)
 		{
-			if (Stack.Modules.Num() == 0)
+			if ((Inherited != nullptr && Inherited->IdenticalStacks.Contains(Stack.ScriptName))
+				|| (Stack.Modules.Num() == 0 && Inherited == nullptr))
 			{
 				continue;
 			}
@@ -1811,7 +1955,7 @@ namespace UE::DreamFX::Editor
 		// renderers to walk.
 		for (const FRendererInfo& Renderer : Info.Renderers)
 		{
-			if (bSystemScope)
+			if (bSystemScope || (Inherited != nullptr && Inherited->bIdenticalRenderers))
 			{
 				break;
 			}
@@ -1992,12 +2136,246 @@ namespace UE::DreamFX::Editor
 						*ToNameToken(Stage.EnabledBindingName)));
 				}
 
+				const FSimulationStageExecutionSettings& Execution = Stage.Execution;
+				const FSimulationStageExecutionSettings& Baseline = Defaults.Execution;
+				auto WriteBool = [&Arguments](const TCHAR* Key, const TOptional<bool>& Value, const TOptional<bool>& Default)
+				{
+					if (Value.IsSet() && Value != Default)
+					{
+						Arguments.Add(FString::Printf(TEXT("%s = %s"), Key, Value.GetValue() ? TEXT("true") : TEXT("false")));
+					}
+				};
+				auto WriteName = [&Arguments](const TCHAR* Key, const FString& Value, const FString& Default)
+				{
+					if (!Value.IsEmpty() && Value != Default)
+					{
+						Arguments.Add(FString::Printf(TEXT("%s = %s"), Key, *ToNameToken(Value)));
+					}
+				};
+				auto WriteIntegerBinding = [&Arguments](const TCHAR* Key, const FStageIntegerBinding& Value,
+					const FStageIntegerBinding& Default)
+				{
+					if (Value.Value.IsSet() && Value.Value != Default.Value)
+					{
+						Arguments.Add(FString::Printf(TEXT("%s = %d"), Key, Value.Value.GetValue()));
+					}
+					if (!Value.Binding.IsEmpty())
+					{
+						Arguments.Add(FString::Printf(TEXT("%s = %s"), Key, *ToNameToken(Value.Binding)));
+					}
+				};
+				WriteBool(TEXT("DisablePartialParticleUpdate"), Execution.DisablePartialParticleUpdate, Baseline.DisablePartialParticleUpdate);
+				WriteBool(TEXT("ParticleIterationStateEnabled"), Execution.ParticleIterationStateEnabled, Baseline.ParticleIterationStateEnabled);
+				WriteName(TEXT("ParticleIterationStateBinding"), Execution.ParticleIterationStateBinding.IsEmpty()
+					? FString(TEXT("None")) : Execution.ParticleIterationStateBinding,
+					Baseline.ParticleIterationStateBinding.IsEmpty() ? FString(TEXT("None")) : Baseline.ParticleIterationStateBinding);
+				if (Execution.ParticleIterationStateRange.IsSet() && Execution.ParticleIterationStateRange != Baseline.ParticleIterationStateRange)
+				{
+					const FIntPoint Range = Execution.ParticleIterationStateRange.GetValue();
+					Arguments.Add(FString::Printf(TEXT("ParticleIterationStateRange = (%d, %d)"), Range.X, Range.Y));
+				}
+				WriteBool(TEXT("GpuDispatchForceLinear"), Execution.GpuDispatchForceLinear, Baseline.GpuDispatchForceLinear);
+				WriteBool(TEXT("OverrideGpuDispatchNumThreads"), Execution.OverrideGpuDispatchNumThreads, Baseline.OverrideGpuDispatchNumThreads);
+				WriteName(TEXT("DirectDispatchType"), Execution.DirectDispatchType, Baseline.DirectDispatchType);
+				WriteName(TEXT("DirectDispatchElementType"), Execution.DirectDispatchElementType, Baseline.DirectDispatchElementType);
+				WriteIntegerBinding(TEXT("ElementCountX"), Execution.ElementCountX, Baseline.ElementCountX);
+				WriteIntegerBinding(TEXT("ElementCountY"), Execution.ElementCountY, Baseline.ElementCountY);
+				WriteIntegerBinding(TEXT("ElementCountZ"), Execution.ElementCountZ, Baseline.ElementCountZ);
+				WriteIntegerBinding(TEXT("OverrideGpuDispatchNumThreadsX"), Execution.OverrideGpuDispatchNumThreadsX, Baseline.OverrideGpuDispatchNumThreadsX);
+				WriteIntegerBinding(TEXT("OverrideGpuDispatchNumThreadsY"), Execution.OverrideGpuDispatchNumThreadsY, Baseline.OverrideGpuDispatchNumThreadsY);
+				WriteIntegerBinding(TEXT("OverrideGpuDispatchNumThreadsZ"), Execution.OverrideGpuDispatchNumThreadsZ, Baseline.OverrideGpuDispatchNumThreadsZ);
+
 				const FString Name = ToNameToken(Stage.StageName.ToString());
 				Writer.Line(Arguments.Num() == 0
 					? FString::Printf(TEXT("Stage %s = {"), *Name)
 					: FString::Printf(TEXT("Stage %s(%s) = {"), *Name, *FString::Join(Arguments, TEXT(", "))));
 				WriteStackModules(Writer, Context, Modules, HostEmitterAddress, StackInfo,
 					EStackKind::SimulationStage, Result);
+			}
+		}
+	}
+
+	namespace
+	{
+		bool RendererGroupsMatch(const FStackAddress& CurrentAddress, const FEmitterInfo& Current,
+			const FStackAddress& ParentAddress, const FEmitterInfo& Parent, FModuleLibrary& Modules)
+		{
+			if (Current.Renderers.Num() != Parent.Renderers.Num()) { return false; }
+			for (int32 Index = 0; Index < Current.Renderers.Num(); ++Index)
+			{
+				const FRendererInfo& Renderer = Current.Renderers[Index];
+				if (Renderer.Class != Parent.Renderers[Index].Class) { return false; }
+				TArray<FString> Errors;
+				FString CurrentJson, ParentJson, DefaultsError;
+				const FString* Defaults = Modules.GetRendererDefaults(Renderer.Class, DefaultsError);
+				if (Defaults == nullptr
+					|| !FNiagaraAdapter::GetRendererProperties(CurrentAddress.WithRenderer(Renderer.Index), CurrentJson, Errors)
+					|| !FNiagaraAdapter::GetRendererProperties(ParentAddress.WithRenderer(Parent.Renderers[Index].Index), ParentJson, Errors))
+				{
+					return false;
+				}
+				TArray<FString> CurrentLines, ParentLines, Gaps;
+				WriteChangedRendererProperties(Renderer.Class, CurrentJson, *Defaults, CurrentLines, Gaps);
+				WriteChangedRendererProperties(Renderer.Class, ParentJson, *Defaults, ParentLines, Gaps);
+				if (!Gaps.IsEmpty() || CurrentLines != ParentLines) { return false; }
+				TArray<TPair<FString, FName>> CurrentBindings, ParentBindings;
+				if (!FNiagaraAdapter::GetRendererBindings(CurrentAddress.WithRenderer(Renderer.Index), CurrentBindings, Errors)
+					|| !FNiagaraAdapter::GetRendererBindings(ParentAddress.WithRenderer(Parent.Renderers[Index].Index), ParentBindings, Errors)
+					|| CurrentBindings != ParentBindings)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// Compare through a private host with the same emitter name, so aliases have the same
+		// spelling. No parent or child graph is changed by collecting the baseline.
+		void PrepareInheritedEmitterExport(const FStackAddress& Address, const FEmitterInfo& Info,
+			const FContext& Context, FModuleLibrary& Modules, FInheritedEmitterExport& Out,
+			FDecompileResult& Result, FDiagnosticSink& Diagnostics)
+		{
+			TArray<FString> Errors;
+			FString ParentPath;
+			FGuid ParentVersion;
+			if (!FNiagaraAdapter::GetEmitterParent(Address, ParentPath, ParentVersion, Errors))
+			{
+				const FString Message = FString::Printf(TEXT("Emitter '%s': native parent association could not be read; exported snapshot may lose inheritance: %s"),
+					*Info.Name.ToString(), *FString::Join(Errors, TEXT(" | ")));
+				Result.UnsupportedFeatures.AddUnique(Message);
+				Diagnostics.Warning(TEXT("DFX8014"), FSourceLocation(), Message);
+				return;
+			}
+			if (ParentPath.IsEmpty())
+			{
+				return;
+			}
+			Out.HeaderSuffix = FString::Printf(TEXT(" inherits \"%s\""), *ParentPath);
+			if (ParentVersion.IsValid())
+			{
+				Out.HeaderSuffix += FString::Printf(TEXT(" version \"%s\""), *ParentVersion.ToString(EGuidFormats::DigitsWithHyphens));
+			}
+			else
+			{
+				NoteInheritanceLimit(Info.Name, TEXT("its parent version is unavailable; rebuilding selects the exposed version"), Result, Diagnostics);
+			}
+			for (const FNiagaraEmitterHandle& Handle : Context.System->GetEmitterHandles())
+			{
+				if (Handle.GetName() == Info.Name && Handle.GetEmitterData() != nullptr
+					&& !Handle.GetEmitterData()->IsSynchronizedWithParent())
+				{
+					NoteInheritanceLimit(Info.Name, TEXT("the child has unmerged parent changes; the exported snapshot can turn stale inherited values into explicit overrides. Merge the child in Niagara before adopting the source"), Result, Diagnostics);
+					break;
+				}
+			}
+			UNiagaraEmitter* Parent = LoadObject<UNiagaraEmitter>(nullptr, *ParentPath);
+			if (Parent == nullptr || !Parent->IsAsset() || !Parent->bIsInheritable)
+			{
+				NoteInheritanceLimit(Info.Name, TEXT("the parent is not an inheritable standalone emitter asset; this source cannot rebuild until the parent is repaired"), Result, Diagnostics);
+				return;
+			}
+			const FGuid ComparisonVersion = ParentVersion.IsValid() ? ParentVersion : Parent->GetExposedVersion().VersionGuid;
+			FVersionedNiagaraEmitter CurrentParent(Parent, ComparisonVersion);
+			TSet<UNiagaraEmitter*> Visited;
+			while (CurrentParent.Emitter != nullptr)
+			{
+				const FVersionedNiagaraEmitterData* Data = CurrentParent.GetEmitterData();
+				if (Data == nullptr || CurrentParent.Emitter->FindVersionData(CurrentParent.Version) == nullptr
+					|| Visited.Contains(CurrentParent.Emitter))
+				{
+					NoteInheritanceLimit(Info.Name, TEXT("the parent chain has an unavailable version or a cycle; this source cannot rebuild until the parent is repaired"), Result, Diagnostics);
+					return;
+				}
+				if (!Data->IsSynchronizedWithParent())
+				{
+					NoteInheritanceLimit(Info.Name, TEXT("the parent has unmerged ancestor changes; merge and save the parent in Niagara before rebuilding this source"), Result, Diagnostics);
+					return;
+				}
+				Visited.Add(CurrentParent.Emitter);
+				CurrentParent = Data->GetParent();
+			}
+			bool bCreated = false;
+			UNiagaraSystem* Host = FNiagaraAdapter::AcquireSystem(
+				TEXT("/Temp/DreamFX"), TEXT("InheritedEmitterExport_") + FGuid::NewGuid().ToString(EGuidFormats::Digits), bCreated, Errors);
+			if (Host == nullptr)
+			{
+				NoteInheritanceLimit(Info.Name, TEXT("the parent baseline could not be read; emitted blocks are complete overrides"), Result, Diagnostics);
+				return;
+			}
+			Out.ParentHost = TStrongObjectPtr<UNiagaraSystem>(Host);
+			Host->AddEmitterHandle(*Parent, Info.Name, ComparisonVersion);
+			const FStackAddress ParentAddress = FStackAddress(Host).WithEmitter(Info.Name);
+			FNiagaraAdapter::FReadScope ParentScope(Host);
+			FEmitterInfo ParentInfo;
+			if (!FNiagaraAdapter::GetEmitterInfo(ParentAddress, ParentInfo, Errors)
+				|| !FNiagaraAdapter::GetEmitterProperties(ParentAddress, Out.SettingsJson, Errors))
+			{
+				NoteInheritanceLimit(Info.Name, TEXT("the parent baseline could not be read; emitted blocks are complete overrides"), Result, Diagnostics);
+				return;
+			}
+			Out.bReady = true;
+			FNiagaraAdapter::GetParameterDefaults(ParentAddress, Out.ParameterDefaults, Errors);
+			TArray<FParameterDefault> CurrentDefaults;
+			FNiagaraAdapter::GetParameterDefaults(Address, CurrentDefaults, Errors);
+			for (const FParameterDefault& Default : Out.ParameterDefaults)
+			{
+				if (!CurrentDefaults.ContainsByPredicate([&](const FParameterDefault& Candidate) { return Candidate.Variable == Default.Variable; }))
+				{
+					NoteInheritanceLimit(Info.Name, FString::Printf(TEXT("removing inherited default '%s' has no source spelling; the parent's default remains"),
+						*Default.Variable.GetName().ToString()), Result, Diagnostics);
+				}
+			}
+			for (const FScriptStackInfo& Stack : Info.Stacks)
+			{
+				EStackKind Kind;
+				if (!FNiagaraAdapter::StackForScriptName(Stack.ScriptName, Kind) || Kind == EStackKind::EventHandler) { continue; }
+				const FScriptStackInfo* ParentStack = ParentInfo.FindStack(Stack.ScriptName);
+				if (ParentStack == nullptr) { continue; }
+				FWriter CurrentWriter, ParentWriter;
+				FDecompileResult CurrentResult, ParentResult;
+				FContext CurrentContext = Context;
+				CurrentContext.ExtractedScriptFolder.Reset();
+				CurrentContext.Unsupported = &CurrentResult.UnsupportedFeatures;
+				FContext ParentContext = CurrentContext;
+				ParentContext.System = Host;
+				ParentContext.Unsupported = &ParentResult.UnsupportedFeatures;
+				WriteStackModules(CurrentWriter, CurrentContext, Modules, Address, Stack, Kind, CurrentResult);
+				WriteStackModules(ParentWriter, ParentContext, Modules, ParentAddress, *ParentStack, Kind, ParentResult);
+				if (CurrentResult.UnsupportedFeatures.IsEmpty() && ParentResult.UnsupportedFeatures.IsEmpty()
+					&& CurrentWriter.Get() == ParentWriter.Get())
+				{
+					Out.IdenticalStacks.Add(Stack.ScriptName);
+				}
+				else
+				{
+					NoteInheritanceLimit(Info.Name, FString::Printf(TEXT("%s is exported as a whole-stack override; future parent changes inside that stack will not propagate when rebuilding"),
+						LexStackKind(Kind)), Result, Diagnostics);
+				}
+			}
+			Out.bIdenticalRenderers = RendererGroupsMatch(Address, Info, ParentAddress, ParentInfo, Modules);
+			if (!Out.bIdenticalRenderers)
+			{
+				NoteInheritanceLimit(Info.Name, Info.Renderers.IsEmpty()
+					? TEXT("removing all inherited renderers has no source spelling; the parent's renderers remain")
+					: TEXT("renderers are exported as a complete group override; future parent renderer changes will not propagate when rebuilding"), Result, Diagnostics);
+			}
+			TArray<FNiagaraAdapter::FEventHandlerSummary> CurrentEvents, ParentEvents;
+			FNiagaraAdapter::GetEmitterEventHandlers(Address, CurrentEvents, Errors);
+			FNiagaraAdapter::GetEmitterEventHandlers(ParentAddress, ParentEvents, Errors);
+			if (!CurrentEvents.IsEmpty() || !ParentEvents.IsEmpty())
+			{
+				NoteInheritanceLimit(Info.Name, CurrentEvents.IsEmpty()
+					? TEXT("removing inherited event handlers has no source spelling; the parent's handlers remain")
+					: TEXT("event handlers are exported as snapshots; later parent handler changes may be overridden"), Result, Diagnostics);
+			}
+			TArray<FNiagaraAdapter::FSimulationStageSummary> CurrentStages, ParentStages;
+			FNiagaraAdapter::GetEmitterSimulationStages(Address, CurrentStages, Errors);
+			FNiagaraAdapter::GetEmitterSimulationStages(ParentAddress, ParentStages, Errors);
+			if (!CurrentStages.IsEmpty() || !ParentStages.IsEmpty())
+			{
+				NoteInheritanceLimit(Info.Name, CurrentStages.IsEmpty()
+					? TEXT("removing all inherited stages has no source spelling; the parent's stages remain")
+					: TEXT("stages are exported as a complete group snapshot; future parent stage changes will not propagate when rebuilding"), Result, Diagnostics);
 			}
 		}
 	}
@@ -2089,8 +2467,9 @@ namespace UE::DreamFX::Editor
 				// Sorted, because the order the API reports user variables in is not stable across a
 				// rebuild: exporting a system, rebuilding from the export and exporting again produced
 				// the same parameters in a different order, which breaks the idempotence the round-trip
-				// contract rests on. Nothing is lost by sorting -- Group and SortPriority never reach
-				// the asset (DFX5099), so declaration order carries no meaning to recover.
+				// contract rests on. Nothing is lost by sorting -- the user parameter hierarchy does
+				// carry organization now, but recovering groups from it is future work, not something
+				// the flat declaration order can express.
 				UserVariables.Sort([](const FUserVariableInfo& Left, const FUserVariableInfo& Right)
 				{
 					return Left.Name.LexicalLess(Right.Name);
@@ -2153,7 +2532,7 @@ namespace UE::DreamFX::Editor
 
 					if (!Variable.Description.IsEmpty())
 					{
-						Line += FString::Printf(TEXT(" [ Description=\"%s\" ]"), *Variable.Description);
+					Line += FString::Printf(TEXT(" [ Description=%s ]"), *QuoteSourceString(Variable.Description));
 					}
 					Writer.Line(Line + TEXT(";"));
 				}
@@ -2214,6 +2593,17 @@ namespace UE::DreamFX::Editor
 		for (FName EmitterName : EmitterNames)
 		{
 			UE_LOG(LogDreamFX, Verbose, TEXT("emitter %s"), *EmitterName.ToString());
+			const FNiagaraEmitterHandle* Handle = System->GetEmitterHandles().FindByPredicate(
+				[EmitterName](const FNiagaraEmitterHandle& Candidate) { return Candidate.GetName() == EmitterName; });
+			if (Handle != nullptr && Handle->GetEmitterMode() != ENiagaraEmitterMode::Standard)
+			{
+				const FString Gap = FString::Printf(TEXT("emitter '%s' uses unsupported Lightweight/Stateless mode"), *EmitterName.ToString());
+				Result.UnsupportedFeatures.AddUnique(Gap);
+				Diagnostics.Warning(TEXT("DFX8017"), FSourceLocation(), FString::Printf(
+					TEXT("emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in Niagara; DreamFX cannot rebuild its stateless modules and renderers."),
+					*EmitterName.ToString()));
+				continue;
+			}
 
 			const FStackAddress EmitterAddress = SystemAddress.WithEmitter(EmitterName);
 
@@ -2221,13 +2611,13 @@ namespace UE::DreamFX::Editor
 			Errors.Reset();
 			if (!FNiagaraAdapter::GetEmitterInfo(EmitterAddress, Info, Errors))
 			{
+				Result.UnsupportedFeatures.AddUnique(FString::Printf(TEXT("emitter '%s' could not be read"), *EmitterName.ToString()));
 				Diagnostics.Warning(TEXT("DFX8002"), FSourceLocation(),
 					FString::Printf(TEXT("Skipping emitter '%s': %s"),
 						*EmitterName.ToString(), *FString::Join(Errors, TEXT(" | "))));
 				continue;
 			}
 
-			NoteInheritedEmitter(EmitterAddress, EmitterName, Result, Diagnostics);
 			NoteEventHandlers(EmitterAddress, EmitterName, Result, Diagnostics, /*bSingleIsRepresented=*/true);
 			NoteSimulationStages(EmitterAddress, EmitterName, Result, Diagnostics);
 
@@ -2331,9 +2721,12 @@ namespace UE::DreamFX::Editor
 					*EmitterName.ToString()));
 			}
 
-			WriteEmitterBlock(Writer, FString::Printf(TEXT("Emitter %s"), *ToNameToken(EmitterName.ToString())),
+			FInheritedEmitterExport Inherited;
+			PrepareInheritedEmitterExport(EmitterAddress, Info, Context, Modules, Inherited, Result, Diagnostics);
+			WriteEmitterBlock(Writer, FString::Printf(TEXT("Emitter %s"), *ToNameToken(EmitterName.ToString())) + Inherited.HeaderSuffix,
 				Context, Modules, EmitterAddress, Info, Result, Diagnostics, /*bSystemScope=*/false,
-				StackOverrides.Num() > 0 ? &StackOverrides : nullptr, /*bLeaveOpen=*/bStagesToWrite);
+				StackOverrides.Num() > 0 ? &StackOverrides : nullptr, /*bLeaveOpen=*/bStagesToWrite,
+				Inherited.HeaderSuffix.IsEmpty() ? nullptr : &Inherited);
 			if (bStagesToWrite)
 			{
 				// Focusing a stage mutates the host's usage ids; the shared read context must not
@@ -2382,8 +2775,11 @@ namespace UE::DreamFX::Editor
 			return Result;
 		}
 
+		// The temporary handle is independent of the output asset name. Niagara's view-model
+		// rename compares FNames without their numeric suffix, so a source named Foo_0 can
+		// otherwise retain a handle named Foo and fail the adapter's stable-name check.
+		const FName EmitterName(TEXT("DreamFXStandaloneEmitter"));
 		// A re-export in the same session would otherwise hit the previous copy's name.
-		const FName EmitterName(*Emitter->GetName());
 		{
 			TArray<FName> Existing;
 			TArray<FString> ReadErrors;
@@ -2402,7 +2798,7 @@ namespace UE::DreamFX::Editor
 		{
 			Diagnostics.Error(TEXT("DFX8005"), FSourceLocation(),
 				FString::Printf(TEXT("Could not copy emitter '%s' into a host system: %s"),
-					*EmitterName.ToString(), *FString::Join(Errors, TEXT(" | "))));
+					*Emitter->GetName(), *FString::Join(Errors, TEXT(" | "))));
 			return Result;
 		}
 

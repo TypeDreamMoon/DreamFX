@@ -1,5 +1,7 @@
 #include "DreamFXValueLowering.h"
 
+#include "Components/ActorComponent.h"
+#include "GameFramework/Actor.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraTypes.h"
 #include "UObject/UObjectIterator.h"
@@ -477,6 +479,11 @@ namespace UE::DreamFX::Editor
 	bool FValueLowering::InferType(const FValue& Value, const FString& TargetName, FDiagnosticSink& Diagnostics,
 		FNiagaraTypeDefinition& OutType)
 	{
+		if (Value.Kind == EValueKind::Call && Value.Text == TEXT("int"))
+		{
+			OutType = FNiagaraTypeDefinition::GetIntDef();
+			return true;
+		}
 		switch (Value.Kind)
 		{
 		case EValueKind::Number:
@@ -519,6 +526,22 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	bool FValueLowering::ValidateObjectDefaultType(const FNiagaraTypeDefinition& Type,
+		const FString& InputDisplayName, const FSourceLocation& Location, FDiagnosticSink& Diagnostics)
+	{
+		const UClass* Class = Type.GetClass();
+		if (Class != nullptr && (Type.IsDataInterface() || Class->IsChildOf(UNiagaraDataInterface::StaticClass())
+			|| Class->IsChildOf(AActor::StaticClass()) || Class->IsChildOf(UActorComponent::StaticClass())
+			|| Class->HasAnyClassFlags(CLASS_DefaultToInstanced)))
+		{
+			Diagnostics.Error(TEXT("DFX4043"), Location,
+				FString::Printf(TEXT("Input '%s' is an instance-backed %s and cannot have a literal or asset-path default. Omit the default and supply an instance through a system parameter or stack input."),
+					*InputDisplayName, *DescribeType(Type)));
+			return false;
+		}
+		return true;
+	}
+
 	bool FValueLowering::Lower(const FValue& Value, const FNiagaraTypeDefinition& TargetType,
 		const FString& InputDisplayName, FDiagnosticSink& Diagnostics, FInputValue& OutValue)
 	{
@@ -538,6 +561,30 @@ namespace UE::DreamFX::Editor
 		// right shape is the correct value for either, and both resolve to the same UScriptStruct, so
 		// the flag is stripped for the kind check and the target's own struct still writes the bytes.
 		const FNiagaraTypeDefinition BaseType = TargetType.IsStatic() ? TargetType.RemoveStaticDef() : TargetType;
+
+		if (Value.Kind == EValueKind::Call && Value.Text == TEXT("int"))
+		{
+			if (Value.Arguments.Num() != 0 || Value.Elements.Num() != 1 || !Value.Elements[0].IsValid()
+				|| Value.Elements[0]->Kind != EValueKind::Number)
+			{
+				Diagnostics.Error(TEXT("DFX4044"), Value.Location,
+					TEXT("An int(...) default requires one numeric literal. Runtime casts belong in a stack expression."));
+				return false;
+			}
+			const double Number = FMath::TruncToDouble(Value.Elements[0]->Number);
+			if (!FMath::IsFinite(Number) || Number < static_cast<double>(MIN_int32) || Number > static_cast<double>(MAX_int32))
+			{
+				Diagnostics.Error(TEXT("DFX4044"), Value.Location,
+					TEXT("The int(...) literal must be finite and its truncated value must fit a signed 32-bit integer."));
+				return false;
+			}
+			FValue Literal;
+			Literal.Kind = EValueKind::Number;
+			Literal.Location = Value.Location;
+			Literal.Number = Number;
+			Literal.bIsIntegerLiteral = true;
+			return Lower(Literal, TargetType, InputDisplayName, Diagnostics, OutValue);
+		}
 
 		switch (Value.Kind)
 		{
@@ -653,6 +700,10 @@ namespace UE::DreamFX::Editor
 
 		case EValueKind::String:
 		{
+			if (!ValidateObjectDefaultType(BaseType, InputDisplayName, Value.Location, Diagnostics))
+			{
+				return false;
+			}
 			// An `Object<T>` parameter's value is a reference to an existing asset, so its spelling is
 			// the asset path -- the same one a renderer's Material already uses. Without this the
 			// declaration round-tripped bare and the rebuild left the slot empty, which is how the
@@ -675,6 +726,13 @@ namespace UE::DreamFX::Editor
 						FString::Printf(TEXT("Parameter '%s': '%s' is a %s, which is not a %s."),
 							*InputDisplayName, *Value.Text, *Asset->GetClass()->GetName(),
 							*BaseType.GetClass()->GetName()));
+					return false;
+				}
+				if (!Asset->IsAsset())
+				{
+					Diagnostics.Error(TEXT("DFX4043"), Value.Location,
+						FString::Printf(TEXT("Parameter '%s': '%s' names an object instance, not an asset. Supply the instance through a system parameter or stack input instead of an asset-path default."),
+							*InputDisplayName, *Value.Text));
 					return false;
 				}
 

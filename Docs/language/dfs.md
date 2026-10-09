@@ -2,6 +2,9 @@
 
 Produces one `UNiagaraSystem`.
 
+Add `Parent="../Base.dfs"` to inherit another system's source. See
+[system source inheritance](system-inheritance.md) for merge, path, and rebuild rules.
+
 ```cpp
 System(Name="Effects/NS_Spark", Root="Game")
 {
@@ -36,6 +39,10 @@ Settings = {
 (L4). The engine defaults (`/Niagara/Modules`, `/Niagara/DynamicInputs`, `/Niagara/Functions`) stay on
 the list, so declaring your own folder adds to them rather than replacing them.
 
+Rebuilding resets omitted supported system and emitter settings to fresh-asset engine defaults,
+then applies the settings declared in the source. Removing a supported setting therefore clears its
+previous override; this reset covers the generator's mapped settings, not unrelated asset fields.
+
 ## `Properties` — user parameters
 
 ```cpp
@@ -52,9 +59,37 @@ Properties = {
 Each becomes `User.<Name>`, settable from blueprint with `SetNiagaraVariable*`. The name is a stable
 key across rebuilds (plan 4.5), so renaming one breaks every blueprint that referenced it.
 
-`Description` reaches the asset. `Group` and `SortPriority` do not — the external edit API's user
-variable struct has no metadata fields for them, which the build says once as DFX5099. They stay in
-the source as documentation.
+Parameters can also be organized with `Group("Name") { ... }` scopes, matching DreamShader:
+
+```cpp
+Properties = {
+    Group("Burst") {
+        int   SparkCount = 24;
+        float SparkSpeed = 450.0;
+    }
+    Group("Look") {
+        Color TintA = (1.0, 0.72, 0.25, 1.0);
+    }
+    float Loose = 1.0;
+}
+```
+
+Every parameter inside a scope inherits the group name, and a `SortPriority` is stamped by
+declaration order — step 10, one counter shared across the whole block, so groups and nesting
+number their members in one continuous sequence. Nesting composes with `|`, Unreal's sub-category
+syntax: `Group("Outer") { Group("Inner") { … } }` names its members `Outer|Inner`. An explicit
+`[ Group=… ]` or `[ SortPriority=… ]` on the parameter itself wins and does not consume an auto
+slot; loose top-level parameters carry neither. The keyword is case-insensitive.
+
+Three diagnostics guard the form: DFX2027 (the name must be a quoted string), DFX2028 (it must be
+non-empty), and DFX2029 (no other form may open a brace inside a parameter block).
+
+`Description` reaches the asset, and so do `Group` and `SortPriority`: the adapter rebuilds the
+system's user parameter hierarchy (`UNiagaraSystemEditorData::UserParameterHierarchy`) from the
+plan, so the details panel groups and orders parameters the way the source lays them out. UE 5.8's
+per-variable `CategoryName` / `EditorSortPriority` metadata is deprecated engine-side — the
+hierarchy is what the parameters panel actually reads. The plan is the whole truth about
+organization: hand-made arrangement inside the editor does not survive a rebuild.
 
 Data interface parameters carry their configuration, as the quoted JSON blob the exporter writes:
 
@@ -129,10 +164,18 @@ Arguments are always named (DFX2008). Input names are normalised — Niagara's `
 written `LoopDuration`.
 
 `disabled` parks a module without deleting it: it stays in the stack, keeps its inputs, and does not
-run. That is Niagara's own "keep it but turn it off" state, and keeping the inputs is the whole reason
-to use it rather than commenting the line out. It prefixes a module call only — on an assignment it is
-DFX2024, because an assignment is folded into the stack's shared Set Parameters module and disabling
-that would drop every other assignment beside it.
+run. That is Niagara's own "keep it but turn it off" state. It also prefixes an assignment:
+
+```cpp
+Color Particles.Color = (1, 1, 1, 1);
+disabled Color Particles.Color = (1, 0, 0, 1);
+float Particles.CustomValue = 2.0;
+```
+
+Consecutive assignments fold only when their enabled state agrees. This example creates three Set
+Parameters nodes; the middle node remains disabled and the two surrounding nodes remain enabled.
+The decompiler preserves that state. A declaration in `Defaults` cannot be disabled (DFX2024), since
+a default is parameter metadata rather than an executed stack node.
 
 **Static switches gate other inputs, and on a module source order is write order.** An input that only
 exists once a switch is set has to be written after it:
@@ -256,6 +299,38 @@ which is how Ninja's debug slice came to draw over the fluid in every mirror.
 A stage of a custom C++ stage class (anything that is not the engine's generic stage) stays a gap
 with its own header line (DFX8016).
 
+Generic stages also preserve their dispatch and particle-filter configuration:
+
+| Argument | Value |
+| --- | --- |
+| `DirectDispatchType` | `OneD`, `TwoD`, `ThreeD`, or `Custom` |
+| `DirectDispatchElementType` | `NumThreads`, `NumThreadsNoClipping`, or `NumGroups` |
+| `ElementCountX`, `ElementCountY`, `ElementCountZ` | Non-negative integer fallback and/or a parameter name |
+| `OverrideGpuDispatchNumThreads` | `true` or `false` |
+| `OverrideGpuDispatchNumThreadsX`, `OverrideGpuDispatchNumThreadsY`, `OverrideGpuDispatchNumThreadsZ` | Non-negative integer fallback and/or a parameter name |
+| `GpuDispatchForceLinear`, `DisablePartialParticleUpdate` | `true` or `false` |
+| `ParticleIterationStateEnabled` | `true` or `false` |
+| `ParticleIterationStateBinding` | Particle attribute name, or `None` to clear |
+| `ParticleIterationStateRange` | Inclusive integer pair, such as `(1, 3)` |
+
+```cpp
+Stage Dispatch(
+    Iteration = DirectSet,
+    DirectDispatchType = TwoD,
+    ElementCountX = 128, ElementCountX = Emitter.Width,
+    ElementCountY = 64,
+    OverrideGpuDispatchNumThreads = true,
+    OverrideGpuDispatchNumThreadsX = 8,
+    OverrideGpuDispatchNumThreadsY = 8
+) = { ... }
+```
+
+As with `NumIterations`, repeating a count with a number and a parameter preserves both halves of
+the engine binding. Export writes values that differ from a fresh stage and preserves bindings.
+Removing an option resets it to the fresh-stage default on the next build; old bindings do not linger.
+Thread-group override parameters retain Niagara's `static int` type; element counts use ordinary
+`int`. `ParticleIterationStateBinding = None` explicitly clears the default particle attribute binding.
+
 ## `Defaults` — what a read produces when nothing wrote
 
 > Working since 2026-08-09. What looked like an API gap was an ordering bug: the writes were
@@ -306,9 +381,14 @@ written as an array of paths:
 MeshRenderer Body
 {
     Meshes           = ["/Engine/BasicShapes/Cube"];
+    bOverrideMaterials = true;
     OverrideMaterials = ["Plugin.MoonToon:Materials/FX/M_Chunk"];
 }
 ```
+
+Mesh material overrides are disabled by default. A nonempty `OverrideMaterials` array needs
+`bOverrideMaterials = true;`; otherwise DreamFX reports DFX7105 and the renderer uses the mesh's own
+materials. Mesh renderers have no single `Material` property: writing one is an error (DFX3049).
 
 Each element is really a struct with the asset as one field inside it; which field is found by
 reflection, so this works for renderer types that do not exist yet. The struct's *other* fields — a
@@ -319,10 +399,16 @@ says so in the file header rather than flattening it away.
 binding struct caches a display name, a data-set name and source-mode flags that only its own
 `SetValue` recomputes, so writing the serialised field would leave half a binding behind.
 
+Other binding structures, including a Sprite or Ribbon renderer's `MaterialUserParamBinding`, are
+carried as quoted JSON property values during export. User parameter bindings carry only their name,
+such as `"{\"parameter\":{\"name\":\"User.Material\"}}"`; the renderer supplies the fixed parameter type.
+This avoids serializing Niagara's process-local type index. A binding with an unexpected type reports
+an export gap. These bindings are separate from attribute `Bind` statements.
+
 **Declaration order is renderer order**, and there is no other addressing scheme. Reordering two
 renderer blocks repaints the effect.
 
-Leaving `Material` out applies the engine default (DFX5004) rather than drawing nothing.
+Leaving `Material` out on a Sprite, Ribbon or Decal renderer applies the engine default (DFX5004).
 
 ## Referencing a `.dfe`
 

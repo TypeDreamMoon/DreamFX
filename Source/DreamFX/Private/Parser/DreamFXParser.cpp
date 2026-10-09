@@ -43,6 +43,18 @@ namespace UE::DreamFX
 
 			bool ParseSettingsBlock(TArray<FPropertyEntry>& OutProperties);
 			bool ParseParameterBlock(TArray<FParameterDecl>& OutParameters);
+			/**
+			 * The statement loop shared by `Properties = {}` / `Inputs = {}` and the
+			 * Group("Name") { ... } scopes they may contain (DreamShader-parity parameter groups).
+			 * Parameters inside a scope inherit the composed group name and an auto-incrementing
+			 * SortPriority (step 10, one counter across the whole block); an explicit Group or
+			 * SortPriority attribute on the parameter itself wins and does not consume an auto slot.
+			 */
+			bool ParseParameterScope(TArray<FParameterDecl>& OutParameters, const FString& InheritedGroup, int32& InOutNextAutoSort);
+			/** Parses `Group("Name") { ... }` after its Group head token was consumed. */
+			bool ParseGroupScope(TArray<FParameterDecl>& OutParameters, const FString& InheritedGroup, int32& InOutNextAutoSort);
+			/** Folds the inherited group and auto-sort into plain attributes on one parameter. */
+			void StampParameterGroup(FParameterDecl& Parameter, const FString& InheritedGroup, int32& InOutNextAutoSort);
 			bool ParseStackBlock(FStack& OutStack);
 			bool ParseEventHandlerArguments(FEventHandlerSpec& OutSpec);
 			bool ParseSimulationStageArguments(FSimulationStageSpec& OutSpec);
@@ -742,8 +754,39 @@ namespace UE::DreamFX
 				return false;
 			}
 
+			// DreamShader parity: the auto-sort counter is shared across the whole block, so groups
+			// number their members in one continuous 10, 20, 30 ... sequence regardless of nesting.
+			int32 NextAutoSort = 10;
+			return ParseParameterScope(OutParameters, FString(), NextAutoSort);
+		}
+
+		bool FParserImpl::ParseParameterScope(TArray<FParameterDecl>& OutParameters, const FString& InheritedGroup, int32& InOutNextAutoSort)
+		{
 			while (!Lexer.Peek().IsEnd() && !Lexer.Peek().IsSymbol(TEXT("}")))
 			{
+				// Group("Name") { ... } -- the only form that may open a brace inside a parameter
+				// block. Case-insensitive on the keyword, matching DreamShader's TryMatchGroupHead.
+				if (Lexer.Peek().Kind == ETokenKind::Identifier
+					&& Lexer.Peek().Text.Equals(TEXT("Group"), ESearchCase::IgnoreCase)
+					&& Lexer.Peek(1).IsSymbol(TEXT("(")))
+				{
+					if (!ParseGroupScope(OutParameters, InheritedGroup, InOutNextAutoSort))
+					{
+						return false;
+					}
+					continue;
+				}
+
+				// A bare '{' here is almost certainly a mistyped group scope; name the one legal
+				// form instead of letting it fail later as "expected a name".
+				if (Lexer.Peek().IsSymbol(TEXT("{")))
+				{
+					ErrorAtCurrent(TEXT("DFX2029"),
+						TEXT("Unexpected '{' in a parameter block. Only Group(\"Name\") { ... } may open a brace here."));
+					SkipBalancedBlock();
+					continue;
+				}
+
 				FParameterDecl Parameter;
 				Parameter.Location = Lexer.Peek().Location;
 
@@ -772,10 +815,88 @@ namespace UE::DreamFX
 					continue;
 				}
 				Lexer.TryConsumeSymbol(TEXT(";"));
+
+				StampParameterGroup(Parameter, InheritedGroup, InOutNextAutoSort);
 				OutParameters.Add(MoveTemp(Parameter));
 			}
 
 			return Expect(TEXT("}"));
+		}
+
+		bool FParserImpl::ParseGroupScope(TArray<FParameterDecl>& OutParameters, const FString& InheritedGroup, int32& InOutNextAutoSort)
+		{
+			const FSourceLocation HeadLocation = Lexer.Peek().Location;
+			Lexer.Next(); // Group
+
+			if (!Expect(TEXT("(")))
+			{
+				return false;
+			}
+
+			const FToken& NameToken = Lexer.Peek();
+			if (NameToken.Kind != ETokenKind::String)
+			{
+				Diagnostics.Error(TEXT("DFX2027"), NameToken.Location,
+					TEXT("Group(...) takes a quoted name: Group(\"Name\") { ... }."));
+				return false;
+			}
+			FString GroupName = Lexer.Next().Text;
+
+			if (GroupName.TrimStartAndEnd().IsEmpty())
+			{
+				Diagnostics.Error(TEXT("DFX2028"), HeadLocation,
+					TEXT("Group(...) requires a non-empty name."));
+				return false;
+			}
+
+			if (!Expect(TEXT(")")) || !Expect(TEXT("{")))
+			{
+				return false;
+			}
+
+			// Nested Group("Outer") { Group("Inner") { ... } } composes into "Outer|Inner", matching
+			// Unreal's native '|' sub-category syntax, which is what DreamShader does too.
+			const FString ComposedGroup = InheritedGroup.IsEmpty()
+				? GroupName
+				: InheritedGroup + TEXT("|") + GroupName;
+
+			if (!ParseParameterScope(OutParameters, ComposedGroup, InOutNextAutoSort))
+			{
+				return false;
+			}
+
+			// A trailing separator after the closing brace is tolerated, as in DreamShader.
+			Lexer.TryConsumeSymbol(TEXT(";"));
+			return true;
+		}
+
+		void FParserImpl::StampParameterGroup(FParameterDecl& Parameter, const FString& InheritedGroup, int32& InOutNextAutoSort)
+		{
+			if (InheritedGroup.IsEmpty())
+			{
+				// Top-level (ungrouped) parameters keep today's behaviour: no group, no auto-sort.
+				return;
+			}
+
+			if (!Parameter.HasAttribute(TEXT("Group")))
+			{
+				FAttribute Attribute;
+				Attribute.Key = TEXT("Group");
+				Attribute.Value = FValue::MakeString(InheritedGroup, Parameter.Location);
+				Attribute.Location = Parameter.Location;
+				Parameter.Attributes.Add(MoveTemp(Attribute));
+			}
+
+			// An explicit SortPriority wins and does not consume an auto slot.
+			if (!Parameter.HasAttribute(TEXT("SortPriority")))
+			{
+				FAttribute Attribute;
+				Attribute.Key = TEXT("SortPriority");
+				Attribute.Value = FValue::MakeNumber(InOutNextAutoSort, true, Parameter.Location);
+				Attribute.Location = Parameter.Location;
+				Parameter.Attributes.Add(MoveTemp(Attribute));
+				InOutNextAutoSort += 10;
+			}
 		}
 
 		bool FParserImpl::ParseStatement(FStack& OutStack, TArray<FString>& RegionStack)
@@ -846,7 +967,6 @@ namespace UE::DreamFX
 			// and one always is when it has no short name to resolve by. Without the second case the
 			// prefix was not consumed at all and `disabled /Game/FX/X()` parsed as a single module
 			// named `disabled/Game/FX/X`, which then failed to resolve (plan-v5 R3).
-			const FSourceLocation DisabledLocation = Token.Location;
 			if (Token.IsIdentifier(TEXT("disabled"))
 				&& (Lexer.Peek(1).Kind == ETokenKind::Identifier || Lexer.Peek(1).IsSymbol(TEXT("/"))))
 			{
@@ -949,17 +1069,6 @@ namespace UE::DreamFX
 			{
 				Diagnostics.Error(TEXT("DFX2023"), Statement.Location,
 					FString::Printf(TEXT("'%s' is a module call, so it cannot be given a type. Types are written only on assignments."),
-						*Statement.Name));
-				return false;
-			}
-
-			if (Statement.bDisabled && Statement.Kind != EStatementKind::ModuleCall)
-			{
-				// An assignment has nothing to disable -- it is written into the stack's own Set
-				// Parameters module, and turning that off would silently drop every other assignment
-				// beside it.
-				Diagnostics.Error(TEXT("DFX2024"), DisabledLocation,
-					FString::Printf(TEXT("'disabled' can only prefix a module call, and '%s' is an assignment."),
 						*Statement.Name));
 				return false;
 			}
@@ -1134,6 +1243,12 @@ namespace UE::DreamFX
 					{
 						for (FStatement& Statement : DefaultsBlock.Statements)
 						{
+							if (Statement.bDisabled)
+							{
+								Diagnostics.Error(TEXT("DFX2024"), Statement.Location,
+									TEXT("A Defaults declaration cannot be disabled; defaults are not executed stack nodes."));
+								continue;
+							}
 							if (Statement.Kind != EStatementKind::Assignment)
 							{
 								Diagnostics.Error(TEXT("DFX2016"), Statement.Location,
@@ -1413,7 +1528,7 @@ namespace UE::DreamFX
 					return false;
 				}
 
-				const FToken& ValueToken = Lexer.Peek();
+				const FToken ValueToken = Lexer.Peek();
 
 				// A dotted parameter name: "Emitter.PressureGrid" as one string, or as the same
 				// identifier-dot-identifier sequence an assignment's left side would be. Peeked
@@ -1445,6 +1560,39 @@ namespace UE::DreamFX
 				};
 
 				bool bOk = true;
+				auto ReadInteger = [this](int32& Out)
+				{
+					const bool bNegative = Lexer.TryConsumeSymbol(TEXT("-"));
+					if (Lexer.Peek().Kind != ETokenKind::Number)
+					{
+						return false;
+					}
+					const double Number = Lexer.Next().Number * (bNegative ? -1.0 : 1.0);
+					if (!FMath::IsFinite(Number) || Number < MIN_int32 || Number > MAX_int32
+						|| FMath::FloorToDouble(Number) != Number)
+					{
+						return false;
+					}
+					Out = static_cast<int32>(Number);
+					return true;
+				};
+				auto ReadBool = [this](TOptional<bool>& Out)
+				{
+					if (!Lexer.Peek().IsIdentifier(TEXT("true")) && !Lexer.Peek().IsIdentifier(TEXT("false")))
+					{
+						return false;
+					}
+					Out = Lexer.Next().Text == TEXT("true");
+					return true;
+				};
+				FSimulationStageExecutionSettings& Execution = OutSpec.Execution;
+				FStageIntegerBinding* IntegerBinding = nullptr;
+				if (Key == TEXT("ElementCountX")) { IntegerBinding = &Execution.ElementCountX; }
+				else if (Key == TEXT("ElementCountY")) { IntegerBinding = &Execution.ElementCountY; }
+				else if (Key == TEXT("ElementCountZ")) { IntegerBinding = &Execution.ElementCountZ; }
+				else if (Key == TEXT("OverrideGpuDispatchNumThreadsX")) { IntegerBinding = &Execution.OverrideGpuDispatchNumThreadsX; }
+				else if (Key == TEXT("OverrideGpuDispatchNumThreadsY")) { IntegerBinding = &Execution.OverrideGpuDispatchNumThreadsY; }
+				else if (Key == TEXT("OverrideGpuDispatchNumThreadsZ")) { IntegerBinding = &Execution.OverrideGpuDispatchNumThreadsZ; }
 				if (Key == TEXT("Iteration"))
 				{
 					bOk = ExpectIdentifier(OutSpec.Iteration);
@@ -1484,10 +1632,63 @@ namespace UE::DreamFX
 						bOk = ReadDottedName(OutSpec.EnabledBinding);
 					}
 				}
+				else if (IntegerBinding != nullptr)
+				{
+					if (ValueToken.Kind == ETokenKind::Number || ValueToken.IsSymbol(TEXT("-")))
+					{
+						int32 Number = 0;
+						bOk = ReadInteger(Number) && Number >= 0;
+						if (bOk) { IntegerBinding->Value = Number; }
+					}
+					else
+					{
+						bOk = ReadDottedName(IntegerBinding->Binding);
+					}
+				}
+				else if (Key == TEXT("DisablePartialParticleUpdate"))
+				{
+					bOk = ReadBool(Execution.DisablePartialParticleUpdate);
+				}
+				else if (Key == TEXT("ParticleIterationStateEnabled"))
+				{
+					bOk = ReadBool(Execution.ParticleIterationStateEnabled);
+				}
+				else if (Key == TEXT("ParticleIterationStateBinding"))
+				{
+					bOk = ReadDottedName(Execution.ParticleIterationStateBinding);
+				}
+				else if (Key == TEXT("ParticleIterationStateRange"))
+				{
+					FIntPoint Range;
+					bOk = Expect(TEXT("(")) && ReadInteger(Range.X) && Expect(TEXT(","))
+						&& ReadInteger(Range.Y) && Expect(TEXT(")"));
+					if (bOk) { Execution.ParticleIterationStateRange = Range; }
+				}
+				else if (Key == TEXT("GpuDispatchForceLinear"))
+				{
+					bOk = ReadBool(Execution.GpuDispatchForceLinear);
+				}
+				else if (Key == TEXT("OverrideGpuDispatchNumThreads"))
+				{
+					bOk = ReadBool(Execution.OverrideGpuDispatchNumThreads);
+				}
+				else if (Key == TEXT("DirectDispatchType"))
+				{
+					bOk = ExpectIdentifier(Execution.DirectDispatchType)
+						&& (Execution.DirectDispatchType == TEXT("OneD") || Execution.DirectDispatchType == TEXT("TwoD")
+							|| Execution.DirectDispatchType == TEXT("ThreeD") || Execution.DirectDispatchType == TEXT("Custom"));
+				}
+				else if (Key == TEXT("DirectDispatchElementType"))
+				{
+					bOk = ExpectIdentifier(Execution.DirectDispatchElementType)
+						&& (Execution.DirectDispatchElementType == TEXT("NumThreads")
+							|| Execution.DirectDispatchElementType == TEXT("NumThreadsNoClipping")
+							|| Execution.DirectDispatchElementType == TEXT("NumGroups"));
+				}
 				else
 				{
 					Diagnostics.Error(TEXT("DFX2026"), KeyLocation,
-						FString::Printf(TEXT("Unknown Stage argument '%s'. Expected Iteration, DataInterface, NumIterations, ExecuteBehavior or Enabled."),
+						FString::Printf(TEXT("Unknown Stage argument '%s'. Expected a stage iteration, enabled, dispatch or particle-state option; see the Stage language reference."),
 							*Key));
 					return false;
 				}
@@ -1495,7 +1696,7 @@ namespace UE::DreamFX
 				if (!bOk)
 				{
 					Diagnostics.Error(TEXT("DFX2026"), ValueToken.Location,
-						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: Iteration and ExecuteBehavior are identifiers, DataInterface is a dotted parameter name, NumIterations is an integer or a parameter name and Enabled is true/false or a parameter name."),
+						FString::Printf(TEXT("Stage argument '%s' has the wrong shape: counts take non-negative int32 values or parameter names, flags take true/false, ranges take two integers, and enum options take a supported entry name."),
 							*Key));
 					return false;
 				}
@@ -1527,6 +1728,27 @@ namespace UE::DreamFX
 					return false;
 				}
 				OutEmitter.FromPath = Lexer.Next().Text;
+			}
+			else if (Lexer.Peek().IsIdentifier(TEXT("inherits")))
+			{
+				OutEmitter.NativeParentLocation = Lexer.Next().Location;
+				if (Lexer.Peek().Kind != ETokenKind::String || Lexer.Peek().Text.IsEmpty())
+				{
+					ErrorAtCurrent(TEXT("DFX2015"), TEXT("'inherits' needs a quoted Niagara emitter asset path."));
+					return false;
+				}
+				OutEmitter.NativeParentPath = Lexer.Next().Text;
+				if (Lexer.Peek().IsIdentifier(TEXT("version")))
+				{
+					Lexer.Next();
+					FGuid Version;
+					if (Lexer.Peek().Kind != ETokenKind::String || !FGuid::Parse(Lexer.Peek().Text, Version) || !Version.IsValid())
+					{
+						ErrorAtCurrent(TEXT("DFX2015"), TEXT("Parent 'version' needs a quoted version GUID."));
+						return false;
+					}
+					OutEmitter.NativeParentVersion = Lexer.Next().Text;
+				}
 			}
 
 			return ParseEmitterBody(OutEmitter, /*bAllowRenderers=*/true);
@@ -1704,6 +1926,7 @@ namespace UE::DreamFX
 			}
 
 			bool bSeenName = false;
+			bool bSeenParent = false;
 			do
 			{
 				FString Key;
@@ -1731,10 +1954,21 @@ namespace UE::DreamFX
 				{
 					OutDocument.Root = Value;
 				}
+				else if (Key == TEXT("Parent"))
+				{
+					if (OutDocument.Kind != EDocumentKind::System || bSeenParent || Value.TrimStartAndEnd().IsEmpty())
+					{
+						Diagnostics.Error(TEXT("DFX2019"), KeyLocation,
+							TEXT("Parent is allowed once on a System header and must name a non-empty .dfs source path."));
+					}
+					OutDocument.ParentPath = Value;
+					OutDocument.ParentLocation = KeyLocation;
+					bSeenParent = true;
+				}
 				else
 				{
 					Diagnostics.Error(TEXT("DFX2019"), KeyLocation,
-						FString::Printf(TEXT("Unknown header argument '%s'. Expected Name or Root."), *Key));
+						FString::Printf(TEXT("Unknown header argument '%s'. Expected Name, Root, or Parent (System only)."), *Key));
 				}
 			}
 			while (Lexer.TryConsumeSymbol(TEXT(",")));
@@ -1849,21 +2083,41 @@ namespace UE::DreamFX
 		FParserImpl Impl(SourceText, Diagnostics);
 		const bool bParsed = Impl.ParseDocument(OutDocument);
 
-		// Stamped here rather than threaded through every ParseStackBlock call: the parser has no
-		// business knowing about paths, and a merged emitter needs this to report the right file.
+		// Origin survives .dfe merges and .dfs inheritance, including child overrides mixed with
+		// parent declarations. It is also the base directory for an inherited emitter's `from`.
+		auto StampProperties = [&OutDocument](TArray<FPropertyEntry>& Properties)
+		{
+			for (FPropertyEntry& Property : Properties) { Property.SourceFile = OutDocument.SourceFilePath; }
+		};
 		auto StampStacks = [&OutDocument](TArray<FStack>& Stacks)
 		{
 			for (FStack& Stack : Stacks)
 			{
 				Stack.SourceFile = OutDocument.SourceFilePath;
+				for (FStatement& Statement : Stack.Statements) { Statement.SourceFile = OutDocument.SourceFilePath; }
+			}
+		};
+		auto StampEmitter = [&](FEmitter& Emitter)
+		{
+			Emitter.FromSourceFile = OutDocument.SourceFilePath;
+			StampProperties(Emitter.Settings);
+			StampStacks(Emitter.Stacks);
+			for (FStatement& Default : Emitter.Defaults) { Default.SourceFile = OutDocument.SourceFilePath; }
+			for (FRenderer& Renderer : Emitter.Renderers)
+			{
+				Renderer.SourceFile = OutDocument.SourceFilePath;
+				StampProperties(Renderer.Properties);
+				StampProperties(Renderer.MaterialParameters);
 			}
 		};
 
+		StampProperties(OutDocument.Settings);
+		for (FParameterDecl& Parameter : OutDocument.Parameters) { Parameter.SourceFile = OutDocument.SourceFilePath; }
 		StampStacks(OutDocument.Stacks);
-		StampStacks(OutDocument.EmitterDefinition.Stacks);
+		StampEmitter(OutDocument.EmitterDefinition);
 		for (FEmitter& Emitter : OutDocument.Emitters)
 		{
-			StampStacks(Emitter.Stacks);
+			StampEmitter(Emitter);
 		}
 
 		return bParsed && !Diagnostics.HasErrors();

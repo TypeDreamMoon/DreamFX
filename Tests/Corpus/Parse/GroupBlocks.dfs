@@ -1,0 +1,29 @@
+// Group("Name") { ... } parameter scopes parse and fold into per-parameter attributes.
+//
+// The folding itself (group inheritance, the shared auto-sort counter, explicit-wins) is asserted by
+// the DreamFX.Lang.ParameterGroups.GroupScope automation test, and the asset-side organization by
+// DreamFX.Lang.ParameterGroups.GroupOrganization; this fixture keeps a full pipeline run honest.
+// DFX5004 is the one visible trace of that run -- the fixture's bare sprite renderer takes the
+// engine default material. Groups reach the asset silently, through the user parameter hierarchy.
+// EXPECT DFX5004
+System(Name="Corpus/NS_GroupBlocks", Root="Plugin.DreamFX")
+{
+    Properties = {
+        Group("Burst") {
+            int   SparkCount = 24;
+            float SparkSpeed = 450.0;
+        }
+        Group("Look") {
+            Color TintA = (1.0, 0.72, 0.25, 1.0);
+        }
+        float Loose = 1.0;
+    }
+
+    Emitter Sparks
+    {
+        EmitterUpdate = { EmitterState(); SpawnBurst_Instantaneous(SpawnCount = User.SparkCount, SpawnTime = 0.0); }
+        ParticleSpawn = { SystemLocation(); }
+        ParticleUpdate = { ParticleState(); SolveForcesAndVelocity(); }
+        SpriteRenderer Core { }
+    }
+}

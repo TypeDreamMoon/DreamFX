@@ -75,6 +75,16 @@ namespace UE::DreamFX::Editor
 		return false;
 	}
 
+	FString QuoteSourceString(FString Value)
+	{
+		Value.ReplaceInline(TEXT("\\"), TEXT("\\\\"), ESearchCase::CaseSensitive);
+		Value.ReplaceInline(TEXT("\""), TEXT("\\\""), ESearchCase::CaseSensitive);
+		Value.ReplaceInline(TEXT("\n"), TEXT("\\n"), ESearchCase::CaseSensitive);
+		Value.ReplaceInline(TEXT("\r"), TEXT("\\r"), ESearchCase::CaseSensitive);
+		Value.ReplaceInline(TEXT("\t"), TEXT("\\t"), ESearchCase::CaseSensitive);
+		return FString::Printf(TEXT("\"%s\""), *Value);
+	}
+
 	bool JsonTextToSourceString(const FString& JsonText, FString& OutLiteral)
 	{
 		// Re-serialised rather than passed through, so the same value always produces the same bytes
@@ -115,11 +125,7 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FString Escaped = Compact;
-		Escaped.ReplaceInline(TEXT("\\"), TEXT("\\\\"), ESearchCase::CaseSensitive);
-		Escaped.ReplaceInline(TEXT("\""), TEXT("\\\""), ESearchCase::CaseSensitive);
-
-		OutLiteral = FString::Printf(TEXT("\"%s\""), *Escaped);
+		OutLiteral = QuoteSourceString(Compact);
 		return true;
 	}
 
@@ -189,87 +195,82 @@ namespace UE::DreamFX::Editor
 		return true;
 	}
 
-	namespace
+	/**
+	 * Each element's remaining fields are compared against a default-constructed element first, so an
+	 * entry with a custom pivot or scale is refused instead of being flattened away.
+	 */
+	bool TryWriteReferenceArray(const UClass* RendererClass, const FString& Key,
+		const TArray<TSharedPtr<FJsonValue>>& Elements, FString& OutSource)
 	{
-		/**
-		 * An array of asset-carrying structs, as a plain array of paths.
-		 *
-		 * Each element's remaining fields are compared against a default-constructed element first, so
-		 * an entry with a custom pivot or scale is refused instead of being flattened away.
-		 */
-		bool TryWriteReferenceArray(const UClass* RendererClass, const FString& Key,
-			const TArray<TSharedPtr<FJsonValue>>& Elements, FString& OutSource)
+		if (Elements.Num() == 0)
 		{
-			if (Elements.Num() == 0)
-			{
-				return false;
-			}
-
-			FString ReferenceField;
-			FString ElementDefaultsJson;
-			TArray<FString> Errors;
-			if (!FNiagaraAdapter::GetArrayElementReferenceField(
-				RendererClass, Key, ReferenceField, ElementDefaultsJson, Errors))
-			{
-				return false;
-			}
-
-			TSharedPtr<FJsonObject> ElementDefaults;
-			{
-				const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ElementDefaultsJson);
-				FJsonSerializer::Deserialize(Reader, ElementDefaults);
-			}
-
-			TArray<FString> Paths;
-			bool bDroppedField = false;
-
-			for (const TSharedPtr<FJsonValue>& Element : Elements)
-			{
-				if (!Element.IsValid() || Element->Type != EJson::Object || !Element->AsObject().IsValid())
-				{
-					return false;
-				}
-
-				const TSharedPtr<FJsonObject> Object = Element->AsObject();
-
-				FString PackagePath;
-				if (!TryReadReferenceObject(Object->TryGetField(ReferenceField), PackagePath))
-				{
-					// An element whose reference is unset is not representable as a path, and writing an
-					// empty string would import as "no asset" on a different element index.
-					return false;
-				}
-				Paths.Add(PackagePath);
-
-				for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Object->Values)
-				{
-					if (Field.Key == ReferenceField || !Field.Value.IsValid())
-					{
-						continue;
-					}
-					const TSharedPtr<FJsonValue> Default = ElementDefaults.IsValid()
-						? ElementDefaults->TryGetField(Field.Key) : nullptr;
-					if (!Default.IsValid() || !FJsonValue::CompareEqual(*Field.Value, *Default))
-					{
-						bDroppedField = true;
-					}
-				}
-			}
-
-			if (bDroppedField)
-			{
-				return false;
-			}
-
-			TArray<FString> Quoted;
-			Quoted.Reserve(Paths.Num());
-			for (const FString& Path : Paths)
-			{
-				Quoted.Add(FString::Printf(TEXT("\"%s\""), *Path));
-			}
-			OutSource = FString::Printf(TEXT("[%s]"), *FString::Join(Quoted, TEXT(", ")));
-			return true;
+			return false;
 		}
+
+		FString ReferenceField;
+		FString ElementDefaultsJson;
+		TArray<FString> Errors;
+		if (!FNiagaraAdapter::GetArrayElementReferenceField(
+			RendererClass, Key, ReferenceField, ElementDefaultsJson, Errors))
+		{
+			return false;
+		}
+
+		TSharedPtr<FJsonObject> ElementDefaults;
+		{
+			const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ElementDefaultsJson);
+			FJsonSerializer::Deserialize(Reader, ElementDefaults);
+		}
+
+		TArray<FString> Paths;
+		bool bDroppedField = false;
+
+		for (const TSharedPtr<FJsonValue>& Element : Elements)
+		{
+			if (!Element.IsValid() || Element->Type != EJson::Object || !Element->AsObject().IsValid())
+			{
+				return false;
+			}
+
+			const TSharedPtr<FJsonObject> Object = Element->AsObject();
+
+			FString PackagePath;
+			if (!TryReadReferenceObject(Object->TryGetField(ReferenceField), PackagePath))
+			{
+				// An element whose reference is unset is not representable as a path, and writing an
+				// empty string would import as "no asset" on a different element index.
+				return false;
+			}
+			Paths.Add(PackagePath);
+
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Object->Values)
+			{
+				if (Field.Key == ReferenceField || !Field.Value.IsValid())
+				{
+					continue;
+				}
+				const TSharedPtr<FJsonValue> Default = ElementDefaults.IsValid()
+					? ElementDefaults->TryGetField(Field.Key) : nullptr;
+				if (!Default.IsValid() || !FJsonValue::CompareEqual(*Field.Value, *Default))
+				{
+					bDroppedField = true;
+				}
+			}
+		}
+
+		if (bDroppedField)
+		{
+			return false;
+		}
+
+		TArray<FString> Quoted;
+		Quoted.Reserve(Paths.Num());
+		for (const FString& Path : Paths)
+		{
+			Quoted.Add(FString::Printf(TEXT("\"%s\""), *Path));
+		}
+		OutSource = FString::Printf(TEXT("[%s]"), *FString::Join(Quoted, TEXT(", ")));
+		return true;
 	}
 
 	bool RenderJsonPropertyAsSource(const UClass* PropertyClass, const FString& Key,

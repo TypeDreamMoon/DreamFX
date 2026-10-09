@@ -612,9 +612,13 @@ namespace UE::DreamFX::Editor
 		static bool RenameModule(const FStackAddress& ModuleAddress, const FString& NewName,
 			TArray<FString>& OutErrors);
 
-		/** The emitter's graph-level parameter defaults; empty when every parameter uses Fail. */
+		/** Graph-level defaults. Export omits Fail; inheritance snapshots must include it. */
 		static bool GetParameterDefaults(const FStackAddress& EmitterAddress,
-			TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors);
+			TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors, bool bIncludeFail = false);
+
+		/** Reads an asset version directly, before native duplication can discard unused metadata. */
+		static bool GetParameterDefaults(const UNiagaraEmitter* Emitter, const FGuid& Version,
+			TArray<FParameterDefault>& OutDefaults, TArray<FString>& OutErrors, bool bIncludeFail = false);
 
 		/** Applies one parameter default, creating the graph parameter if it is not there yet. */
 		static bool SetParameterDefault(const FStackAddress& EmitterAddress,
@@ -650,6 +654,34 @@ namespace UE::DreamFX::Editor
 		static bool RemoveUserVariable(UNiagaraSystem* System, FName Name, const FNiagaraTypeDefinition& Type,
 			TArray<FString>& OutErrors);
 
+		/** One parameter's placement in the details panel, as the source laid it out. */
+		struct FUserVariablePlacement
+		{
+			FName Name;
+			FNiagaraTypeDefinition Type;
+			/** Composed group path ("Outer|Inner"), the same form the parser folds into [Group=..]. Empty = top level. */
+			FString GroupPath;
+			/** Effective order within the group; plan order already resolved explicit vs auto-stamped values. */
+			int32 SortPriority = 0;
+		};
+
+		/**
+		 * Rebuilds the system's user parameter hierarchy from the plan, so the details panel groups
+		 * and orders user parameters the way the source lays them out.
+		 *
+		 * This is where [Group=..] / [SortPriority=..] reach the asset in UE 5.8: the per-variable
+		 * CategoryName / EditorSortPriority metadata is deprecated engine-side, and the parameters
+		 * panel reads UNiagaraSystemEditorData::UserParameterHierarchy -- a DataHierarchyEditor tree
+		 * whose categories are groups and whose leaves reference the user variables by guid.
+		 *
+		 * The plan is the whole truth about organization, so the tree is rebuilt from scratch on
+		 * every call: hand-made arrangement in the editor does not survive a rebuild, exactly like
+		 * every other property the source owns. Call after the AddUserVariable loop, which is what
+		 * creates the variables this references.
+		 */
+		static bool SetUserVariableOrganization(UNiagaraSystem* System,
+			const TArray<FUserVariablePlacement>& Placements, TArray<FString>& OutErrors);
+
 		/**
 		 * Applies a user data-interface parameter's declared configuration to the system's own
 		 * instance of it. Call after AddUserVariable, which is what creates that instance.
@@ -675,6 +707,10 @@ namespace UE::DreamFX::Editor
 		 * a default stack would mean the text no longer describes the asset.
 		 */
 		static bool AddEmitter(UNiagaraSystem* System, FName EmitterName, TArray<FString>& OutErrors);
+
+		/** Recreate an emitter from a native parent (or blank), keeping an existing handle GUID. */
+		static bool ResetEmitterFromParent(UNiagaraSystem* System, FName EmitterName,
+			UNiagaraEmitter* Parent, const FGuid& ParentVersion, TArray<FString>& OutErrors);
 
 		/**
 		 * Adds a copy of an existing emitter asset.
@@ -815,7 +851,7 @@ namespace UE::DreamFX::Editor
 		 * Deliberately NOT PollForCompilationComplete: that forwards to QueryCompileComplete, which
 		 * returns false both while a compile is in flight and once it has finished (empty
 		 * ActiveCompilations), so it cannot distinguish success from "still running". The blocking
-		 * wait plus the reported status is the only sound gate.
+		 * wait, outstanding-work checks and current executable data form the completion gate.
 		 */
 		/**
 		 * @param bIncludingGpuShaders  also block until the compute shaders are built.
@@ -883,8 +919,8 @@ namespace UE::DreamFX::Editor
 
 		/**
 		 * Asks every compilable script whether its stored VM was compiled from the graphs as they
-		 * stand now, using the engine's own synchronization test. Returns false and names the stale
-		 * scripts when any is out of date.
+		 * stand now, using the engine's own synchronization test. Also requires a valid compiled id
+		 * and CPU bytecode for CPU scripts. Returns false and names any missing or stale executable.
 		 *
 		 * The belt to InvalidateCachedCompileIds' braces: that call makes the final compile see the
 		 * truth, this one proves the truth was seen. It exists so the next idempotence hole in some
@@ -967,7 +1003,9 @@ namespace UE::DreamFX::Editor
 		 * survives the original/mirror boundary and this resolves it against the live system. The
 		 * source must therefore already exist -- callers add handlers after every AddEmitter.
 		 *
-		 * Calling it again replaces the existing zero-id handler (engine RemoveEventHandlerByUsageId
+		 * A native child replaces its entire inherited event group, including graph nodes used only
+		 * by that group. Its parent association and graph dependencies shared with other stacks stay.
+		 * Otherwise calling it again replaces the existing zero-id handler (engine RemoveEventHandlerByUsageId
 		 * plus reuse of the graph output node), which is what a rebuild-in-place wants.
 		 *
 		 * Takes the language-level spec: an unset optional keeps the engine default, an empty Mode
@@ -1025,6 +1063,7 @@ namespace UE::DreamFX::Editor
 			FString NumIterationsBindingName;
 			/** The parameter driving bEnabled, when one is bound; empty otherwise. */
 			FString EnabledBindingName;
+			UE::DreamFX::FSimulationStageExecutionSettings Execution;
 			/** The stage script's usage id -- per stage, random on authored content (never zero). */
 			FGuid ScriptUsageId;
 			bool bScriptMissing = false;
@@ -1082,7 +1121,7 @@ namespace UE::DreamFX::Editor
 			TArray<FString>& OutErrors);
 
 		/**
-		 * What a freshly added generic stage holds, read off the CDO. The decompiler judges Stage
+		 * What a freshly added generic stage holds, read off a transient instance. The decompiler judges Stage
 		 * header arguments against this, so an argument is written exactly when a rebuild that
 		 * omitted it would produce something else.
 		 */

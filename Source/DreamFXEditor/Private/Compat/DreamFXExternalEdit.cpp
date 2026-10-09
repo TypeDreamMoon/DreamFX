@@ -470,17 +470,34 @@ namespace
 		return Object != nullptr ? GetDefaultProvider().GetObjectProperties(Object, TArray<FName>()) : FString();
 	}
 
-	/** The emitter property blob, which describes the emitter DATA rather than the UObject wrapper. */
-	FString EmitterDataToJson(FVersionedNiagaraEmitterData* EmitterData)
+	/** Match the native API's emitter-data properties plus the owning handle's enabled state. */
+	FString EmitterDataToJson(FVersionedNiagaraEmitterData* EmitterData, bool bEnabled)
 	{
 		if (EmitterData == nullptr)
 		{
 			return FString();
 		}
 
+		TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		Object->SetBoolField(TEXT("bIsEnabled"), bEnabled);
+		// Keep reflected property names, as the native API does. UStructToJsonObjectString
+		// lowercases them, which makes the decompiler's SimTarget/RandomSeed lookups miss.
+		for (TFieldIterator<FProperty> It(FVersionedNiagaraEmitterData::StaticStruct()); It; ++It)
+		{
+			if (!It->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible | CPF_BlueprintAssignable)
+				|| It->HasAnyPropertyFlags(CPF_Deprecated))
+			{
+				continue;
+			}
+			const TSharedPtr<FJsonValue> Value = FJsonObjectConverter::UPropertyToJsonValue(
+				*It, It->ContainerPtrToValuePtr<void>(EmitterData));
+			if (Value.IsValid())
+			{
+				Object->SetField(It->GetName(), Value);
+			}
+		}
 		FString Json;
-		FJsonObjectConverter::UStructToJsonObjectString(
-			FVersionedNiagaraEmitterData::StaticStruct(), EmitterData, Json, 0, 0);
+		FJsonSerializer::Serialize(Object, TJsonWriterFactory<>::Create(&Json));
 		return Json;
 	}
 
@@ -1316,7 +1333,7 @@ void FDreamFXExternalEditUtilities::GetEmitterData(const FDFXExt_StackItemRefere
 			LOCTEXT("EmitterDataNoEmitter", "Emitter '{0}' not found."), FText::FromName(EmitterRef.EmitterName)));
 		return;
 	}
-	OutData.PropertyValues = EmitterDataToJson(Handle->GetEmitterData());
+	OutData.PropertyValues = EmitterDataToJson(Handle->GetEmitterData(), Handle->GetIsEnabled());
 }
 
 void FDreamFXExternalEditUtilities::SetEmitterData(const FDFXExt_StackItemReference& EmitterRef,
@@ -1346,12 +1363,24 @@ void FDreamFXExternalEditUtilities::SetEmitterData(const FDFXExt_StackItemRefere
 		return;
 	}
 
+	bool bEnabled = Handle->GetIsEnabled();
+	if (JsonObject->HasField(TEXT("bIsEnabled")) && !JsonObject->TryGetBoolField(TEXT("bIsEnabled"), bEnabled))
+	{
+		Context.Error(LOCTEXT("SetEmitterEnabledBadValue", "Emitter bIsEnabled must be true or false."));
+		return;
+	}
+
 	Emitter->Modify();
 	if (!FJsonObjectConverter::JsonObjectToUStruct(
 		JsonObject.ToSharedRef(), FVersionedNiagaraEmitterData::StaticStruct(), EmitterData, 0, 0))
 	{
 		Context.Error(LOCTEXT("SetEmitterDataFailed", "Could not apply the emitter property values."));
 		return;
+	}
+	if (Handle->GetIsEnabled() != bEnabled)
+	{
+		EmitterRef.System->Modify();
+		Handle->SetIsEnabled(bEnabled, *EmitterRef.System, true);
 	}
 	Emitter->PostEditChange();
 }

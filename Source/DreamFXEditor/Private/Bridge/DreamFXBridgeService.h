@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 
+class FJsonObject;
+
 namespace UE::DreamFX::Editor
 {
 	/**
@@ -23,6 +25,9 @@ namespace UE::DreamFX::Editor
 	class FBridgeService
 	{
 	public:
+		/** Executes an action without mailbox IO, using the same dispatcher and response serialization. */
+		static FString ExecuteRequest(const TSharedPtr<FJsonObject>& Request);
+
 		/** Starts polling for requests and publishing the heartbeat. */
 		static void Register();
 

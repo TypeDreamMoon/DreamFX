@@ -1,5 +1,9 @@
 #include "DreamFXProvenance.h"
 
+#include "DreamFXTypes.h"
+#include "Misc/Paths.h"
+#include "SourceFiles/DreamFXPaths.h"
+
 #include "UObject/MetaData.h"
 #include "UObject/Object.h"
 #include "UObject/Package.h"
@@ -10,6 +14,7 @@ namespace UE::DreamFX::Editor
 	{
 		const TCHAR* const KeySourcePath     = TEXT("DreamFX.SourcePath");
 		const TCHAR* const KeySourceFullPath = TEXT("DreamFX.SourceFullPath");
+		const TCHAR* const KeySourceRoot     = TEXT("DreamFX.SourceRoot");
 		const TCHAR* const KeySourceHash     = TEXT("DreamFX.SourceHash");
 		const TCHAR* const KeyGenerator      = TEXT("DreamFX.GeneratorVersion");
 		const TCHAR* const KeyModules        = TEXT("DreamFX.ModuleDependencies");
@@ -35,7 +40,24 @@ namespace UE::DreamFX::Editor
 		// 1.1 -- stamp v2 (plan-v2 W3): module version GUIDs. Bumped because an asset stamped by 1.0
 		// has no versions recorded, and treating "absent" as "unchanged" would make the check useless
 		// on exactly the assets that predate it.
-		return TEXT("1.1");
+		// 1.2 -- dependency-aware source stamps and corrected generation/round-trip semantics.
+		// 1.3 -- native emitter/source system inheritance and verified VM completion.
+		// 1.4 -- precise expressions and initialized, collision-free attribute writeback.
+		return TEXT("1.4");
+	}
+
+	FString FProvenance::HashWithSourceDependencies(const FString& SourceHash, const TMap<FString, FString>& Dependencies)
+	{
+		if (Dependencies.IsEmpty()) { return SourceHash; }
+		TArray<FString> Paths;
+		Dependencies.GetKeys(Paths);
+		Paths.Sort();
+		FString Fingerprint = SourceHash;
+		for (const FString& Path : Paths)
+		{
+			Fingerprint += FString::Printf(TEXT("\n%d:%s=%s"), Path.Len(), *Path, *Dependencies[Path]);
+		}
+		return HashSourceText(Fingerprint);
 	}
 
 	void FProvenance::Write(UObject* Asset, const FProvenanceStamp& Stamp)
@@ -48,6 +70,7 @@ namespace UE::DreamFX::Editor
 
 		MetaData->SetValue(Asset, KeySourcePath, *Stamp.SourceRelativePath);
 		MetaData->SetValue(Asset, KeySourceFullPath, *Stamp.SourceFullPath);
+		MetaData->SetValue(Asset, KeySourceRoot, *Stamp.SourceRoot);
 		MetaData->SetValue(Asset, KeySourceHash, *Stamp.SourceHash);
 		MetaData->SetValue(Asset, KeyGenerator, *Stamp.GeneratorVersion);
 		MetaData->SetValue(Asset, KeyModules, *FString::Join(Stamp.ModuleDependencies, TEXT(";")));
@@ -74,6 +97,7 @@ namespace UE::DreamFX::Editor
 
 		OutStamp.SourceRelativePath = MetaData->GetValue(Asset, KeySourcePath);
 		OutStamp.SourceFullPath = MetaData->GetValue(Asset, KeySourceFullPath);
+		OutStamp.SourceRoot = MetaData->GetValue(Asset, KeySourceRoot);
 		OutStamp.SourceHash = MetaData->GetValue(Asset, KeySourceHash);
 		OutStamp.GeneratorVersion = MetaData->GetValue(Asset, KeyGenerator);
 
@@ -110,6 +134,7 @@ namespace UE::DreamFX::Editor
 		{
 			MetaData->RemoveValue(Asset, KeySourcePath);
 			MetaData->RemoveValue(Asset, KeySourceFullPath);
+			MetaData->RemoveValue(Asset, KeySourceRoot);
 			MetaData->RemoveValue(Asset, KeySourceHash);
 			MetaData->RemoveValue(Asset, KeyGenerator);
 			MetaData->RemoveValue(Asset, KeyModules);
@@ -128,5 +153,86 @@ namespace UE::DreamFX::Editor
 		// A generator upgrade invalidates the cache even when the source is byte-identical: the same
 		// text can lower to a different asset after a generator change.
 		return Stamp.SourceHash == SourceHash && Stamp.GeneratorVersion == GetGeneratorVersion();
+	}
+
+	namespace
+	{
+		FString NormalizeFullPath(const FString& Path)
+		{
+			FString FullPath = FPaths::ConvertRelativePathToFull(Path);
+			FPaths::NormalizeFilename(FullPath);
+			FPaths::CollapseRelativeDirectories(FullPath);
+			return FullPath;
+		}
+
+		FString RootName(const FSourceRoot& Root)
+		{
+			return Root.RootToken.IsEmpty() ? FString(TEXT("Game")) : Root.RootToken;
+		}
+	}
+
+	void FProvenance::SetSourceLocation(FProvenanceStamp& Stamp, const FString& SourceFilePath)
+	{
+		Stamp.SourceFullPath = SourceFilePath;
+		FSourceRoot OwningRoot;
+		if (!SourceFilePath.IsEmpty() && FDreamFXPaths::FindOwningRoot(SourceFilePath, OwningRoot))
+		{
+			Stamp.SourceRoot = RootName(OwningRoot);
+			Stamp.SourceRelativePath = NormalizeFullPath(SourceFilePath);
+			FPaths::MakePathRelativeTo(Stamp.SourceRelativePath, *(OwningRoot.Directory / TEXT("")));
+		}
+		else
+		{
+			Stamp.SourceRoot.Reset();
+			Stamp.SourceRelativePath = FPaths::GetCleanFilename(SourceFilePath);
+		}
+	}
+
+	bool FProvenance::IsSourceLocationCurrent(const UObject* Asset, const FString& SourceFilePath)
+	{
+		FProvenanceStamp Stamp;
+		if (SourceFilePath.IsEmpty() || !Read(Asset, Stamp))
+		{
+			return false;
+		}
+		FProvenanceStamp Current;
+		SetSourceLocation(Current, SourceFilePath);
+		if (!Current.SourceRoot.IsEmpty())
+		{
+			// Portable identity: the same root and the same path inside it, wherever the checkout is.
+			return Stamp.SourceRoot.Equals(Current.SourceRoot, ESearchCase::IgnoreCase)
+				&& !Stamp.SourceRelativePath.IsEmpty()
+				&& FPaths::IsSamePath(Stamp.SourceRelativePath, Current.SourceRelativePath);
+		}
+		// Outside every root there is nothing portable to compare.
+		return !Stamp.SourceFullPath.IsEmpty()
+			&& NormalizeFullPath(Stamp.SourceFullPath) == NormalizeFullPath(SourceFilePath);
+	}
+
+	bool FProvenance::ResolveSourceFile(const FProvenanceStamp& Stamp, FString& OutFile)
+	{
+		if (!Stamp.SourceFullPath.IsEmpty() && FPaths::FileExists(Stamp.SourceFullPath))
+		{
+			OutFile = Stamp.SourceFullPath;
+			return true;
+		}
+		if (Stamp.SourceRoot.IsEmpty() || Stamp.SourceRelativePath.IsEmpty())
+		{
+			return false;
+		}
+		for (const FSourceRoot& Root : FDreamFXPaths::GetSourceRoots())
+		{
+			if (!RootName(Root).Equals(Stamp.SourceRoot, ESearchCase::IgnoreCase))
+			{
+				continue;
+			}
+			const FString Candidate = NormalizeFullPath(Root.Directory / Stamp.SourceRelativePath);
+			if (FPaths::FileExists(Candidate))
+			{
+				OutFile = Candidate;
+				return true;
+			}
+		}
+		return false;
 	}
 }
