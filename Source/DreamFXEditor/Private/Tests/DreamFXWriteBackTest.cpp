@@ -158,7 +158,7 @@ namespace UE::DreamFX::Editor::WriteBackTests
 			const FName Parked = MakeUniqueObjectName(
 				nullptr, UPackage::StaticClass(), FName(*(Package->GetName() + TEXT("_Parked"))));
 			Package->Rename(*Parked.ToString(), nullptr,
-				REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+				REN_DontCreateRedirectors | REN_NonTransactional);
 		}
 	}
 

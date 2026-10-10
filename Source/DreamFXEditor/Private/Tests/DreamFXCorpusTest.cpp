@@ -569,7 +569,7 @@ bool FDreamFXRoundTripCorpusTest::RunTest(const FString& Parameters)
 		const FName Parked = MakeUniqueObjectName(
 			nullptr, UPackage::StaticClass(), FName(*(FixturePackage->GetName() + TEXT("_FixtureBuild"))));
 		FixturePackage->Rename(*Parked.ToString(), nullptr,
-			REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+			REN_DontCreateRedirectors | REN_NonTransactional);
 	}
 
 	// Rebuild from the export rather than from the fixture: the fixed point being asserted is the

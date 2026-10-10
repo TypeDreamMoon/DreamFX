@@ -3001,7 +3001,7 @@ namespace UE::DreamFX::Editor
 
 		FNiagaraVariableAttributeBinding* Binding =
 			BindingProperty->ContainerPtrToValuePtr<FNiagaraVariableAttributeBinding>(Renderer);
-		Binding->SetValue(TargetParameter, Handle->GetInstance(), Renderer->GetCurrentSourceMode());
+		Binding->SetValue(TargetParameter, Handle->GetInstance().ToBase(), Renderer->GetCurrentSourceMode());
 
 		// The renderer caches derived state off its bindings; without this the change is invisible to
 		// the compiled system until something else happens to trigger a refresh.

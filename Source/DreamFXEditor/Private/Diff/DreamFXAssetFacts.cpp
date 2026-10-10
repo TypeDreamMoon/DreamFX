@@ -520,7 +520,7 @@ namespace UE::DreamFX::Editor
 		};
 
 		TArray<UObject*> Inner;
-		GetObjectsWithOuter(System->GetOutermost(), Inner, /*bIncludeNestedObjects=*/true);
+		GetObjectsWithOuter(System->GetOutermost(), Inner, EGetObjectsFlags::IncludeNestedObjects);
 		for (UObject* Object : Inner)
 		{
 			UNiagaraDataInterface* Interface = Cast<UNiagaraDataInterface>(Object);
