@@ -1,0 +1,58 @@
+// An event source the system cannot name. The decompiler writes a source emitter it cannot resolve
+// as `<unresolved GUID>` -- what a copied system looks like when its handler ids were never
+// remapped, and several systems then share one stale id -- and that id must survive
+// build -> decompile -> rebuild unchanged. The writer round-trips it verbatim rather than refusing
+// it, or a text like this can never be rebuilt at all (see Docs/tools/write-back-coverage.md 3.3).
+// Same shape as EventHandler.dfs; only the source differs, so a regression here is a regression in
+// the source, not in the event stack.
+//
+// The reader's other token, `<none>` for the invalid id that means "the same emitter", has no
+// fixture: a self-source handler over a custom event does not compile in 5.8.2 (the spawn-stage
+// event script has no payload to read), so there is no compiling text to write here. The writer
+// takes it because the reader emits it.
+System(Name="Corpus/NS_EventHandlerUnresolvedSource", Root="Plugin.DreamFX")
+{
+    Emitter Source
+    {
+        Settings = {
+            RequiresPersistentIDs = true;
+            Determinism = true;
+            RandomSeed = 7;
+        }
+
+        EmitterUpdate = {
+            EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.5);
+            SpawnBurst_Instantaneous(SpawnCount = 4);
+        }
+
+        ParticleSpawn = {
+            V2/InitializeParticle(LifetimeMode = DirectSet, Lifetime = 0.4);
+        }
+
+        ParticleUpdate = {
+            // GenerateLocationEvent declares SolveForcesAndVelocity as a required predecessor.
+            SolveForcesAndVelocity();
+            GenerateLocationEvent();
+        }
+    }
+
+    Emitter DanglingSource
+    {
+        Settings = {
+            Determinism = true;
+            RandomSeed = 11;
+        }
+
+        ParticleSpawn = {
+            V2/InitializeParticle(LifetimeMode = DirectSet, Lifetime = 0.3);
+        }
+
+        OnEvent(Source = `<unresolved 1638E97D45B79223444B4BB5F73B6555>`, Event = "LocationEvent", Mode = SpawnedParticles, SpawnNumber = 2) = {
+            ReceiveLocationEvent();
+        }
+
+        SpriteRenderer
+        {
+        }
+    }
+}

@@ -248,6 +248,14 @@ One `OnEvent` block per emitter (DFX5031): DreamFX addresses the event stack thr
 the other four, and those can reach exactly one handler. An emitter that should react to two event
 streams becomes two emitters.
 
+`Source` is normally an emitter name. The decompiler also writes two bracketed tokens there, and a
+text may carry them: `` `<none>` ``, the invalid id that means the handler reads from the emitter it
+sits in, and `` `<unresolved GUID>` ``, an id no emitter in the system answers to — what a handler
+carried into a copied system looks like when nothing remapped its source on the way, and several
+systems then share one stale id. Both are written back verbatim, so such a text rebuilds and stays
+faithful to the asset; the second is a warning (DFX5036), because a handler whose source is gone
+never fires. The backticks are the lexer's rule for a name that is not bare, not a quoting choice.
+
 An event *generator* usually needs `RequiresPersistentIDs = true` in the source emitter's `Settings`,
 because it reads `Particles.ID`; without it the build reports the engine's own stack issue (DFX6003).
 

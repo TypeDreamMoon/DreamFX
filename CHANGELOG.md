@@ -21,6 +21,8 @@
 
 ### 修复
 
+- **事件处理器的源不再"要么是名字、要么建不出来"**：反编译器解析不出源发射器时写 `` `<unresolved GUID>` ``（复制系统没重映射 handler id 的典型形状——多个系统会共用同一个陈旧 id），无效 id 写 `` `<none>` ``，而写侧只接受发射器名 ⇒ 读侧产出写侧拒绝的 token，这类文本永远重建不了（与 `Docs/tools/write-back-coverage.md` §3.3 同型）。现在两种 token 都按原样回写，资产保持它原有的 id；悬空 id 额外报 `DFX5036` 警告——那类处理器本来就不触发（运行时用 id 的字符串形式建查找名、再按名字取事件集，`NiagaraEmitterInstanceImpl.cpp:418-419`、`:1307`），但这是资产的事实，不该是拒绝构建的理由。新增往返语料 `Tests/Corpus/RoundTrip/EventHandlerUnresolvedSource.dfs`。
+
 - 源码位置按 DFX 根与根内相对路径判断：同一源码树在另一台机器、CI 或测试宿主的检出路径下不再被当成"已移动"而全量重建、重存资产；溯源记录的绝对路径不存在时，Open Source / Rebuild 按根与相对路径找到源码（[#37](https://github.com/TypeDreamMoon/DreamFX/issues/37)）。
 - 源码监听只递归监听 DFX 根；根的上级目录与外部依赖目录改为只报告直接子项的浅监听，不再递归监听整个工程目录（Saved / Intermediate / DDC）乃至盘符根。被整体替换的已监听目录会重新订阅（[#38](https://github.com/TypeDreamMoon/DreamFX/issues/38)、[#44](https://github.com/TypeDreamMoon/DreamFX/issues/44)）。
 - MoonEngine 直连后端：`.dfm` 属性的 HLSL 符号按引擎引脚唯一化规则（忽略 FName 数字后缀）避让，`Particles.A.B` 与 `Particles.A_B` 等同名碰撞不再因引擎重命名引脚而编译失败（[#43](https://github.com/TypeDreamMoon/DreamFX/issues/43)）。
