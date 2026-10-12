@@ -3526,6 +3526,20 @@ namespace UE::DreamFX::Editor
 						return false;
 					}
 
+					// A source the decompiler could only write as `<unresolved GUID>` is an id no
+					// emitter in this system answers to: a handler carried into a copied system, or one
+					// whose source emitter was deleted. It is written back verbatim so the round trip
+					// stays faithful, but the handler can never fire -- the runtime looks its event set
+					// up by name from that id's string form (NiagaraEmitterInstanceImpl.cpp:1307) --
+					// and nothing about the text can say so.
+					if (Handler.Spec.Source.StartsWith(TEXT("<unresolved ")))
+					{
+						Diagnostics.Warning(TEXT("DFX5036"), Handler.Location,
+							FString::Printf(
+								TEXT("OnEvent source '%s' is an id no emitter in this system answers to, so this handler never fires. Point it at the emitter that raises the event, or delete the handler."),
+								*Handler.Spec.Source));
+					}
+
 					// Regeneration reuses the output node, and the previous build's module nodes still
 					// hang off it; the stack is addressable now, so clear it the same way the main
 					// stacks are cleared before their rebuild.

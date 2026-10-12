@@ -200,7 +200,7 @@ Because DFX8010 already ruled out every *known* gap, a mismatch here is a real d
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3855`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3869`
 <!-- generated:end DFX8013 -->
 
 **Cause.** The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its
@@ -311,7 +311,7 @@ emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in N
 '%s' was not saved: rebuilding it would drop %d fact(s) this source cannot express, and a save would destroy them. They are listed above, and the asset still holds every one of them. -Force writes anyway; full lists in %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:532`, `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:538`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4058`
+**Raised by** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:532`, `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:538`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4072`
 <!-- generated:end DFX8018 -->
 
 **Cause.** A rebuild would leave the asset holding less than it holds now, so the save was refused. One line is

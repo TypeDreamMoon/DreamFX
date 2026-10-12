@@ -168,7 +168,7 @@ its own.
 Emitter '%s' declares Stage blocks but simulates on the CPU. Simulation stages are a GPU feature: set `SimTarget = GPU` in the emitter's Settings.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3600`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3614`
 <!-- generated:end DFX5033 -->
 
 **Cause.** An emitter declares `Stage` blocks while simulating on the CPU. Simulation stages are a
@@ -219,6 +219,38 @@ are unique by construction, so this fires on hand-edited sources.
 
 **Fix.** Resolve the editor's pending changes and close it, then rebuild. Editors that close successfully are reopened after generation completes.
 
+## DFX5036
+
+<!-- generated:begin DFX5036 -->
+**Severity** warning
+
+**Message**
+
+```
+OnEvent source '%s' is an id no emitter in this system answers to, so this handler never fires. Point it at the emitter that raises the event, or delete the handler.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3537`
+<!-- generated:end DFX5036 -->
+
+**Cause.** An `OnEvent` header's `Source` is an id no emitter in this system answers to, written the
+way the decompiler writes one it cannot resolve: `` `<unresolved GUID>` ``. Two things produce it. A
+handler carried into a copied system keeps the id it had in the system it came from — nothing remaps
+it on copy, so several systems end up sharing one stale id. Or the source emitter was deleted and the
+handler stayed behind.
+
+The handler is written back with that id, so the round trip is faithful, but it can never fire: the
+runtime builds its event-handler lookup from the id's **string form** and then finds the event set by
+**name** (`NiagaraEmitterInstanceImpl.cpp:418-419`, the lookup at `:1307`), and no emitter answers to
+a guid. The asset is in exactly the same state — this is a fact about the asset, not about the text.
+
+**Fix.** Decide which emitter in the system was meant to raise `Event` and name it in `Source`.
+The source may appear before or after the receiver in the document: handlers are added after all
+emitters exist. If nothing raises that event any more, delete the handler and
+the modules its stack carried — that drops facts from the asset, so the build safety gate has to be
+told (`-Force`) and its report lists what went. Rebuild afterwards: the warning stays until `Source`
+names a live emitter.
+
 ## DFX5093
 
 <!-- generated:begin DFX5093 -->
@@ -248,7 +280,7 @@ are unique by construction, so this fires on hand-edited sources.
 Only System documents can be generated right now; this file declares a %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4259`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4273`
 <!-- generated:end DFX5097 -->
 
 **Cause.** Only `.dfs` and `.dfm` produce assets. A `.dfe` is merged into its host by copy (R3) and has nothing of its own to generate.

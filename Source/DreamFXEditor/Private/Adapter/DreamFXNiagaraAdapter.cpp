@@ -4242,13 +4242,44 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		const FNiagaraEmitterHandle* Source = HandleForName(System, Spec.Source);
-		if (Source == nullptr)
+		// The source is a HANDLE GUID in the asset, and only sometimes a name the document can still
+		// answer with. A handler whose source emitter was deleted -- or one carried into a duplicated
+		// system without its id being remapped, which is how several systems here came to share one
+		// stale id -- has no emitter left to name. The decompiler says so in the two tokens below, and
+		// the writer has to take them back: refusing them means the reader produced a token the writer
+		// rejects, and the text can never be rebuilt (see Docs/tools/write-back-coverage.md 3.3).
+		// Both are round-tripped verbatim, so the asset keeps exactly the id it had:
+		//   `<none>`            the invalid id, which Niagara reads as "the same emitter"
+		//                       (NiagaraEmitterInstanceImpl.cpp:419, NiagaraSystem.cpp:2239)
+		//   `<unresolved GUID>` the id the asset already holds, kept as-is even though nothing matches
+		//                       it -- a warning is where that belongs, not a refused build.
+		FGuid SourceEmitterID;
+		bool bSourceFromToken = false;
+		if (Spec.Source == TEXT("<none>"))
 		{
-			OutErrors.Add(FString::Printf(
-				TEXT("Event source emitter '%s' does not exist (yet). Handlers must be added after every emitter."),
-				*Spec.Source));
-			return false;
+			SourceEmitterID = FGuid();
+			bSourceFromToken = true;
+		}
+		else if (Spec.Source.StartsWith(TEXT("<unresolved ")) && Spec.Source.EndsWith(TEXT(">")))
+		{
+			static const TCHAR* const UnresolvedPrefix = TEXT("<unresolved ");
+			const int32 PrefixLength = FCString::Strlen(UnresolvedPrefix);
+			bSourceFromToken = FGuid::Parse(
+				Spec.Source.Mid(PrefixLength, Spec.Source.Len() - PrefixLength - 1), SourceEmitterID);
+		}
+
+		if (!bSourceFromToken)
+		{
+			const FNiagaraEmitterHandle* Source = HandleForName(System, Spec.Source);
+			if (Source == nullptr)
+			{
+				OutErrors.Add(FString::Printf(
+					TEXT("Event source emitter '%s' does not exist (yet). Handlers must be added after every emitter."),
+					*Spec.Source));
+				return false;
+			}
+
+			SourceEmitterID = Source->GetId();
 		}
 
 		const UEnum* ModeEnum = StaticEnum<EScriptExecutionMode>();
@@ -4301,7 +4332,7 @@ namespace UE::DreamFX::Editor
 		FNiagaraEventScriptProperties Properties;
 		Properties.ExecutionMode = static_cast<EScriptExecutionMode>(ModeValue);
 		Properties.SpawnNumber = static_cast<uint32>(FMath::Max(0, Spec.SpawnNumber));
-		Properties.SourceEmitterID = Source->GetId();
+		Properties.SourceEmitterID = SourceEmitterID;
 		Properties.SourceEventName = FName(*Spec.Event);
 		if (Spec.MaxEventsPerFrame.IsSet())
 		{
