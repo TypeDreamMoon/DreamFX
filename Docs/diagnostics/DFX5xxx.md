@@ -244,9 +244,9 @@ runtime builds its event-handler lookup from the id's **string form** and then f
 **name** (`NiagaraEmitterInstanceImpl.cpp:418-419`, the lookup at `:1307`), and no emitter answers to
 a guid. The asset is in exactly the same state — this is a fact about the asset, not about the text.
 
-**Fix.** Decide which emitter was meant to raise `Event` and name it in `Source`, placed **before**
-the handler in the document (a name resolves only once its emitter exists — the token forms need no
-such rule, which is why they build). If nothing raises that event any more, delete the handler and
+**Fix.** Decide which emitter in the system was meant to raise `Event` and name it in `Source`.
+The source may appear before or after the receiver in the document: handlers are added after all
+emitters exist. If nothing raises that event any more, delete the handler and
 the modules its stack carried — that drops facts from the asset, so the build safety gate has to be
 told (`-Force`) and its report lists what went. Rebuild afterwards: the warning stays until `Source`
 names a live emitter.
