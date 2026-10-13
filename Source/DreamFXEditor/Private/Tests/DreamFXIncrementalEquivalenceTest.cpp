@@ -1492,12 +1492,10 @@ System(Name="DreamFXAutomation/%ASSET%", Root="Game")
 				{ { TEXT("    Emitter Glow"), EmbersFirst } } },
 			{ TEXT("emitter moved after its sibling"), EScope::Reordered,
 				{ { EmbersFirst, TEXT("    Emitter Glow") }, { TEXT("    // end of emitters"), EmbersLast } } },
-			// Reloaded first: a full rebuild that removes an emitter added by an earlier build of the same
-			// in-memory system takes the editor down (a fatal error with no callstack, in the rebuild or
-			// just after it). Reading the asset back from disk first avoids it, and that is also the
-			// state every command line build starts from. See the report for the minimal repro.
+			// Not reloaded first: this removes an emitter an earlier build of the same in-memory system
+			// added, which is what used to corrupt the heap (see FNiagaraAdapter::RemoveEmitter).
 			{ TEXT("emitter removed"), EScope::Emitters,
-				{ { EmbersLast, TEXT("    // end of emitters") } }, ReloadFirst },
+				{ { EmbersLast, TEXT("    // end of emitters") } } },
 
 			// ---- text that changes nothing ----------------------------------------------------
 			{ TEXT("comment added"), EScope::Values,
