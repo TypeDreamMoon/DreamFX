@@ -4306,6 +4306,7 @@ namespace UE::DreamFX::Editor
 		// the build goes on to fail for an unrelated reason.
 		FLint::Run(Document, Diagnostics);
 
+		const double PlanStartSeconds = FPlatformTime::Seconds();
 		FModuleLibrary Modules;
 		if (const FPropertyEntry* ModulePaths = Document.FindSetting(TEXT("ModulePaths")))
 		{
@@ -4332,6 +4333,11 @@ namespace UE::DreamFX::Editor
 		{
 			return Result;
 		}
+
+		// Logged next to ApplyPlan's own markers so a verbose run shows where each build's time went:
+		// everything up to here is reading and probing, everything after it is writing.
+		UE_LOG(LogDreamFX, Verbose, TEXT("PHASE BuildPlan end '%s' (%.0f ms)"), *Plan.FullAssetPath,
+			(FPlatformTime::Seconds() - PlanStartSeconds) * 1000.0);
 
 		Result.AssetPath = Plan.FullAssetPath;
 
