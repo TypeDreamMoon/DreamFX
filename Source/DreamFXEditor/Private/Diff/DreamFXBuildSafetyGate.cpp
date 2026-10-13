@@ -1,4 +1,5 @@
 #include "Diff/DreamFXBuildSafetyGate.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "Diff/DreamFXAssetFacts.h"
 #include "DreamFXModule.h"
@@ -234,6 +235,7 @@ namespace UE::DreamFX::Editor
 
 	FBuildSafetySnapshot FBuildSafetyGate::Capture(UNiagaraSystem* System)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_SafetyGate_Capture);
 		FBuildSafetySnapshot Snapshot;
 		if (System == nullptr)
 		{

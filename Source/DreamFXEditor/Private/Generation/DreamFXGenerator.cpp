@@ -1,4 +1,5 @@
 #include "DreamFXGenerator.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
 #include "DreamFXExpressions.h"
@@ -1917,6 +1918,7 @@ namespace UE::DreamFX::Editor
 		bool BuildPlan(const FDocument& Document, FModuleLibrary& Modules,
 			FDiagnosticSink& Diagnostics, FPlan& OutPlan)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(DFX_BuildPlan);
 			FString MountPoint;
 			FString Error;
 			if (!FDreamFXPaths::ResolveRootMountPoint(Document.Root, MountPoint, Error))
@@ -2659,6 +2661,7 @@ namespace UE::DreamFX::Editor
 			TArray<FDeferredSelfReference>* OutDeferredSelfRefs = nullptr,
 			FDeclaredFacts* OutDeclared = nullptr)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ApplyStack);
 			bool bOk = true;
 
 			// Pass 1 -- create. Every module is appended with the engine's stack refresh deferred,
@@ -3115,6 +3118,7 @@ namespace UE::DreamFX::Editor
 		bool ApplyPlan(UNiagaraSystem* System, const FPlan& Plan, FDiagnosticSink& Diagnostics,
 			TMap<FName, FSourceLocation>& OutModuleLocations, FDeclaredFacts& OutDeclared)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ApplyPlan);
 			// plan-v6 P1. Every write below shares one edit context until something changes the shape
 			// of the stack, at which point the next call builds a fresh one. Without this each write
 			// built an entire system view model of its own, which made the cost of applying a plan
@@ -4077,6 +4081,7 @@ namespace UE::DreamFX::Editor
 
 		bool FinalizeBuild(FPendingBuild& Pending, FDiagnosticSink& Diagnostics)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(DFX_FinalizeBuild);
 			UNiagaraSystem* System = Pending.System.Get();
 
 			FCompileStateInfo CompileState;

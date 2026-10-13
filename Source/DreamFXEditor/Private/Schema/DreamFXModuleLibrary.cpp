@@ -1,4 +1,5 @@
 #include "DreamFXModuleLibrary.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "DreamFXModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -49,6 +50,7 @@ namespace UE::DreamFX::Editor
 
 	void FModuleLibrary::BuildIndex()
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ModuleLibrary_BuildIndex);
 		if (bIndexBuilt)
 		{
 			return;
@@ -443,6 +445,7 @@ namespace UE::DreamFX::Editor
 
 	bool FModuleLibrary::EnsureProbeSystem(FString& OutError)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ModuleLibrary_EnsureProbeSystem);
 		if (ProbeSystem != nullptr)
 		{
 			return true;
@@ -586,6 +589,7 @@ namespace UE::DreamFX::Editor
 	const FModuleSchema* FModuleLibrary::GetStackSchema(UNiagaraScript* Module, EStackKind Stack,
 		TArrayView<const TPair<FName, FInputValue>> SwitchValues, const FGuid& VersionGuid, FString& OutError)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ModuleLibrary_GetStackSchema);
 		if (Module == nullptr)
 		{
 			OutError = TEXT("Cannot read the schema of a null module.");
@@ -753,6 +757,7 @@ namespace UE::DreamFX::Editor
 		EStackKind Stack, TArrayView<const TPair<FName, FInputValue>> SwitchValues,
 		const FGuid& VersionGuid, FString& OutError)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ModuleLibrary_GetStackDefaults);
 		if (Module == nullptr)
 		{
 			OutError = TEXT("Cannot read the defaults of a null module.");

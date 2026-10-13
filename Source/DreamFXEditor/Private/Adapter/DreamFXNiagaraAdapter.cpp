@@ -1,6 +1,7 @@
 #include "DreamFXNiagaraAdapter.h"
 
 #include "DreamFXModule.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "EdGraphSchema_Niagara.h"
 #include "ViewModels/Stack/NiagaraParameterHandle.h"
@@ -108,7 +109,11 @@ namespace UE::DreamFX::Editor
 		struct FOpTimer
 		{
 			explicit FOpTimer(const TCHAR* InLabel)
-				: Label(InLabel), Start(FPlatformTime::Seconds()) {}
+				: Label(InLabel), Start(FPlatformTime::Seconds())
+#if CPUPROFILERTRACE_ENABLED
+				, TraceScope(InLabel, true)
+#endif
+			{}
 
 			~FOpTimer()
 			{
@@ -121,6 +126,10 @@ namespace UE::DreamFX::Editor
 
 			FString Label;
 			double Start;
+#if CPUPROFILERTRACE_ENABLED
+			// Same label in an Insights capture, so the engine scopes beneath an operation are attributed to it.
+			FCpuProfilerTrace::FDynamicEventScope TraceScope;
+#endif
 		};
 
 		/** One-shot counters for the build's summary line (plan-v6 P0). */
