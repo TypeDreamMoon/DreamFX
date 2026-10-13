@@ -68,6 +68,18 @@ namespace UE::DreamFX::Editor
 						FDreamFXCommands::RebuildFromSource(WeakSystem.Get());
 					})));
 
+				// The reverse of Rebuild from Source. Both menus that show this submenu -- the Content
+				// Browser's and the Niagara system editor's toolbar -- therefore get it from here.
+				Section.AddMenuEntry(
+					TEXT("DreamFX.PullIntoSource"),
+					LOCTEXT("PullIntoSourceLabel", "Write Back to Source"),
+					LOCTEXT("PullIntoSourceTooltip", "Write the values tuned in this asset back into the literals of its .dfs. Comments and layout are kept; a value the text changed since the last write-back is left alone. Open the report from the notification for the details."),
+					Icon(TEXT("Icons.Save")),
+					FUIAction(FExecuteAction::CreateLambda([WeakSystem]()
+					{
+						FDreamFXCommands::PullIntoSource(WeakSystem.Get());
+					})));
+
 				Section.AddMenuEntry(
 					TEXT("DreamFX.VerifyAsset"),
 					LOCTEXT("VerifyAssetLabel", "Verify"),

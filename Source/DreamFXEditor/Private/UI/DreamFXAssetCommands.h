@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "DreamFXDiagnostics.h"
+#include "WriteBack/DreamFXPull.h"
 
 class UNiagaraEmitter;
 class UNiagaraSystem;
@@ -18,6 +19,18 @@ namespace UE::DreamFX::Editor
 		FString ExistingSourcePath;
 		FString Message;
 		TArray<FString> UnsupportedFeatures;
+		FDiagnosticSink Diagnostics;
+	};
+
+	/** What a write-back into an asset's source did, before any toast: shared by the menu, the save hook and tests. */
+	struct FPullIntoSourceResult
+	{
+		/** The asset had a .dfs to write into and the pull ran. False means `Message` says why it did not. */
+		bool bAttempted = false;
+		bool bSucceeded = false;
+		FString SourceFile;
+		FString Message;
+		FPullResult Pull;
 		FDiagnosticSink Diagnostics;
 	};
 
@@ -99,6 +112,30 @@ namespace UE::DreamFX::Editor
 
 		/** Verifies just this asset against its source. */
 		static void VerifyAsset(UObject* Asset);
+
+		/**
+		 * Writes the values the asset holds back into the literals of its .dfs (`dfx pull -Apply`).
+		 *
+		 * Comments, indentation and line endings stay; only the byte range of each literal is replaced.
+		 * `bStructure` is the setting of the same name -- whether modules the editor added or removed
+		 * are added to or removed from the text too -- and is passed in rather than read here so a
+		 * caller (a test, the bridge) states what it wants.
+		 *
+		 * No toast, no editor launch, no watcher interaction beyond telling it the file was written by
+		 * us (FSourceWatcher::IgnoreOwnWrite). Only a system has a .dfs; everything else comes back
+		 * with `bAttempted` false.
+		 */
+		static FPullIntoSourceResult PullAssetIntoSource(UObject* Asset, bool bStructure);
+
+		/**
+		 * The menu command: PullAssetIntoSource with the settings, then a toast and the log.
+		 *
+		 * @param bQuietWhenUnchanged  say nothing when the text already held every value and nothing went
+		 *                             wrong. The save hook passes true, since a toast on every save of an
+		 *                             asset nobody tuned would be noise; the menu passes false, since a
+		 *                             command with no visible reaction reads as broken.
+		 */
+		static void PullIntoSource(UObject* Asset, bool bQuietWhenUnchanged = false);
 
 		/** True when the asset carries a provenance stamp -- the discriminator for the two-state menu. */
 		static bool HasProvenance(const UObject* Asset);
