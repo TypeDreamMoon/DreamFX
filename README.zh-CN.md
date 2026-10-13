@@ -99,7 +99,8 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 ```
 
 全程无需打开编辑器——生成是 headless 的。编辑器开着时,存盘即重建(file watcher),
-Niagara 预览窗口就是文本工作流的实时预览。
+Niagara 预览窗口就是文本工作流的实时预览。存盘只写出与上次构建不同的部分——1230 行的系统改一个值约 0.2 秒,
+而不是 17 秒——信不过资产状态时自动退回完整重建([增量构建](Docs/tools/incremental-builds.md))。
 
 语言覆盖完整创作面:user 参数(含**带配置的 DI 参数**)、六个 system/emitter 栈、
 **事件处理器**(`OnEvent(...)`)、**具名 Simulation Stage**(迭代源、绑定、`ExecuteBehavior`、
@@ -161,6 +162,7 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 | **继承** | [系统源码 `Parent`](Docs/language/system-inheritance.md) 与 [原生发射器 `inherits`](Docs/language/native-emitter-inheritance.md) |
 | **[诊断码](Docs/diagnostics/README.md)** | 143 个 `DFXnnnn` 全带文件/行/列,从源码生成并防漂移 |
 | **[编辑器工具](Docs/tools/editor-integration.md)** | 菜单、右键、工具栏、VSCode workspace |
+| **[增量构建](Docs/tools/incremental-builds.md)** | 存盘写什么、各类修改的代价、何时退回完整重建 |
 | **[更新日志](CHANGELOG.md)** | 每个版本做了什么,以及已知问题清单 |
 
 ## 编辑器与工具链
@@ -168,7 +170,7 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 | | |
 | :-- | :-- |
 | **编辑器集成** | *Tools* 菜单、Content Browser 右键(build / 反编译 / Adopt / 导出 `.dfe`)、Niagara 编辑器工具栏、关卡工具栏——全走同一条管线,`-NoDreamFXEditor` 一键关闭 |
-| **file watcher** | 存盘即重建;打开生成资产即实时预览 |
+| **file watcher** | 存盘即重建,且是[增量](Docs/tools/incremental-builds.md)的,只写差异;打开生成资产即实时预览 |
 | **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus` |
 | **`ci.ps1`** | lint → build → verify → corpus 一条命令,关编辑器跑 |
 | **溯源戳** | 每个生成资产带源 hash + 生成器版本 + 模块版本 GUID;`verify` 报手改、过期、版本漂移三种 |

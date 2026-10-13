@@ -100,7 +100,10 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 ```
 
 No editor required — generation runs headless. With the editor open, saving the file rebuilds the
-asset live (file watcher), so a Niagara preview window doubles as a hot-reloading text workflow.
+asset live (file watcher), so a Niagara preview window doubles as a hot-reloading text workflow. A save
+writes only what changed since the last build — a one-value edit on a 1230-line system takes about a
+second instead of 17 s (56 s on the stock prebuilt engine) — and falls back to a full rebuild by itself when it cannot trust the asset
+([incremental builds](Docs/tools/incremental-builds.md)).
 
 The language covers the full authoring surface: user parameters (including **data-interface
 parameters with their configuration**), all six system/emitter stacks, **event handlers**
@@ -167,6 +170,7 @@ build and on the stock installed engine.
 | **Inheritance** | [System source `Parent`](Docs/language/system-inheritance.md) and [native emitter `inherits`](Docs/language/native-emitter-inheritance.md) |
 | **[Diagnostics](Docs/diagnostics/README.md)** | all 143 `DFXnnnn` codes with file/line/column, generated from source and drift-checked |
 | **[Editor tools](Docs/tools/editor-integration.md)** | menus, right-click actions, toolbar, VSCode workspace |
+| **[Incremental builds](Docs/tools/incremental-builds.md)** | what a save writes, what each edit costs, when it falls back to a full rebuild |
 | **[Changelog](CHANGELOG.md)** | what each release covers, and the known-issue list |
 
 ## Editor and tooling
@@ -174,7 +178,7 @@ build and on the stock installed engine.
 | | |
 | :-- | :-- |
 | **Editor integration** | *Tools* menu, Content Browser right-click (build / decompile / Adopt / export `.dfe`), Niagara editor toolbar, level toolbar — all on the same pipeline, `-NoDreamFXEditor` turns it off |
-| **File watcher** | save the source, the asset rebuilds; open the generated asset for a live preview |
+| **File watcher** | save the source, the asset rebuilds — [incrementally](Docs/tools/incremental-builds.md), writing only the difference; open the generated asset for a live preview |
 | **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus` |
 | **`ci.ps1`** | lint → build → verify → corpus, one command, editor closed |
 | **Provenance stamps** | source hash + generator version + module version GUIDs on every generated asset; `verify` reports edited-by-hand, stale, and version-drifted assets |
