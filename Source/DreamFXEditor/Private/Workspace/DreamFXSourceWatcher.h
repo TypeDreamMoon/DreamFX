@@ -39,5 +39,27 @@ namespace UE::DreamFX::Editor
 
 		/** Queues every .dfs/.dfe/.dfm under every source root. Returns how many were queued. */
 		static int32 QueueAllSources(bool bAnnounceSuccess = true);
+
+		/**
+		 * Declares that the editor itself just wrote `File` and that its content hashes to `ContentHash`
+		 * (FOwnWriteLedger::HashBytes / HashFile), so the change notification that follows is not a
+		 * save by the author and must not queue a rebuild.
+		 *
+		 * Write-back is the caller: it rewrites a .dfs from the asset's values, and rebuilding the asset
+		 * from that text would be the editor answering its own write. Only a change that leaves the file
+		 * with exactly this content is skipped. The author editing the file again changes the hash, and
+		 * that save rebuilds as usual. Notifications that never arrive cost nothing -- the declaration
+		 * expires on its own (FOwnWriteLedger::DefaultLifetimeSeconds).
+		 */
+		static void IgnoreOwnWrite(const FString& File, const FString& ContentHash);
+
+		/** The same, hashing the file as it stands now. Call right after the write, before anything else can touch it. */
+		static void IgnoreOwnWrite(const FString& File);
+
+		/**
+		 * The question the watch session asks about every changed file: is this the write that
+		 * IgnoreOwnWrite declared? Exposed so a caller can see that its declaration took.
+		 */
+		static bool IsOwnWrite(const FString& File);
 	};
 }

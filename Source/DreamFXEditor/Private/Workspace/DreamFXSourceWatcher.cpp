@@ -7,6 +7,7 @@
 #include "Settings/DreamFXEditorSettings.h"
 #include "SourceFiles/DreamFXPaths.h"
 #include "UI/DreamFXEditorGeneration.h"
+#include "Workspace/DreamFXOwnWriteLedger.h"
 #include "Workspace/DreamFXSourceWatchSession.h"
 #include "Workspace/DreamFXWorkspaceService.h"
 
@@ -40,6 +41,9 @@ namespace UE::DreamFX::Editor
 
 		/** A batch too large to build unasked. Held until the author says so. */
 		TSet<FString> GDeferredBulkFiles;
+
+		/** What write-back wrote into source files and wants no rebuild for. */
+		FOwnWriteLedger GOwnWrites;
 
 		/** Set by an explicit command; a plain save leaves it false and stays quiet when it worked. */
 		bool GAnnounceSuccess = false;
@@ -337,6 +341,7 @@ namespace UE::DreamFX::Editor
 			GPendingFiles.Append(Sources);
 			GLastChangeTime = FPlatformTime::Seconds();
 		});
+		GWatchSession->SetOwnWriteFilter(&FSourceWatcher::IsOwnWrite);
 		GRegistered = true;
 		RefreshSourceRoots(/*bQueueNewSources=*/false);
 
@@ -364,6 +369,7 @@ namespace UE::DreamFX::Editor
 		}
 		GPendingFiles.Reset();
 		GDeferredBulkFiles.Reset();
+		GOwnWrites.Reset();
 		GAnnounceSuccess = false;
 	}
 
@@ -411,6 +417,28 @@ namespace UE::DreamFX::Editor
 		GLastChangeTime = FPlatformTime::Seconds();
 		GAnnounceSuccess |= bAnnounceSuccess;
 		return Files.Num();
+	}
+
+	void FSourceWatcher::IgnoreOwnWrite(const FString& File, const FString& ContentHash)
+	{
+		GOwnWrites.Expect(File, ContentHash, FPlatformTime::Seconds());
+	}
+
+	bool FSourceWatcher::IsOwnWrite(const FString& File)
+	{
+		return GOwnWrites.IsOwnWrite(File, FPlatformTime::Seconds(), [&File](FString& OutHash)
+		{
+			return FOwnWriteLedger::HashFile(File, OutHash);
+		});
+	}
+
+	void FSourceWatcher::IgnoreOwnWrite(const FString& File)
+	{
+		FString Hash;
+		if (FOwnWriteLedger::HashFile(File, Hash))
+		{
+			IgnoreOwnWrite(File, Hash);
+		}
 	}
 }
 

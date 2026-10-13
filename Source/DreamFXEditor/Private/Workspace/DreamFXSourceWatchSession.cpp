@@ -219,7 +219,8 @@ namespace UE::DreamFX::Editor
 		else { ReconcileWatches(); }
 	}
 
-	void FSourceWatchSession::Invalidate(TArray<FString> ChangedFiles, const TArray<FString>& ChangedDirectories)
+	void FSourceWatchSession::Invalidate(TArray<FString> ChangedFiles, const TArray<FString>& ChangedDirectories,
+		const TArray<FString>& OwnWrites)
 	{
 		auto AddAffectedFiles = [&](const TArray<FString>& Known)
 		{
@@ -242,6 +243,14 @@ namespace UE::DreamFX::Editor
 		Dependencies.FindDependents(ChangedFiles, Pending);
 		for (const FString& File : ChangedFiles)
 		{
+			// A file this process just wrote does not rebuild itself -- its dependents were found above
+			// from the same list and still do. The exception is a directory event covering it: a move
+			// or a rescan says nothing about who wrote the content, so it is queued like any other.
+			if (ContainsPath(OwnWrites, File)
+				&& !ChangedDirectories.ContainsByPredicate([&](const FString& Directory) { return InDirectory(File, Directory); }))
+			{
+				continue;
+			}
 			if (IsRootSource(File) && FPaths::FileExists(File)) { Pending.Add(File); }
 		}
 		for (auto It = Pending.CreateIterator(); It; ++It)
@@ -315,7 +324,21 @@ namespace UE::DreamFX::Editor
 				ChangedFiles.AddUnique(File);
 			}
 		}
-		if (!ChangedFiles.IsEmpty() || !ChangedDirectories.IsEmpty()) { Invalidate(MoveTemp(ChangedFiles), ChangedDirectories); }
+		if (!ChangedFiles.IsEmpty() || !ChangedDirectories.IsEmpty())
+		{
+			// Asked once per file per batch, here and not in Invalidate: the answer is read from the
+			// file on disk as the notification found it, and Invalidate is also how an explicit
+			// rebuild of a file gets queued, which must never be swallowed.
+			TArray<FString> OwnWrites;
+			if (IsOwnWrite)
+			{
+				for (const FString& File : ChangedFiles)
+				{
+					if (IsOwnWrite(File)) { OwnWrites.Add(File); }
+				}
+			}
+			Invalidate(MoveTemp(ChangedFiles), ChangedDirectories, OwnWrites);
+		}
 		else if (!StaleWatches.IsEmpty()) { ReconcileWatches(); }
 	}
 
