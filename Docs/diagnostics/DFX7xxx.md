@@ -294,7 +294,7 @@ to differ structurally -- an edit that has not been built yet -- pull is not the
 pull: the rewritten text does not read back (%s), so '%s' was left untouched.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2411`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2478`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2487`
+**Raised by** `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2411`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2545`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2553`
 <!-- generated:end DFX7110 -->
 
 **Cause.** The write half failed, and nothing was left half-done. The same code covers the three ways it can: the
@@ -398,7 +398,7 @@ the text first (`dfx build`), which makes the two structures agree and leaves th
 pull: the baseline could not be used (%s), so every value this text declares was compared from scratch.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2451`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2457`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2509`
+**Raised by** `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2442`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2448`, `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp:2484`
 <!-- generated:end DFX7114 -->
 
 **Cause.** The state of the dirty set, said once per run rather than guessed at:
