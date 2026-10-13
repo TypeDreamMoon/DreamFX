@@ -243,6 +243,10 @@ function Resolve-EngineRoot {
         if ($entry) { return (Resolve-Path -LiteralPath $entry).Path }
     }
 
+    # An engine the launcher installed is not always in the registry; its own manifest still lists it.
+    $launcher = Get-DreamFXLauncherEngineRoot -Association $association
+    if ($launcher) { return $launcher }
+
     throw "EngineAssociation '$association' is not registered. Pass -Engine <root> or set UE_ENGINE_ROOT."
 }
 

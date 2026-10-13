@@ -14,6 +14,31 @@ Assert-Equal (Get-DreamFXExitCode 3 @($success)) 3 'Exit 3 without clean shutdow
 Assert-Equal (Get-DreamFXExitCode 3 @($success, 'LogExit: Exiting.')) 0 'Known clean shutdown anomaly'
 Assert-Equal (Get-DreamFXExitCode 3 @($success, 'Fatal error: crash', 'LogExit: Exiting.')) 3 'Fatal shutdown cannot pass'
 Assert-Equal (Get-DreamFXExitCode 0 @('Commandlet DreamFXCommandlet_0 finished execution (result 2)')) 2 'Diagnostic failures are propagated'
+# Launcher-installed engines: the manifest names the engine by AppName UE_<version>, and the plugin
+# artifacts installed beside it share its InstallLocation, so only the whole name may match.
+$launcherRoot = Join-Path ([IO.Path]::GetTempPath()) ('dfx-launcher-' + [guid]::NewGuid().ToString('N'))
+$engineDir = New-Item -ItemType Directory -Path (Join-Path $launcherRoot 'UE_5.8') -Force
+$otherDir = New-Item -ItemType Directory -Path (Join-Path $launcherRoot 'Other') -Force
+$manifestPath = Join-Path $launcherRoot 'LauncherInstalled.dat'
+try {
+    @{ InstallationList = @(
+        @{ AppName = 'FabPlugin_5.9'; InstallLocation = $otherDir.FullName },
+        @{ AppName = 'UE_5.8'; InstallLocation = $engineDir.FullName },
+        @{ AppName = 'UE_5.80'; InstallLocation = $otherDir.FullName },
+        @{ AppName = 'UE_5.7'; InstallLocation = (Join-Path $launcherRoot 'gone') }
+    ) } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
+    Assert-Equal (Get-DreamFXLauncherEngineRoot -Association '5.8' -ManifestPath $manifestPath) $engineDir.FullName 'Launcher engine is found by its UE_ name'
+    Assert-Equal ([string](Get-DreamFXLauncherEngineRoot -Association '5.9' -ManifestPath $manifestPath)) '' 'A plugin artifact is not an engine'
+    Assert-Equal ([string](Get-DreamFXLauncherEngineRoot -Association '5.7' -ManifestPath $manifestPath)) '' 'An engine whose directory is gone is not returned'
+    Assert-Equal ([string](Get-DreamFXLauncherEngineRoot -Association '5.6' -ManifestPath $manifestPath)) '' 'An engine the launcher does not list is not found'
+    Assert-Equal ([string](Get-DreamFXLauncherEngineRoot -Association '5.8' -ManifestPath (Join-Path $launcherRoot 'missing.dat'))) '' 'A missing manifest is not an error'
+    Set-Content -LiteralPath $manifestPath -Value 'not json' -Encoding UTF8
+    Assert-Equal ([string](Get-DreamFXLauncherEngineRoot -Association '5.8' -ManifestPath $manifestPath)) '' 'A corrupt manifest is not an error'
+}
+finally {
+    Remove-Item -LiteralPath $launcherRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # Execute the actual driver's asset-report branch with controlled snapshots and
 # external commands. No fake .uasset files are created and Remove-Item is intercepted.
