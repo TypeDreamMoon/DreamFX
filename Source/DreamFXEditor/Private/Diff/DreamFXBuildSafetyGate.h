@@ -91,6 +91,15 @@ namespace UE::DreamFX::Editor
 		static FBuildSafetySnapshot Capture(UNiagaraSystem* System);
 
 		/**
+		 * One hash over the facts the gate compares, order-insensitive.
+		 *
+		 * Stored by a build and checked by the next one: if the asset's facts no longer hash the same,
+		 * something other than DreamFX changed it in between, and a build that patches only what the
+		 * source changed would be patching an asset it does not know.
+		 */
+		static FString HashFacts(const TArray<FString>& RawFacts);
+
+		/**
 		 * One fact the rebuild no longer carries exactly, and what was decided about it.
 		 *
 		 * Kept separate from the report because the decision is the part worth asserting: the gate
