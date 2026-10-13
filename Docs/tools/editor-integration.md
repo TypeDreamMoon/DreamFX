@@ -69,6 +69,7 @@ titled *Decompiler*:
 | :-- | :-- | :-- | :-- |
 | `DreamFX.OpenSource` | **Open Source** | `Icons.OpenInExternalEditor` | Opens the `.dfs` named in the stamp |
 | `DreamFX.RebuildFromSource` | **Rebuild from Source** | `Icons.Refresh` | Queues that one file and builds it at once — [below](#rebuild-from-source) |
+| `DreamFX.PullIntoSource` | **Write Back to Source** | `Icons.Save` | Writes the values tuned in the asset back into the literals of its `.dfs` — [below](#write-back-to-source) |
 | `DreamFX.VerifyAsset` | **Verify** | `Icons.Adjust` | Checks this asset against its source |
 
 ### Emitter submenu
@@ -195,6 +196,58 @@ full rebuild (the asset changed since its last build)
 The result is required to be the same asset a full rebuild of the same text produces. What each edit
 costs, every fallback reason and how the guarantee is tested are in [Incremental
 builds](incremental-builds.md).
+
+### Write Back to Source
+
+The editor-side entry to [`dfx pull -Apply`](pull.md): the values an asset stores — what a slider in the
+Niagara editor leaves behind — go back into the literals its `.dfs` already declares, so the next
+rebuild does not overwrite them. It is in the [System submenu](#system-submenu), which both the Content
+Browser and the Niagara system editor toolbar show, and is offered for any system with a provenance
+stamp. The source is resolved from the stamp exactly as *Open Source* and *Rebuild from Source* do it.
+
+Only the literal's own bytes are replaced, so comments, indentation and line endings stay. A value the
+text changed since the last write-back is left alone (the text is newer), values the text does not
+declare are reported and never added, and a stack whose shape the asset and the text disagree on is
+refused whole. The toast gives the counts — written, withheld, not declared, refused stacks, and
+statements added or removed — and its link opens the report file under `Saved/DreamFX/Pull/`. The same
+numbers go to the Output Log with the pull's `DFX71xx` diagnostics. Unsaved changes in the open asset
+are included: the pull reads the asset in memory.
+
+Two settings, both under *Project Settings ▸ Plugins ▸ DreamFX ▸ Workspace* and both off by default:
+
+- **Write Back Structural Edits** (`bPullStructuralEdits`) — also add and remove statements. With it off
+  a module the editor added or removed is reported (`DFX7113`) and the whole stack is left untouched;
+  with it on it is written, but only where the correspondence between asset and text is unique
+  ([`pull.md` §4d](pull.md)). The command and the save hook below both read it.
+- **Write Back to Source on Asset Save** (`bPullOnAssetSave`) — run the same write-back whenever the
+  author saves a generated system. Saving the asset is the trigger, the work is done on the next editor
+  tick, never inside the save, and the toast appears only when something was written or a stack was
+  refused.
+
+Write-back on save starts only from the author's own save. It starts nothing for a save DreamFX makes
+itself: every build ends by saving the system it generated, and a pull after that would write the values
+the build had just applied back into the file the build had just read. The generator's save goes through
+one function, which opens a scope while it runs; the hook declines while the scope is open (and the
+package-saved event is raised synchronously inside the save, so the scope covers exactly that save). It
+also declines for an autosave, a cook or any procedural save, a commandlet run, an automation run, and
+while the editor is playing.
+
+**Loop guard.** Write-back rewrites a file the source watcher is watching, and the watcher cannot tell
+that from the author saving: it would rebuild the asset the values had just come from. So the command
+tells the watcher what it wrote — `FSourceWatcher::IgnoreOwnWrite(File)` records a hash of the file as
+it stands right after the write — and the watcher drops that file's own rebuild while the file still
+hashes to it. Anything that depends on the file (a child `.dfs` that inherits from it) is still
+rebuilt. The rules are deliberately about the content, not about notifications:
+
+- the author editing the file again changes the hash, so that save rebuilds as usual, and the record is
+  discarded;
+- several notifications for one write (the OS reports more than one, and the watcher batches them by
+  tick) are all skipped, and none at all costs nothing — the record expires on its own after 10 seconds;
+- a rescan or a directory move says nothing about who wrote the content, so it still queues the file;
+- *Rebuild from Source* and *Rebuild DFX* queue the file directly and are never skipped.
+
+The asset is not touched by a write-back, so its provenance stamp still names the text as it was before
+the write. The next full build sees the new text, finds the stamp stale, and rebuilds to the same values.
 
 ### The bulk batch
 
@@ -344,6 +397,8 @@ Opening a **workspace** honours *Open Workspace In New Window*. Opening a **file
 | :-- | :-- | :-- |
 | **Open Workspace In New Window** | `true` | Only the workspace launcher reads it |
 | **Incremental Build on Save** (*Workspace*) | `true` | The watcher's save-triggered rebuilds write only what changed since the last build, and fall back to a full rebuild when they cannot. *Rebuild DFX*, *Rebuild from Source* and **Rebuild them now** always rebuild in full. See [Incremental builds](incremental-builds.md) |
+| **Write Back to Source on Asset Save** (*Workspace*) | `false` | Saving a generated system writes its stored values back into its `.dfs`, as *Write Back to Source* does. Never for DreamFX's own saves, autosaves, cooks, commandlets or while playing. See [Write Back to Source](#write-back-to-source) |
+| **Write Back Structural Edits** (*Workspace*) | `false` | Let a write-back add and remove statements as well as rewrite values; off means they are reported and the stack is left alone. Read by the command and by the save hook |
 | **Decompiled Output Directory** | `DFX/Decompiled` | Where *Export .dfs* / *Export .dfe* write, relative to the project directory. Ordinary source: discovered, watched and built. Files here must name an asset in the `Decompiled/` namespace (DFX8013) |
 
 ## Scripting the same commands
@@ -425,6 +480,7 @@ rather than something guessed at.
 - [Getting started](../getting-started.md) — the editor-side workflow in order
 - [Language reference](../language/README.md) — what the exported text means
 - [Incremental builds](incremental-builds.md) — what a save writes, and when it falls back to a full rebuild
+- [pull](pull.md) — the write-back behind *Write Back to Source*: what it may touch and what it refuses
 - [Asset comparison and export](asset-comparison-and-export.md) — comparison failures and export coverage limits
 - [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8018`, the
   gap codes that say what a decompile could not carry

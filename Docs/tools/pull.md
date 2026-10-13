@@ -65,6 +65,11 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Eng
 （真实资产动辄几十条，`破空灰尘` 是 94 条），不截断：这些名字只在这里出现，
 而每一条都对应「重建时这个输入要靠模块默认值兜底」的风险，截断掉就没人看得到。
 
+编辑器里有同一件事的入口：资产右键 / Niagara 系统编辑器工具栏 DreamFX 菜单里的 **Write Back to Source**
+（等价于 `-Apply`，`-Structure` 取自设置 `bPullStructuralEdits`），以及可选的「存盘即写回」
+（`bPullOnAssetSave`，默认关）。编辑器自己写完文件会通知源码监视器，不会因此重建刚被读过的资产；
+细节见 [editor-integration.md](editor-integration.md#write-back-to-source)。
+
 ---
 
 ## 2. `-Apply` 的语义
