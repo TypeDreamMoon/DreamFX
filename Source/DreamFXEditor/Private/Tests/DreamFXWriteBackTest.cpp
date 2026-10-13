@@ -724,18 +724,56 @@ bool FDreamFXWriteBackTest::RunTest(const FString& Parameters)
 		// an asset's own state, and the state that matters is the one a following `dfx build` leaves
 		// behind: that is what the build safety gate (DFX8018) looks at, one capture on either side of
 		// its own rebuild. So this is that comparison, made directly.
+		// How many stores hold the constant the editor just wrote, read before the rebuild replaces
+		// them. The expectation below depends on it, and it is a property of the engine's write
+		// path rather than of this code, so it is measured as well as assumed.
+		int32 CopiesBeforeRebuild = 0;
+		{
+			TArray<FString> FactsBefore;
+			DescribeSystemFacts(System, FactsBefore);
+			for (const FString& Fact : FactsBefore)
+			{
+				if (Fact.StartsWith(TEXT("ri ")) && Fact.Contains(TEXT("Constants.Motes.SpawnRate.SpawnRate (")))
+				{
+					++CopiesBeforeRebuild;
+				}
+			}
+		}
+
 		const FRebuildLosses Losses = RebuildInPlaceAndCheckForLosses(*this, Parameters, Path, NewText,
 			SourceText, System, TEXT("the rebuild pull's text asked for"));
 
 		// The assertion this case exists for, and it is about the CLASSIFICATION rather than about
-		// surviving: `SetInput` left the constant in two scripts' stores, the rebuild keeps one, and
-		// the case has to say so. A change that turns the collapse back into drift fails here, and so
-		// does one that makes the fact disappear from the report entirely.
-		if (Losses.Lost != 0 || Losses.Merged != 1)
+		// surviving: when `SetInput` leaves the constant in two scripts' stores the rebuild keeps one,
+		// and the case has to say so. A change that turns the collapse back into drift fails here, and
+		// so does one that makes the fact disappear from the report entirely.
+		//
+		// Whether `SetInput` leaves two copies is a property of the engine's write path. MoonEngine's
+		// (DREAMFX_HAS_NIAGARA_FAST_EDIT) also puts a copy in the system spawn script's store; the
+		// stock prebuilt engine's `SetStackInputData` writes only the store the module reads from, so
+		// there is nothing for the rebuild to collapse and the right answer there is one copy, 0 lost,
+		// 0 collapsed. The copy count is asserted too, so a stock run that grows a second copy -- and
+		// with it the collapse this case is about -- does not pass under the lower expectation.
+#if DREAMFX_HAS_NIAGARA_FAST_EDIT
+		const int32 ExpectedCopies = 2;
+		const int32 ExpectedMerged = 1;
+#else
+		const int32 ExpectedCopies = 1;
+		const int32 ExpectedMerged = 0;
+#endif
+		AddInfo(FString::Printf(TEXT("the editor's write left %d store(s) holding the constant before the rebuild (expected %d)."),
+			CopiesBeforeRebuild, ExpectedCopies));
+		if (CopiesBeforeRebuild != ExpectedCopies)
 		{
 			AddError(FString::Printf(
-				TEXT("the editor's own write put one constant in two scripts' stores and the rebuild materialises one, so this case is one collapse and no loss; the run reported %d lost, %d collapsed."),
-				Losses.Lost, Losses.Merged));
+				TEXT("the editor's own write left %d store(s) holding the constant before the rebuild; this engine's write path is expected to leave %d."),
+				CopiesBeforeRebuild, ExpectedCopies));
+		}
+		if (Losses.Lost != 0 || Losses.Merged != ExpectedMerged)
+		{
+			AddError(FString::Printf(
+				TEXT("the editor's own write left %d store(s) holding one constant and the rebuild materialises one, so this case is %d collapse(s) and no loss; the run reported %d lost, %d collapsed."),
+				ExpectedCopies, ExpectedMerged, Losses.Lost, Losses.Merged));
 		}
 		return true;
 	}
