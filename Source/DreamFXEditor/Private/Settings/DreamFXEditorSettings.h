@@ -70,4 +70,28 @@ public:
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Workspace", meta = (DisplayName = "Incremental Build on Save"))
 	bool bIncrementalBuildOnSave = true;
+
+	/**
+	 * Write a generated Niagara system's stored values back into its .dfs whenever the asset is saved.
+	 *
+	 * The same write-back as *Write Back to Source*, started by the save instead of a menu: values tuned
+	 * in the Niagara editor land in the literals the text already declares, and comments, layout and
+	 * line endings stay as they were. Only the author's own saves count. A save DreamFX makes itself
+	 * after a build, an autosave, a cook, a commandlet run and anything during a play session start
+	 * nothing. Off by default because it edits a file the author may have open in another editor; the
+	 * source watcher skips the rebuild that edit would otherwise cause.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Workspace", meta = (DisplayName = "Write Back to Source on Asset Save"))
+	bool bPullOnAssetSave = false;
+
+	/**
+	 * Let a write-back add and remove statements, not only rewrite values.
+	 *
+	 * A module the editor added to a stack, or one it removed, is a structural difference. With this off
+	 * the write-back reports it and leaves the whole stack untouched; with it on, and only where the
+	 * correspondence between the asset and the text is unique, it inserts or deletes the line. Applies
+	 * to *Write Back to Source* and to write-back on save alike.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Workspace", meta = (DisplayName = "Write Back Structural Edits"))
+	bool bPullStructuralEdits = false;
 };
