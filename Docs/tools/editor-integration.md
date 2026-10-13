@@ -390,7 +390,7 @@ rather than something guessed at.
 
 ## See also
 
-- [Getting started](../getting-started.md) — the editor-side workflow in order
+- [Getting started](../getting-started/quickstart.md) — the editor-side workflow in order
 - [Language reference](../language/README.md) — what the exported text means
 - [Asset comparison and export](asset-comparison-and-export.md) — comparison failures and export coverage limits
 - [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8018`, the

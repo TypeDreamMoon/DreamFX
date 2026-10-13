@@ -125,6 +125,6 @@ Source lives under a `DFX/` directory — the project's, or a plugin's. `-All` f
 
 - [`Docs/language/`](../../Docs/language/README.md) — the full syntax, one page per file kind plus
   the value modes and the `L*` rules
-- [`Docs/getting-started.md`](../../Docs/getting-started.md) — the same loop as prose, for a human
+- [`Docs/getting-started/quickstart.md`](../../Docs/getting-started/quickstart.md) — the same loop as prose, for a human
 - [`dream-fx-verify`](../dream-fx-verify/SKILL.md) — the build harness and its flags
 - [`dream-fx-diagnose`](../dream-fx-diagnose/SKILL.md) — what each diagnostic code means

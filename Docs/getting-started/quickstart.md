@@ -131,7 +131,7 @@ Did you mean 'Gravity'? Available inputs: Gravity, CoordinateSpace
 
 Two things to reach for:
 
-- **[diagnostics/](diagnostics/README.md)** — every code, with what causes it and how to fix it.
+- **[diagnostics/](../diagnostics/README.md)** — every code, with what causes it and how to fix it.
 - **`dfx.ps1 schema <Module>`** — a module's real input signature, read from the asset. This is the
   authority on names: Niagara input names contain spaces (`Loop Duration`), which DreamFX normalises,
   and some inputs only exist once a static switch above them is set.
@@ -176,7 +176,7 @@ Two of these are worth reading about before using them:
   at `/<mount>/Decompiled/<original directory>/<asset>`, never the asset it was read from. Adopt makes
   the text the only source of truth for that asset, and refuses if anything about the asset cannot be
   expressed. The full comparison is in
-  [tools/editor-integration.md](tools/editor-integration.md#export-vs-adopt).
+  [tools/editor-integration.md](../tools/editor-integration.md#export-vs-adopt).
 
 A failed build now toasts with an **Open in VSCode** link straight to the offending line, and the
 "this asset is generated" warning has one to its source file.
@@ -213,13 +213,13 @@ not a gate.
 
 ## Where to go next
 
-- **[language/](language/README.md)** — the full language: [`.dfs`](language/dfs.md),
-  [`.dfe`](language/dfe.md), [`.dfm`](language/dfm.md), and
-  [values and rules](language/values.md).
-- **[tools/editor-integration.md](tools/editor-integration.md)** — every menu, every toast, the
+- **[language/](../language/README.md)** — the full language: [`.dfs`](../language/dfs.md),
+  [`.dfe`](../language/dfe.md), [`.dfm`](../language/dfm.md), and
+  [values and rules](../language/values.md).
+- **[tools/editor-integration.md](../tools/editor-integration.md)** — every menu, every toast, the
   workspace file, VSCode discovery, and how to call the same commands from Python.
-- **[diagnostics/](diagnostics/README.md)** — every `DFXnnnn`.
-- **[../CHANGELOG.md](../CHANGELOG.md)** — what each release covers, and the known-issue list.
+- **[diagnostics/](../diagnostics/README.md)** — every `DFXnnnn`.
+- **[../CHANGELOG.md](../../CHANGELOG.md)** — what each release covers, and the known-issue list.
 
 To ask the coverage question of your own content — what fraction of it DreamFX can already
 represent, and which gaps are worth closing — run it yourself:
