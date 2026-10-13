@@ -2,6 +2,7 @@
 
 #include "Adapter/DreamFXStackLookup.h"
 #include "DreamFXModule.h"
+#include "Workspace/DreamFXPullOnSave.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "EdGraphSchema_Niagara.h"
@@ -1455,6 +1456,11 @@ namespace UE::DreamFX::Editor
 
 		const FString FileName = FPackageName::LongPackageNameToFilename(
 			Package->GetName(), FPackageName::GetAssetPackageExtension());
+
+		// Every save DreamFX makes of a generated system ends up here -- the build's own, Adopt's, the
+		// bridge's -- so this is the one place to say that it is not the author saving. The event it
+		// raises is synchronous, inside SavePackage, so the scope covers exactly this call.
+		const FPullOnSave::FSelfSaveScope SelfSave;
 
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;

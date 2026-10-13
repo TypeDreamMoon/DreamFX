@@ -5,6 +5,7 @@
 #include "Schema/DreamFXModuleLibraryCache.h"
 #include "UI/DreamFXGeneratedAssetGuard.h"
 #include "UI/DreamFXMenus.h"
+#include "Workspace/DreamFXPullOnSave.h"
 #include "Workspace/DreamFXSourceWatcher.h"
 
 #include "Misc/CommandLine.h"
@@ -51,6 +52,7 @@ void FDreamFXEditorModule::StartupModule()
 		UE::DreamFX::Editor::FSourceWatcher::Register();
 		UE::DreamFX::Editor::FDreamFXMenus::Register();
 		UE::DreamFX::Editor::FBridgeService::Register();
+		UE::DreamFX::Editor::FPullOnSave::Register();
 	}
 }
 
@@ -62,6 +64,7 @@ void FDreamFXEditorModule::ShutdownModule()
 
 	if (bInteractiveSurfaceEnabled)
 	{
+		UE::DreamFX::Editor::FPullOnSave::Unregister();
 		UE::DreamFX::Editor::FBridgeService::Unregister();
 		UE::DreamFX::Editor::FDreamFXMenus::Unregister();
 		UE::DreamFX::Editor::FSourceWatcher::Unregister();
