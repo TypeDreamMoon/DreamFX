@@ -166,6 +166,12 @@ namespace UE::DreamFX::Editor
 			// rebuilt already by a manual run; forcing avoids a confusing "nothing happened" on save.
 			Options.bForce = true;
 
+			// A save is the iteration loop, so it patches what changed. A batch somebody asked for by
+			// name -- Rebuild DFX, Rebuild from Source, the bulk-backlog link -- is the escape hatch
+			// and rebuilds in full.
+			const UDreamFXEditorSettings* Settings = GetDefault<UDreamFXEditorSettings>();
+			Options.bIncremental = !bAnnounceSuccess && Settings != nullptr && Settings->bIncrementalBuildOnSave;
+
 			FBatchResult Batch;
 
 			for (const FString& File : Files)
@@ -188,8 +194,12 @@ namespace UE::DreamFX::Editor
 				bool bSucceeded;
 				if (bGenerates)
 				{
+					const double StartSeconds = FPlatformTime::Seconds();
 					const FGenerateResult Result = FEditorGeneration::GenerateFromFile(File, Options, Diagnostics);
 					bSucceeded = Result.bSucceeded;
+					UE_LOG(LogDreamFX, Display, TEXT("'%s' %s in %.2f s: %s"), *FPaths::GetCleanFilename(File),
+						bSucceeded ? TEXT("built") : TEXT("failed"), FPlatformTime::Seconds() - StartSeconds,
+						*Result.Incremental.ToString());
 					if (Result.bSkipped)
 					{
 						++Batch.Skipped;

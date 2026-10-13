@@ -57,4 +57,17 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Workspace", meta = (ClampMin = "1",
 		DisplayName = "Bulk Rebuild Threshold"))
 	int32 BulkRebuildThreshold = 8;
+
+	/**
+	 * Rebuild only what a save changed.
+	 *
+	 * A saved source is compared with the plan its asset was last built from, and only the
+	 * difference is written: the argument values that changed, the stacks whose modules changed, the
+	 * emitters that were added or rebuilt. Anything the build cannot reproduce exactly that way --
+	 * an asset edited outside DreamFX, a new generator version, a reordered emitter list -- falls
+	 * back to the full rebuild, and the Output Log says why. Turn it off to have every save rebuild
+	 * the whole system. *Rebuild DFX* and *Rebuild from Source* always rebuild in full.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Workspace", meta = (DisplayName = "Incremental Build on Save"))
+	bool bIncrementalBuildOnSave = true;
 };
