@@ -123,6 +123,42 @@ namespace UE::DreamFX::Editor
 					OutChange.Removed.Add(Input.Key);
 				}
 			}
+
+			// Two kinds of value change the full rebuild does not reproduce as a write, so the stack is
+			// rebuilt the way the full rebuild rebuilds it, and the two land on the same asset.
+			//
+			// A literal or enum the source stopped setting: the full rebuild re-adds the module, and
+			// rapid-iteration constants it does not clean away -- the interpolated spawn script's among
+			// them -- keep the value the argument last had. A reset puts the module default there
+			// instead, which is what the source now says, but it is not what the full rebuild produces,
+			// and the build safety gate refuses it as a lost value.
+			//
+			// A data interface value: written into an existing interface in memory, a curve's new keys
+			// did not reach the asset, while the same write onto a freshly added module does.
+			auto KindOf = [](const FString& Value) { return Value.Left(2); };
+			bool bRebuild = false;
+			for (const FString& Key : OutChange.Removed)
+			{
+				const FString Kind = KindOf(Old.Inputs.FindChecked(Key));
+				bRebuild |= Kind == TEXT("L:") || Kind == TEXT("E:") || Kind == TEXT("I:");
+			}
+			for (const FString& Key : OutChange.Changed)
+			{
+				bRebuild |= KindOf(Old.Inputs.FindChecked(Key)) == TEXT("I:") || KindOf(New.Inputs.FindChecked(Key)) == TEXT("I:");
+			}
+			for (const FString& Key : OutChange.Added)
+			{
+				bRebuild |= KindOf(New.Inputs.FindChecked(Key)) == TEXT("I:");
+			}
+
+			if (bRebuild)
+			{
+				OutChange.Action = EStackAction::Rebuild;
+				OutChange.Added.Reset();
+				OutChange.Changed.Reset();
+				OutChange.Removed.Reset();
+				return;
+			}
 			OutChange.Action = (OutChange.Added.Num() + OutChange.Changed.Num() + OutChange.Removed.Num()) > 0
 				? EStackAction::Values
 				: EStackAction::Keep;

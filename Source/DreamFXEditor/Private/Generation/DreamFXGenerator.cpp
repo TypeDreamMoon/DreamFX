@@ -4205,43 +4205,15 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
-				for (const FPlannedStack& Stack : Emitter.Stacks)
+				// A partial emitter goes through the full rebuild's order for the stacks it rebuilds: clear
+				// them all, drop the constants of the modules that just left, then add stack by stack. Adding
+				// first would let a re-added module pick up the constant its previous node left behind --
+				// a value the full rebuild does not keep.
+				if (!bWhole && Change != nullptr && Change->HasStructuralStackChange())
 				{
-					const FString Key = EmitterStackKey(Emitter.Name, Stack.ScriptName.ToString());
-					const EStackAction Action = bWhole ? EStackAction::Rebuild
-						: StackActionOf(Change != nullptr ? &Change->Stacks : nullptr, Stack.ScriptName);
-					if (Action == EStackAction::Rebuild)
-					{
-						// The whole-emitter path cleared a parentless emitter in one go above; a stack
-						// rebuilt on its own is cleared here, like every stack of a parented emitter.
-						if ((Emitter.Parent || !bWhole) && !ClearStack(EmitterAddress, Stack.ScriptName, Diagnostics, Stack.Location)) { return false; }
-						if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
-							&OutDeclared, &OutNodeNames.Add(Key)))
-						{
-							return false;
-						}
-						if (!bWhole && Report != nullptr)
-						{
-							++Report->StacksRebuilt;
-						}
-						continue;
-					}
-
-					const FStackDigest* OldStack = OldEmitter->Stacks.Find(Stack.ScriptName.ToString());
-					if (OldStack == nullptr || !ApplyKeptStack(EmitterAddress, Stack, *OldStack, ValueWork.Find(Key), Diagnostics,
-						OutModuleLocations, &DeferredSelfRefs, OutDeclared, OutNodeNames.Add(Key), Report))
-					{
-						return false;
-					}
-				}
-
-				if (!bWhole && Change != nullptr)
-				{
-					// A stack the source stopped declaring is left empty, which is what clearing the
-					// whole emitter leaves it as in the full rebuild.
 					for (const TPair<FString, FStackChange>& StackChange : Change->Stacks)
 					{
-						if (StackChange.Value.Action != EStackAction::Clear)
+						if (StackChange.Value.Action != EStackAction::Rebuild && StackChange.Value.Action != EStackAction::Clear)
 						{
 							continue;
 						}
@@ -4251,10 +4223,7 @@ namespace UE::DreamFX::Editor
 							++Report->StacksRebuilt;
 						}
 					}
-
-					// After the stacks, not before: until they are cleared the modules a rebuilt stack
-					// lost are still in it, and their constants are not stale yet.
-					if (!Emitter.Parent && Change->HasStructuralStackChange())
+					if (!Emitter.Parent)
 					{
 						Errors.Reset();
 						if (!FNiagaraAdapter::CleanUpStaleParameters(EmitterAddress, Errors))
@@ -4262,6 +4231,32 @@ namespace UE::DreamFX::Editor
 							UE_LOG(LogDreamFX, Warning, TEXT("emitter '%s': could not clear stale parameters: %s"),
 								*Emitter.Name.ToString(), *FString::Join(Errors, TEXT(" | ")));
 						}
+					}
+				}
+
+				for (const FPlannedStack& Stack : Emitter.Stacks)
+				{
+					const FString Key = EmitterStackKey(Emitter.Name, Stack.ScriptName.ToString());
+					const EStackAction Action = bWhole ? EStackAction::Rebuild
+						: StackActionOf(Change != nullptr ? &Change->Stacks : nullptr, Stack.ScriptName);
+					if (Action == EStackAction::Rebuild)
+					{
+						// The whole-emitter path cleared a parentless emitter in one go above, and a partial
+						// one cleared its rebuilt stacks just before; a parented emitter clears each here.
+						if (Emitter.Parent && bWhole && !ClearStack(EmitterAddress, Stack.ScriptName, Diagnostics, Stack.Location)) { return false; }
+						if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
+							&OutDeclared, &OutNodeNames.Add(Key)))
+						{
+							return false;
+						}
+						continue;
+					}
+
+					const FStackDigest* OldStack = OldEmitter->Stacks.Find(Stack.ScriptName.ToString());
+					if (OldStack == nullptr || !ApplyKeptStack(EmitterAddress, Stack, *OldStack, ValueWork.Find(Key), Diagnostics,
+						OutModuleLocations, &DeferredSelfRefs, OutDeclared, OutNodeNames.Add(Key), Report))
+					{
+						return false;
 					}
 				}
 
@@ -5411,12 +5406,33 @@ namespace UE::DreamFX::Editor
 			{
 				UE_LOG(LogDreamFX, Display, TEXT("'%s': incremental build -- %s"),
 					*Plan.FullAssetPath, *IncrementalScope.Describe());
+				if (UE_LOG_ACTIVE(LogDreamFX, Verbose))
+				{
+					auto LogKeys = [](const FString& Where, const FStackChange& Change)
+					{
+						UE_LOG(LogDreamFX, Verbose, TEXT("    %s: changed [%s] added [%s] removed [%s]"), *Where,
+							*FString::Join(Change.Changed, TEXT(", ")), *FString::Join(Change.Added, TEXT(", ")),
+							*FString::Join(Change.Removed, TEXT(", ")));
+					};
+					for (const TPair<FString, FStackChange>& Stack : IncrementalScope.SystemStacks)
+					{
+						LogKeys(TEXT("system ") + Stack.Key, Stack.Value);
+					}
+					for (const TPair<FString, FEmitterChange>& Emitter : IncrementalScope.Emitters)
+					{
+						for (const TPair<FString, FStackChange>& Stack : Emitter.Value.Stacks)
+						{
+							LogKeys(Emitter.Key + TEXT(" ") + Stack.Key, Stack.Value);
+						}
+					}
+				}
 
 				// Its own sink: if the incremental write fails, the full rebuild below runs from the
 				// state it left and reports for itself -- a failure the full rebuild does not share is
 				// not the source's to answer for.
 				FDiagnosticSink IncrementalDiagnostics;
 				IncrementalDiagnostics.SetFile(Document.SourceFilePath);
+
 				if (ApplyPlan(System, Plan, IncrementalDiagnostics, ModuleLocations, Declared, NodeNames,
 					&IncrementalScope, &Result.Incremental))
 				{
