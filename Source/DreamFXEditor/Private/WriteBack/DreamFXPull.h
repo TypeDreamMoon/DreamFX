@@ -46,6 +46,18 @@ namespace UE::DreamFX::Editor
 		 * every declared value, which it announces (DFX7114).
 		 */
 		bool bUseBaseline = true;
+
+		/**
+		 * Build the rewritten text even when `bApply` is off, so a caller can show what an apply would
+		 * produce without applying it.
+		 *
+		 * Off by default, and the default matters to the command line: a dry run there is a list of the
+		 * lines pull would touch, and building the text would add a failure mode to it (the rewrite must
+		 * read back, DFX7110) that a plain dry run has never had. The editor bridge turns it on because a
+		 * client that previews a pull in an unsaved buffer needs the text itself, not a list of edits to
+		 * redo on its own side. Has no effect when `bApply` is on, which always builds the text.
+		 */
+		bool bPreviewText = false;
 	};
 
 	/**
@@ -188,6 +200,34 @@ namespace UE::DreamFX::Editor
 		 */
 		static FPullResult PullFile(const FString& FilePath, const FPullOptions& Options,
 			FDiagnosticSink& Diagnostics);
+
+		/**
+		 * A pull over text the caller already holds, with the baseline handled and no source file touched.
+		 *
+		 * This is what an editor integration calls: its buffer may be newer than the file on disk (or the
+		 * file may not exist at all), and it will apply `OutNewText` itself. Everything else `PullFile`
+		 * does is here, and deliberately from the same code -- the baseline is read from and recorded at
+		 * the same path `PullFile` uses for `FilePath`, so the command line and an editor buffer share
+		 * ONE record of "what the asset held at the last apply" per file and cannot disagree about which
+		 * values the text has already settled.
+		 *
+		 * With `Options.bApply` the baseline is recorded: the caller is promising that `OutNewText` is
+		 * what its buffer becomes. A caller that does not mean that must not pass `bApply`. Without it
+		 * nothing is recorded, for the reason `PullFile` documents (a dry run has settled nothing).
+		 *
+		 * `OutNewText` is only the rewritten text when `bApply` or `Options.bPreviewText` is set; with
+		 * neither it equals `SourceText` and the result's counts are the whole answer.
+		 *
+		 * @param Commit  Optional, run when the text changed and `bApply` is set, after the rewrite is
+		 *                known to read back and BEFORE the baseline is recorded. `PullFile` uses it to
+		 *                write the file: a write that fails must not leave a baseline claiming the text
+		 *                was brought into step. Returning false abandons the run (no baseline, no report)
+		 *                and makes the result unsuccessful; the hook is expected to have said why.
+		 */
+		static FPullResult PullBuffer(const FString& FilePath, const FString& SourceText,
+			const FPullOptions& Options, FDiagnosticSink& Diagnostics, FString& OutNewText,
+			TFunctionRef<bool(const FString& NewText, FPullResult& Result)> Commit
+				= [](const FString&, FPullResult&) { return true; });
 
 		/**
 		 * The same write-back over text that is already in memory, which is what makes it testable

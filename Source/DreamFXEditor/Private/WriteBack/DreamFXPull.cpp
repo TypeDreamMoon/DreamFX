@@ -2380,7 +2380,7 @@ namespace UE::DreamFX::Editor
 
 		Result.Edits = Edits.Num();
 
-		if (!Options.bApply)
+		if (!Options.bApply && !Options.bPreviewText)
 		{
 			UE_LOG(LogDreamFX, Display,
 				TEXT("pull: %d edit(s) would be made and nothing was: this is a dry run. Pass -Apply to write them into '%s'."),
@@ -2420,27 +2420,18 @@ namespace UE::DreamFX::Editor
 		return true;
 	}
 
-	FPullResult FPuller::PullFile(const FString& FilePath, const FPullOptions& Options,
-		FDiagnosticSink& Diagnostics)
+	FPullResult FPuller::PullBuffer(const FString& FilePath, const FString& SourceText,
+		const FPullOptions& Options, FDiagnosticSink& Diagnostics, FString& OutNewText,
+		TFunctionRef<bool(const FString& NewText, FPullResult& Result)> Commit)
 	{
 		FPullResult Result;
 		Result.FilePath = FilePath;
-
-		// The bytes as well as the text: the backup is the file exactly as it was, and the rewrite
-		// keeps its encoding. The default AutoDetect would turn any source with a non-ASCII comment
-		// or name into UTF-16LE -- every other DreamFX writer, and every editor it is opened in,
-		// expects UTF-8.
-		TArray<uint8> SourceBytes;
-		FString SourceText;
-		if (!FFileHelper::LoadFileToArray(SourceBytes, *FilePath) || !FFileHelper::LoadFileToString(SourceText, *FilePath))
-		{
-			Diagnostics.Error(TEXT("DFX1000"), FSourceLocation(),
-				FString::Printf(TEXT("Could not read source file '%s'."), *FilePath));
-			return Result;
-		}
+		OutNewText = SourceText;
 
 		// The baseline: what the asset held the last time this file was pulled into. Read here rather
-		// than inside the core because it is a file, and the core is about values.
+		// than inside the core because it is a file, and the core is about values. Keyed by the path of
+		// the source file and nothing about the caller, which is what lets the command line and an editor
+		// buffer for the same file share one.
 		FPullBaseline Baseline;
 		Baseline.Path = FPaths::ChangeExtension(BackupPathFor(FilePath), TEXT("baseline.txt"));
 		Result.BaselinePath = Baseline.Path;
@@ -2461,40 +2452,24 @@ namespace UE::DreamFX::Editor
 		}
 		Result.bBaselineUsed = Baseline.bLoaded && Options.bUseBaseline;
 
+		// SystemOverride stays null: the system is resolved by the text's name (or -Asset) and LOADED, and
+		// in an editor process loading an asset that is already open returns the object in memory. So a
+		// value tuned in the Niagara editor and not yet saved is the value read here, which is the point
+		// of calling this from a running editor rather than from a commandlet.
 		FString NewSource;
 		if (!PullText(SourceText, FilePath, nullptr, Options, Baseline, Diagnostics, Result, NewSource))
 		{
 			return Result;
 		}
+		OutNewText = NewSource;
 
 		if (Options.bApply && NewSource != SourceText)
 		{
-			// Back up before writing. The bytes that were there are the only record of what the editor
-			// held, and they are not recoverable from the asset once a build has run.
-			Result.BackupPath = BackupPathFor(FilePath);
-			IFileManager::Get().MakeDirectory(*FPaths::GetPath(Result.BackupPath), /*Tree=*/true);
-			if (!FFileHelper::SaveArrayToFile(SourceBytes, *Result.BackupPath))
+			if (!Commit(NewSource, Result))
 			{
-				Diagnostics.Error(TEXT("DFX7110"), FSourceLocation(), FString::Printf(
-					TEXT("pull: the backup '%s' could not be written, so '%s' was left untouched."),
-					*Result.BackupPath, *FilePath));
 				Result.bSucceeded = false;
 				return Result;
 			}
-
-			if (!FFileHelper::SaveStringToFile(NewSource, *FilePath, SourceEncodingOf(SourceBytes)))
-			{
-				Diagnostics.Error(TEXT("DFX7110"), FSourceLocation(), FString::Printf(
-					TEXT("pull: '%s' could not be written; the bytes it held are in '%s'."),
-					*FilePath, *Result.BackupPath));
-				Result.bSucceeded = false;
-				return Result;
-			}
-			Result.bWroteFile = true;
-
-			UE_LOG(LogDreamFX, Display,
-				TEXT("pull: wrote %d edit(s) into '%s'. The file it was is at '%s'."),
-				Result.Edits, *FilePath, *Result.BackupPath);
 		}
 
 		// The baseline records the asset as it stands, and only an apply records one: a dry run has
@@ -2533,5 +2508,59 @@ namespace UE::DreamFX::Editor
 		}
 
 		return Result;
+	}
+
+	FPullResult FPuller::PullFile(const FString& FilePath, const FPullOptions& Options,
+		FDiagnosticSink& Diagnostics)
+	{
+		FPullResult Failed;
+		Failed.FilePath = FilePath;
+
+		// The bytes as well as the text: the backup is the file exactly as it was, and the rewrite
+		// keeps its encoding. The default AutoDetect would turn any source with a non-ASCII comment
+		// or name into UTF-16LE -- every other DreamFX writer, and every editor it is opened in,
+		// expects UTF-8.
+		TArray<uint8> SourceBytes;
+		FString SourceText;
+		if (!FFileHelper::LoadFileToArray(SourceBytes, *FilePath) || !FFileHelper::LoadFileToString(SourceText, *FilePath))
+		{
+			Diagnostics.Error(TEXT("DFX1000"), FSourceLocation(),
+				FString::Printf(TEXT("Could not read source file '%s'."), *FilePath));
+			return Failed;
+		}
+
+		// The file is written from the commit hook, which runs after the rewrite is known to read back
+		// and before the baseline is recorded: if the write fails, no baseline may claim that the text
+		// was brought into step with the asset.
+		FString NewSource;
+		return PullBuffer(FilePath, SourceText, Options, Diagnostics, NewSource,
+			[&](const FString& Rewritten, FPullResult& Result)
+		{
+			// Back up before writing. The bytes that were there are the only record of what the editor
+			// held, and they are not recoverable from the asset once a build has run.
+			Result.BackupPath = BackupPathFor(FilePath);
+			IFileManager::Get().MakeDirectory(*FPaths::GetPath(Result.BackupPath), /*Tree=*/true);
+			if (!FFileHelper::SaveArrayToFile(SourceBytes, *Result.BackupPath))
+			{
+				Diagnostics.Error(TEXT("DFX7110"), FSourceLocation(), FString::Printf(
+					TEXT("pull: the backup '%s' could not be written, so '%s' was left untouched."),
+					*Result.BackupPath, *FilePath));
+				return false;
+			}
+
+			if (!FFileHelper::SaveStringToFile(Rewritten, *FilePath, SourceEncodingOf(SourceBytes)))
+			{
+				Diagnostics.Error(TEXT("DFX7110"), FSourceLocation(), FString::Printf(
+					TEXT("pull: '%s' could not be written; the bytes it held are in '%s'."),
+					*FilePath, *Result.BackupPath));
+				return false;
+			}
+			Result.bWroteFile = true;
+
+			UE_LOG(LogDreamFX, Display,
+				TEXT("pull: wrote %d edit(s) into '%s'. The file it was is at '%s'."),
+				Result.Edits, *FilePath, *Result.BackupPath);
+			return true;
+		});
 	}
 }
