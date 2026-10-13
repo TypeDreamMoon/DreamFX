@@ -6,10 +6,12 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Generation/DreamFXProvenance.h"
 #include "Generation/DreamFXValueLowering.h"
+#include "Misc/ScopeExit.h"
 #include "Misc/PackageName.h"
 #include "NiagaraConstants.h"
 #include "NiagaraScript.h"
 #include "NiagaraTypes.h"
+#include "Schema/DreamFXModuleLibraryCache.h"
 #include "SourceFiles/DreamFXPaths.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
@@ -1124,6 +1126,15 @@ namespace UE::DreamFX::Editor
 		}
 
 		UPackage* Package = Script->GetOutermost();
+
+		// From here the module asset is rewritten in memory, saved or not, and a failure partway leaves
+		// it half built. Either way a cached library no longer describes it: a system built next in
+		// this process has to see the module as it is now. Dropping on the way out rather than at the
+		// save is what covers a build that does not save, and one that fails.
+		ON_SCOPE_EXIT
+		{
+			FModuleLibraryCache::Invalidate(TEXT("a module was generated."));
+		};
 
 		// ---------------------------------------------------------------- build the graph
 
