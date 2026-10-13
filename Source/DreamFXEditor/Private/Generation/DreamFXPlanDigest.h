@@ -157,7 +157,7 @@ namespace UE::DreamFX::Editor
 	 * a partial write could leave the asset different from a full rebuild of the same text.
 	 */
 	bool DecideIncrementalScope(const FPlanDigest& Old, const FPlanDigest& New, FIncrementalScope& OutScope,
-		FString& OutWhyNot);
+		FString& OutWhyNot, bool bCanRebuildSingleStacks = true);
 
 	/** Stack keys of the auxiliary node-name table: one per event handler or simulation stage stack. */
 	FString MakeEventStackKey(int32 HandlerIndex, FName ScriptName);

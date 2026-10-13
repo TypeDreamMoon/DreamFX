@@ -5344,6 +5344,7 @@ namespace UE::DreamFX::Editor
 		FPlanDigest OldDigest;
 		FIncrementalScope IncrementalScope;
 		bool bTryIncremental = false;
+		bool bBaselineCompiled = true;
 		if (Options.bIncremental)
 		{
 			FString WhyNot;
@@ -5379,12 +5380,20 @@ namespace UE::DreamFX::Editor
 			else
 			{
 				const FPlanDigest NewDigest = ComputePlanDigest(Plan, FNodeNameTable());
-				bTryIncremental = DecideIncrementalScope(OldDigest, NewDigest, IncrementalScope, WhyNot);
+				// The stock engine's write path cannot rebuild part of a system the way the full rebuild
+				// does (see DecideIncrementalScope), so there a structural change runs the full rebuild.
+				bTryIncremental = DecideIncrementalScope(OldDigest, NewDigest, IncrementalScope, WhyNot,
+					/*bCanRebuildSingleStacks=*/DREAMFX_HAS_NIAGARA_FAST_EDIT != 0);
 			}
 
 			if (!bTryIncremental)
 			{
 				Result.Incremental.FallbackReason = WhyNot;
+			}
+			else
+			{
+				TArray<FString> StaleScripts;
+				bBaselineCompiled = FNiagaraAdapter::VerifyCompiledStateCurrent(System, StaleScripts);
 			}
 		}
 
@@ -5513,10 +5522,15 @@ namespace UE::DreamFX::Editor
 			// compile-id walk and nothing else. It is issued even then, because it is also what pays
 			// the compile debt the suppression window recorded. FinalizeBuild still checks the result
 			// and forces a recompile if anything is stale.
+			//
+			// Unless the asset came in with a stale compiled state: a script whose stored id matches its
+			// graph but whose VM is missing reads as up to date to an ordinary request and stays without
+			// bytecode, which only a forced compile replaces -- the reason the full rebuild forces, seen
+			// here after a refused build left the system in memory.
 			TArray<FString> StaleScripts;
 			Result.Incremental.bCompileSkipped = System->ShouldUseRapidIterationParameters()
 				&& FNiagaraAdapter::VerifyCompiledStateCurrent(System, StaleScripts);
-			FNiagaraAdapter::RequestCompileAsync(System, /*bForce=*/false);
+			FNiagaraAdapter::RequestCompileAsync(System, /*bForce=*/!bBaselineCompiled);
 		}
 		else
 		{

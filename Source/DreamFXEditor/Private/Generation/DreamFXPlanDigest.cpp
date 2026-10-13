@@ -415,7 +415,7 @@ namespace UE::DreamFX::Editor
 	}
 
 	bool DecideIncrementalScope(const FPlanDigest& Old, const FPlanDigest& New, FIncrementalScope& OutScope,
-		FString& OutWhyNot)
+		FString& OutWhyNot, bool bCanRebuildSingleStacks)
 	{
 		OutScope = FIncrementalScope();
 		OutScope.Old = &Old;
@@ -444,8 +444,14 @@ namespace UE::DreamFX::Editor
 		}
 
 		FString WhyWhole;
-		if (!DecideStacks(Old.SystemStacks, New.SystemStacks, /*bUndeclaredStacksKeepContents=*/true,
-			OutScope.SystemStacks, WhyWhole))
+		const bool bSystemStacksDecided = DecideStacks(Old.SystemStacks, New.SystemStacks,
+			/*bUndeclaredStacksKeepContents=*/true, OutScope.SystemStacks, WhyWhole);
+		bool bSystemStackRebuilt = false;
+		for (const TPair<FString, FStackChange>& Stack : OutScope.SystemStacks)
+		{
+			bSystemStackRebuilt |= Stack.Value.Action == EStackAction::Rebuild;
+		}
+		if (!bSystemStacksDecided || (!bCanRebuildSingleStacks && bSystemStackRebuilt))
 		{
 			// Both system stacks share one graph, so rebuilding all of the declared ones is the same
 			// sequence the full rebuild runs: clear them all, then add stack by stack.
@@ -489,7 +495,7 @@ namespace UE::DreamFX::Editor
 				{
 					bWhole = true;
 				}
-				else if (bHasParent && Change.HasStructuralStackChange())
+				else if ((bHasParent || !bCanRebuildSingleStacks) && Change.HasStructuralStackChange())
 				{
 					bWhole = true;
 				}
@@ -517,6 +523,32 @@ namespace UE::DreamFX::Editor
 			{
 				Change.Action = EEmitterAction::Partial;
 				OutScope.Emitters.Add(Name, MoveTemp(Change));
+			}
+		}
+
+		// Without the fast-edit API -- the stock engine -- the incremental path keeps value writes and
+		// whole emitters added or removed, and leaves every other structural change to the full rebuild.
+		// That engine launches a compile on every edit, and which value a hidden input's constant ends
+		// up with depends on the order those compiles run in; rebuilding part of the system runs them
+		// in a different order than rebuilding all of it, and the two land on different constants.
+		if (!bCanRebuildSingleStacks)
+		{
+			for (const TPair<FString, FStackChange>& Stack : OutScope.SystemStacks)
+			{
+				if (Stack.Value.Action == EStackAction::Rebuild || Stack.Value.Action == EStackAction::Clear)
+				{
+					OutWhyNot = TEXT("a system stack changes structure, which this engine rebuilds in full");
+					return false;
+				}
+			}
+			for (const TPair<FString, FEmitterChange>& Emitter : OutScope.Emitters)
+			{
+				if (Emitter.Value.Action == EEmitterAction::Rebuild || Emitter.Value.HasStructuralStackChange())
+				{
+					OutWhyNot = FString::Printf(TEXT("emitter '%s' changes structure, which this engine rebuilds in full"),
+						*Emitter.Key);
+					return false;
+				}
 			}
 		}
 
