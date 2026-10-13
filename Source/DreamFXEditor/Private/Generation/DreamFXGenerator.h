@@ -87,7 +87,7 @@ namespace UE::DreamFX::Editor
 		int32 InputsWritten = 0;
 		int32 InputsReset = 0;
 
-		/** The compiled state was already current after the writes, so no compile was requested. */
+		/** The compiled scripts were still current after the writes: nothing needed compiling. */
 		bool bCompileSkipped = false;
 
 		FString ToString() const;

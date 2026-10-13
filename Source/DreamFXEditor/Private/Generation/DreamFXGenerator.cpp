@@ -9,8 +9,10 @@
 #include "DreamFXParser.h"
 #include "DreamFXProvenance.h"
 #include "DreamFXValueLowering.h"
+#include "Diff/DreamFXAssetFacts.h"
 #include "Diff/DreamFXBuildSafetyGate.h"
 #include "Generation/DreamFXModuleGenerator.h"
+#include "Generation/DreamFXPlanDigest.h"
 #include "Lint/DreamFXLint.h"
 #include "Schema/DreamFXModuleLibrary.h"
 #include "Schema/DreamFXModuleLibraryCache.h"
@@ -28,6 +30,7 @@
 #include "NiagaraScript.h"
 #include "NiagaraSystem.h"
 #include "PackageTools.h"
+#include "UObject/Package.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonWriter.h"
@@ -2657,10 +2660,696 @@ namespace UE::DreamFX::Editor
 			return FNiagaraAdapter::SetInput(InputAddress, Input.Value, OutErrors);
 		}
 
+		/**
+		 * The node names each built stack ended up with, keyed the way the plan digest keys stacks.
+		 *
+		 * A node name exists only once its module has been added -- the engine picks it, `as <name>`
+		 * may replace it -- so a build records them as it goes, and the next incremental build addresses
+		 * the modules it does not rebuild through this table.
+		 */
+		using FNodeNameTable = TMap<FString, TArray<FName>>;
+
+		FString SystemStackKey(FName ScriptName)
+		{
+			return TEXT("system|") + ScriptName.ToString();
+		}
+
+		FString EmitterStackKey(FName EmitterName, const FString& StackKey)
+		{
+			return EmitterName.ToString() + TEXT("|") + StackKey;
+		}
+
+		/** Which write path built the asset. The fast-edit and stock paths do not produce the same graphs. */
+		FString GetWriteBackendName()
+		{
+			return FString::Printf(TEXT("external-edit:%d fast-edit:%d custom-hlsl:%d"),
+				DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT, DREAMFX_HAS_NIAGARA_FAST_EDIT, DREAMFX_HAS_CUSTOMHLSL_WRITE);
+		}
+
+		/**
+		 * The build-safety gate's declaration index for one module: what this source names, addressed
+		 * the way the facts are. Recorded per node, because the engine assigns the node name when the
+		 * module is added and `as <name>` may rename it afterwards, so nothing downstream can recover
+		 * it, and guessing it (module asset name plus a count) is exactly the heuristic the gate must
+		 * not run on.
+		 *
+		 * The scope is the constant-name prefix the rapid-iteration facts carry:
+		 * `Constants.<emitter>.<node>` for an emitter stack, `Constants.<node>` for a system-scope one
+		 * (SystemState's own facts are named that way, measured).
+		 */
+		void RecordModuleDeclarations(const FStackAddress& StackAddress, FName NodeName, const FPlannedModule& Module,
+			FDeclaredFacts& OutDeclared)
+		{
+			const FString Constants = StackAddress.EmitterName.IsNone()
+				? FString::Printf(TEXT("Constants.%s"), *NodeName.ToString())
+				: FString::Printf(TEXT("Constants.%s.%s"),
+					*StackAddress.EmitterName.ToString(), *NodeName.ToString());
+			const FString Scope = TEXT("ri ") + Constants;
+
+			for (const FPlannedInput& Input : Module.Inputs)
+			{
+				// Two spellings of one declaration, both straight out of the parse: the argument as the
+				// author wrote it, and the input's Niagara variable name -- which is the name the
+				// rapid-iteration facts are addressed by, and not always the same string
+				// (`Life Cycle Mode` vs `LifeCycleMode`).
+				if (Input.Path.Num() > 0)
+				{
+					OutDeclared.Add(Scope, Input.Path[0].ToString());
+				}
+				if (!Input.NiagaraName.IsNone())
+				{
+					OutDeclared.Add(Scope, Input.NiagaraName.ToString());
+				}
+			}
+
+			// A folded `Set Parameters` entry is a declaration too, and its name is the parameter it writes.
+			for (const FPlannedSetParameter& Parameter : Module.Parameters)
+			{
+				OutDeclared.Add(Scope, Parameter.Name.ToString());
+			}
+		}
+
+		/** Static switches -- and the static-typed parameters that drive one -- decide which inputs exist. */
+		bool IsStructuralInput(const FPlannedInput& Input)
+		{
+			return Input.bIsStaticSwitch || Input.InputType.IsStatic();
+		}
+
+		FString InputPathString(const TArray<FName>& Path)
+		{
+			TArray<FString> Parts;
+			Parts.Reserve(Path.Num());
+			for (const FName& Part : Path)
+			{
+				Parts.Add(Part.ToString());
+			}
+			return FString::Join(Parts, TEXT("/"));
+		}
+
+		FString InputDigestKey(int32 ModuleIndex, const TArray<FName>& Path)
+		{
+			return FString::Printf(TEXT("%d|%s"), ModuleIndex, *InputPathString(Path));
+		}
+
+		/**
+		 * The writes and resets one stack needs when only argument values changed.
+		 *
+		 * An argument and everything hanging under it -- a dynamic input and its own arguments -- form a
+		 * group, and a group is replaced as a whole whenever anything about its shape moved: the
+		 * argument was or becomes a dynamic input, it has nested arguments, or one of them went away.
+		 * Replacing means resetting the top argument to its default first, which takes the old chain
+		 * down with it, and then writing the group exactly as a full rebuild would onto a fresh module.
+		 * A plain value that simply changed is written on its own.
+		 */
+		struct FValueWork
+		{
+			struct FModuleWrites
+			{
+				int32 ModuleIndex = INDEX_NONE;
+				TArray<const FPlannedInput*> Inputs;
+			};
+			TArray<FModuleWrites> Modules;
+			TArray<FStackAddress> Resets;
+		};
+
+		bool ParseInputDigestKey(const FString& Key, int32& OutModule, FString& OutTop, bool& bOutNested)
+		{
+			FString Index;
+			FString Path;
+			if (!Key.Split(TEXT("|"), &Index, &Path))
+			{
+				return false;
+			}
+			OutModule = FCString::Atoi(*Index);
+			FString Rest;
+			bOutNested = Path.Split(TEXT("/"), &OutTop, &Rest);
+			if (!bOutNested)
+			{
+				OutTop = Path;
+			}
+			return true;
+		}
+
+		void PlanStackValueWork(const FStackAddress& StackAddress, const FPlannedStack& Stack, const FStackChange& Change,
+			const FStackDigest& OldStack, FValueWork& OutWork)
+		{
+			TMap<int32, TSet<FString>> Affected;
+			TSet<FString> Removed;
+			auto Note = [&Affected](const FString& Key)
+			{
+				int32 Module = INDEX_NONE;
+				FString Top;
+				bool bNested = false;
+				if (ParseInputDigestKey(Key, Module, Top, bNested))
+				{
+					Affected.FindOrAdd(Module).Add(Top);
+				}
+			};
+			for (const FString& Key : Change.Changed) { Note(Key); }
+			for (const FString& Key : Change.Added) { Note(Key); }
+			for (const FString& Key : Change.Removed) { Note(Key); Removed.Add(Key); }
+
+			TArray<int32> ModuleIndices;
+			Affected.GetKeys(ModuleIndices);
+			ModuleIndices.Sort();
+
+			for (const int32 ModuleIndex : ModuleIndices)
+			{
+				if (!Stack.Modules.IsValidIndex(ModuleIndex) || !OldStack.NodeNames.IsValidIndex(ModuleIndex))
+				{
+					continue;
+				}
+				const FPlannedModule& Module = Stack.Modules[ModuleIndex];
+				const FStackAddress ModuleAddress = StackAddress.WithModule(FName(*OldStack.NodeNames[ModuleIndex]));
+				const TSet<FString>& Tops = Affected.FindChecked(ModuleIndex);
+
+				TSet<FString> ReplacedGroups;
+				for (const FString& Top : Tops)
+				{
+					const FString GroupKey = FString::Printf(TEXT("%d|%s"), ModuleIndex, *Top);
+					const FString NestedPrefix = GroupKey + TEXT("/");
+
+					bool bOldHad = false;
+					bool bOldNested = false;
+					bool bOldDynamic = false;
+					bool bRemovedAny = false;
+					for (const TPair<FString, FString>& Old : OldStack.Inputs)
+					{
+						if (Old.Key == GroupKey)
+						{
+							bOldHad = true;
+							bOldDynamic = Old.Value.StartsWith(TEXT("D:"));
+						}
+						else if (Old.Key.StartsWith(NestedPrefix))
+						{
+							bOldHad = true;
+							bOldNested = true;
+						}
+						if ((Old.Key == GroupKey || Old.Key.StartsWith(NestedPrefix)) && Removed.Contains(Old.Key))
+						{
+							bRemovedAny = true;
+						}
+					}
+
+					int32 NewCount = 0;
+					bool bNewNested = false;
+					bool bNewDynamic = false;
+					for (const FPlannedInput& Input : Module.Inputs)
+					{
+						if (IsStructuralInput(Input) || Input.Path.Num() == 0 || Input.Path[0].ToString() != Top)
+						{
+							continue;
+						}
+						++NewCount;
+						bNewNested |= Input.Path.Num() > 1;
+						bNewDynamic |= Input.Path.Num() == 1 && Input.Value.Mode == EInputValueMode::DynamicInput;
+					}
+
+					const bool bReplace = bOldNested || bNewNested || bOldDynamic || bNewDynamic || bRemovedAny || NewCount != 1;
+					if (bReplace)
+					{
+						ReplacedGroups.Add(Top);
+						if (bOldHad)
+						{
+							OutWork.Resets.Add(ModuleAddress.WithInput(FName(*Top)));
+						}
+					}
+				}
+
+				FValueWork::FModuleWrites Writes;
+				Writes.ModuleIndex = ModuleIndex;
+				for (const FPlannedInput& Input : Module.Inputs)
+				{
+					if (IsStructuralInput(Input) || Input.Path.Num() == 0)
+					{
+						continue;
+					}
+					const FString Top = Input.Path[0].ToString();
+					if (ReplacedGroups.Contains(Top))
+					{
+						Writes.Inputs.Add(&Input);
+					}
+					else if (Tops.Contains(Top) && Input.Path.Num() == 1)
+					{
+						Writes.Inputs.Add(&Input);
+					}
+				}
+				if (Writes.Inputs.Num() > 0)
+				{
+					OutWork.Modules.Add(MoveTemp(Writes));
+				}
+			}
+		}
+
+		/**
+		 * A stack the incremental build does not rebuild: its modules keep the nodes the last build
+		 * made, so everything that the build records per node -- module locations, the gate's
+		 * declarations, the node-name table -- comes from the last build's names. When only values
+		 * changed, those are written here, in plan order, with the same refuse-then-retry handling a
+		 * full rebuild gives them.
+		 */
+		bool ApplyKeptStack(const FStackAddress& OwnerAddress, const FPlannedStack& Stack, const FStackDigest& OldStack,
+			const FValueWork* Work, FDiagnosticSink& Diagnostics, TMap<FName, FSourceLocation>& OutModuleLocations,
+			TArray<FDeferredSelfReference>* OutDeferredSelfRefs, FDeclaredFacts& OutDeclared, TArray<FName>& OutNodeNames,
+			FIncrementalReport* Report)
+		{
+			const FStackAddress StackAddress = OwnerAddress.WithScript(Stack.ScriptName);
+			if (OldStack.NodeNames.Num() != Stack.Modules.Num())
+			{
+				Diagnostics.Error(TEXT("DFX5020"), Stack.Location, FString::Printf(
+					TEXT("The last build of this stack recorded %d module node(s) for %d module(s), so its nodes cannot be addressed."),
+					OldStack.NodeNames.Num(), Stack.Modules.Num()));
+				return false;
+			}
+
+			for (int32 Index = 0; Index < Stack.Modules.Num(); ++Index)
+			{
+				const FName NodeName(*OldStack.NodeNames[Index]);
+				OutNodeNames.Add(NodeName);
+				OutModuleLocations.Add(NodeName, Stack.Modules[Index].Location);
+				RecordModuleDeclarations(StackAddress, NodeName, Stack.Modules[Index], OutDeclared);
+			}
+
+			if (Work == nullptr)
+			{
+				return true;
+			}
+
+			bool bOk = true;
+			for (const FValueWork::FModuleWrites& Writes : Work->Modules)
+			{
+				FNiagaraAdapter::CollectIfHeavy();
+
+				const FPlannedModule& Module = Stack.Modules[Writes.ModuleIndex];
+				const FStackAddress ModuleAddress = StackAddress.WithModule(FName(*OldStack.NodeNames[Writes.ModuleIndex]));
+				TArray<FString> Errors;
+
+				// The full rebuild writes a disabled module's inputs while it is still enabled and
+				// switches it off afterwards; Niagara may refuse writes to a module that is already off.
+				if (Module.bDisabled && !FNiagaraAdapter::SetModuleEnabled(ModuleAddress, /*bEnabled=*/true, Errors))
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5029"), Module.Location, Diagnostics);
+					bOk = false;
+					continue;
+				}
+
+				TArray<const FPlannedInput*> Refused;
+				for (const FPlannedInput* Input : Writes.Inputs)
+				{
+					Errors.Reset();
+					if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input->Path), *Input, Errors, OutDeferredSelfRefs))
+					{
+						Refused.Add(Input);
+					}
+					else if (Report != nullptr)
+					{
+						++Report->InputsWritten;
+					}
+				}
+
+				if (Refused.Num() > 0)
+				{
+					// The same second chance ApplyStack gives a refused write: whatever gated it -- an
+					// inline edit condition no schema flags -- has been written by now.
+					FNiagaraAdapter::EndStructuralEpoch(OwnerAddress.System);
+					for (const FPlannedInput* Input : Refused)
+					{
+						Errors.Reset();
+						if (!ApplyPlannedInput(ModuleAddress.WithInputPath(Input->Path), *Input, Errors, OutDeferredSelfRefs))
+						{
+							ReportAdapterErrors(Errors, TEXT("DFX5021"), Input->Location, Diagnostics);
+							bOk = false;
+						}
+						else if (Report != nullptr)
+						{
+							++Report->InputsWritten;
+						}
+					}
+				}
+
+				if (Module.bDisabled)
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::SetModuleEnabled(ModuleAddress, /*bEnabled=*/false, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5029"), Module.Location, Diagnostics);
+						bOk = false;
+					}
+				}
+			}
+			return bOk;
+		}
+
+		/** Records a whole stack as kept: the event-handler and simulation-stage stacks the build leaves alone. */
+		void RecordKeptAuxStack(const FStackAddress& OwnerAddress, const FPlannedStack& Stack, const TArray<FString>* OldNames,
+			TMap<FName, FSourceLocation>& OutModuleLocations, FDeclaredFacts& OutDeclared, TArray<FName>& OutNodeNames)
+		{
+			if (OldNames == nullptr)
+			{
+				return;
+			}
+			const FStackAddress StackAddress = OwnerAddress.WithScript(Stack.ScriptName);
+			for (int32 Index = 0; Index < Stack.Modules.Num() && Index < OldNames->Num(); ++Index)
+			{
+				const FName NodeName(*(*OldNames)[Index]);
+				OutNodeNames.Add(NodeName);
+				OutModuleLocations.Add(NodeName, Stack.Modules[Index].Location);
+				RecordModuleDeclarations(StackAddress, NodeName, Stack.Modules[Index], OutDeclared);
+			}
+		}
+
+		// --- plan digest ----------------------------------------------------------------------------
+
+		/** Every compile input recorded for one script asset, whatever version it was selected at. */
+		FString DependencyFingerprint(const FDependencySet& Dependencies, const UObject* Asset)
+		{
+			if (Asset == nullptr)
+			{
+				return FString();
+			}
+			const FString Path = Asset->GetPathName();
+			const FString Prefix = TEXT("module:") + Path + TEXT("@");
+			TArray<FString> Entries;
+			for (const TPair<FString, FString>& Entry : Dependencies.CompileInputs)
+			{
+				if (Entry.Key.StartsWith(Prefix))
+				{
+					Entries.Add(Entry.Key + TEXT("=") + Entry.Value);
+				}
+			}
+			Entries.Sort();
+			return Path + TEXT("[") + Dependencies.Versions.FindRef(Path) + TEXT("]") + FString::Join(Entries, TEXT(","));
+		}
+
+		/** `<kind>:<hash>` of one value, covering every field the write carries -- FInputValue::Equals' fields. */
+		FString DigestValue(const FInputValue& Value, const FGuid& DynamicInputVersion, const FDependencySet& Dependencies)
+		{
+			const TCHAR* Kind = TEXT("U");
+			FString Body;
+			switch (Value.Mode)
+			{
+			case EInputValueMode::Literal:
+				Kind = TEXT("L");
+				Body = (Value.LiteralStruct != nullptr ? Value.LiteralStruct->GetPathName() : FString())
+					+ TEXT(":") + BytesToHex(Value.LiteralBytes.GetData(), Value.LiteralBytes.Num());
+				break;
+			case EInputValueMode::Enum:
+				Kind = TEXT("E");
+				Body = (Value.EnumType != nullptr ? Value.EnumType->GetPathName() : FString())
+					+ TEXT(":") + Value.EnumEntryName.ToString();
+				break;
+			case EInputValueMode::Linked:
+				Kind = TEXT("K");
+				Body = Value.LinkedVariable.GetName().ToString() + TEXT(":") + Value.LinkedVariable.GetType().GetName();
+				break;
+			case EInputValueMode::Hlsl:
+				Kind = TEXT("H");
+				Body = Value.HlslExpression;
+				break;
+			case EInputValueMode::DynamicInput:
+				Kind = TEXT("D");
+				Body = DependencyFingerprint(Dependencies, Value.DynamicInputAsset)
+					+ TEXT("@") + DynamicInputVersion.ToString();
+				break;
+			case EInputValueMode::DataInterface:
+				Kind = TEXT("I");
+				Body = (Value.DataInterfaceClass != nullptr ? Value.DataInterfaceClass->GetPathName() : FString())
+					+ TEXT(":") + Value.DataInterfaceJson;
+				break;
+			case EInputValueMode::ObjectAsset:
+				Kind = TEXT("O");
+				Body = Value.ObjectAsset != nullptr ? Value.ObjectAsset->GetPathName() : FString();
+				break;
+			default:
+				break;
+			}
+			return FString(Kind) + TEXT(":") + HashSourceText(Body);
+		}
+
+		template <typename T>
+		FString OptionalToString(const TOptional<T>& Value)
+		{
+			return Value.IsSet() ? LexToString(Value.GetValue()) : FString(TEXT("-"));
+		}
+
+		FString DescribeIntBinding(const FStageIntegerBinding& Binding)
+		{
+			return OptionalToString(Binding.Value) + TEXT("/") + Binding.Binding;
+		}
+
+		FString DescribeEventSpec(const FEventHandlerSpec& Spec)
+		{
+			return FString::Join(TArray<FString>{
+				Spec.Source, Spec.Event, Spec.Mode, LexToString(Spec.SpawnNumber),
+				OptionalToString(Spec.UpdateAttributeInitialValues), OptionalToString(Spec.MaxEventsPerFrame),
+				OptionalToString(Spec.RandomSpawnNumber), OptionalToString(Spec.MinSpawnNumber) }, TEXT(";"));
+		}
+
+		FString DescribeStageSpec(const FSimulationStageSpec& Spec)
+		{
+			const FSimulationStageExecutionSettings& Execution = Spec.Execution;
+			const FString Range = Execution.ParticleIterationStateRange.IsSet()
+				? Execution.ParticleIterationStateRange.GetValue().ToString() : FString(TEXT("-"));
+			return FString::Join(TArray<FString>{
+				Spec.Name, Spec.Iteration, Spec.ExecuteBehavior, Spec.DataInterface,
+				OptionalToString(Spec.NumIterations), OptionalToString(Spec.Enabled), Spec.EnabledBinding,
+				Spec.NumIterationsBinding,
+				OptionalToString(Execution.DisablePartialParticleUpdate), OptionalToString(Execution.ParticleIterationStateEnabled),
+				Execution.ParticleIterationStateBinding, Range, OptionalToString(Execution.GpuDispatchForceLinear),
+				OptionalToString(Execution.OverrideGpuDispatchNumThreads), Execution.DirectDispatchType,
+				Execution.DirectDispatchElementType, DescribeIntBinding(Execution.ElementCountX),
+				DescribeIntBinding(Execution.ElementCountY), DescribeIntBinding(Execution.ElementCountZ),
+				DescribeIntBinding(Execution.OverrideGpuDispatchNumThreadsX),
+				DescribeIntBinding(Execution.OverrideGpuDispatchNumThreadsY),
+				DescribeIntBinding(Execution.OverrideGpuDispatchNumThreadsZ) }, TEXT(";"));
+		}
+
+		FStackDigest DigestStack(const FPlannedStack& Stack, const FDependencySet& Dependencies, const TArray<FName>* NodeNames)
+		{
+			FStackDigest Digest;
+			TArray<FString> Structure;
+			TArray<FString> Switches;
+			for (int32 Index = 0; Index < Stack.Modules.Num(); ++Index)
+			{
+				const FPlannedModule& Module = Stack.Modules[Index];
+				Digest.ModuleBases.Add(Module.Asset != nullptr ? Module.Asset->GetName() : Module.SourceName);
+
+				FString Entry = FString::Printf(TEXT("%s|%s|%s|%d|%d"),
+					*DependencyFingerprint(Dependencies, Module.Asset), *Module.VersionGuid.ToString(),
+					*Module.InstanceName, Module.bIsSetParameters ? 1 : 0, Module.bDisabled ? 1 : 0);
+				// A Set Parameters module carries its entries on the create call, so they are part of
+				// what the module *is*: any change to them rebuilds the stack.
+				for (const FPlannedSetParameter& Parameter : Module.Parameters)
+				{
+					Entry += FString::Printf(TEXT("|%s:%s=%s"), *Parameter.Name.ToString(), *Parameter.Type.GetName(),
+						*DigestValue(Parameter.Value, Parameter.DynamicInputVersion, Dependencies));
+					for (const FPlannedInput& Nested : Parameter.NestedInputs)
+					{
+						Entry += FString::Printf(TEXT("/%s=%s"), *InputPathString(Nested.Path),
+							*DigestValue(Nested.Value, Nested.DynamicInputVersion, Dependencies));
+					}
+				}
+				Structure.Add(MoveTemp(Entry));
+
+				for (const FPlannedInput& Input : Module.Inputs)
+				{
+					const FString Key = InputDigestKey(Index, Input.Path);
+					const FString Value = DigestValue(Input.Value, Input.DynamicInputVersion, Dependencies);
+					if (IsStructuralInput(Input))
+					{
+						Switches.Add(Key + TEXT("=") + Value);
+					}
+					else
+					{
+						Digest.Inputs.Add(Key, Value);
+					}
+				}
+			}
+			Digest.Structure = HashSourceText(FString::Join(Structure, TEXT("\n")));
+			Digest.Switches = HashSourceText(FString::Join(Switches, TEXT("\n")));
+			if (NodeNames != nullptr)
+			{
+				for (const FName& Name : *NodeNames)
+				{
+					Digest.NodeNames.Add(Name.ToString());
+				}
+			}
+			return Digest;
+		}
+
+		/** The whole of a stack in one line, for the parts that are only ever rebuilt whole. */
+		FString DescribeStack(const FStackDigest& Digest)
+		{
+			TArray<FString> Inputs;
+			for (const TPair<FString, FString>& Input : Digest.Inputs)
+			{
+				Inputs.Add(Input.Key + TEXT("=") + Input.Value);
+			}
+			Inputs.Sort();
+			return Digest.Structure + TEXT("|") + Digest.Switches + TEXT("|") + FString::Join(Inputs, TEXT(","));
+		}
+
+		bool HasSelfReference(const FPlannedStack& Stack)
+		{
+			for (const FPlannedModule& Module : Stack.Modules)
+			{
+				for (const FPlannedInput& Input : Module.Inputs)
+				{
+					if (Input.Value.Mode == EInputValueMode::DataInterface
+						&& FNiagaraAdapter::ContainsSelfReferenceToken(Input.Value.DataInterfaceJson))
+					{
+						return true;
+					}
+				}
+				for (const FPlannedSetParameter& Parameter : Module.Parameters)
+				{
+					if (Parameter.Value.Mode == EInputValueMode::DataInterface
+						&& FNiagaraAdapter::ContainsSelfReferenceToken(Parameter.Value.DataInterfaceJson))
+					{
+						return true;
+					}
+					for (const FPlannedInput& Nested : Parameter.NestedInputs)
+					{
+						if (Nested.Value.Mode == EInputValueMode::DataInterface
+							&& FNiagaraAdapter::ContainsSelfReferenceToken(Nested.Value.DataInterfaceJson))
+						{
+							return true;
+						}
+					}
+				}
+			}
+			return false;
+		}
+
+		FString ReadSimTarget(const FString& PropertiesJson)
+		{
+			TSharedPtr<FJsonObject> Object;
+			const TSharedRef<TJsonReader<TCHAR>> Reader = TJsonReaderFactory<TCHAR>::Create(PropertiesJson);
+			FString SimTarget;
+			if (!PropertiesJson.IsEmpty() && FJsonSerializer::Deserialize(Reader, Object) && Object.IsValid())
+			{
+				Object->TryGetStringField(TEXT("SimTarget"), SimTarget);
+			}
+			return SimTarget;
+		}
+
+		FString DescribeParameterDefault(const FNiagaraVariableBase& Variable, int32 Mode, FName Binding,
+			const FInputValue& Value, const FDependencySet& Dependencies)
+		{
+			return FString::Printf(TEXT("%s:%s|%d|%s|%s"), *Variable.GetName().ToString(), *Variable.GetType().GetName(),
+				Mode, *Binding.ToString(), *DigestValue(Value, FGuid(), Dependencies));
+		}
+
+		/** The digest of a plan, with the node names a build recorded for it (none, for a comparison). */
+		FPlanDigest ComputePlanDigest(const FPlan& Plan, const FNodeNameTable& NodeNames)
+		{
+			const FDependencySet& Dependencies = Plan.Dependencies;
+			FPlanDigest Digest;
+			Digest.GeneratorVersion = FProvenance::GetGeneratorVersion();
+			Digest.Backend = GetWriteBackendName();
+			Digest.SystemProperties = HashSourceText(Plan.SystemPropertiesJson);
+
+			TArray<FString> UserVariables;
+			for (const FPlannedUserVariable& Variable : Plan.UserVariables)
+			{
+				UserVariables.Add(FString::Printf(TEXT("%s:%s|%s|%s|%s|%s|%d"), *Variable.Name.ToString(),
+					*Variable.Type.GetName(), *Variable.Description,
+					*DigestValue(Variable.DefaultValue, FGuid(), Dependencies), *Variable.DataInterfaceJson,
+					*Variable.GroupPath, Variable.SortPriority));
+			}
+			Digest.UserVariables = HashSourceText(FString::Join(UserVariables, TEXT("\n")));
+
+			for (const FPlannedStack& Stack : Plan.SystemStacks)
+			{
+				Digest.bHasSelfReferences |= HasSelfReference(Stack);
+				Digest.SystemStacks.Add(Stack.ScriptName.ToString(),
+					DigestStack(Stack, Dependencies, NodeNames.Find(SystemStackKey(Stack.ScriptName))));
+			}
+
+			for (const FPlannedEmitter& Emitter : Plan.Emitters)
+			{
+				const FString Name = Emitter.Name.ToString();
+				Digest.EmitterOrder.Add(Name);
+				FEmitterDigest& Out = Digest.Emitters.Add(Name);
+
+				if (Emitter.Parent != nullptr)
+				{
+					// The saved hash catches a parent that was edited and saved without a version bump:
+					// its new baseline reaches the asset only through a whole-emitter rebuild.
+					const UPackage* ParentPackage = Emitter.Parent->GetPackage();
+					Out.Parent = Emitter.Parent->GetPathName() + TEXT("@") + Emitter.ParentVersion.ToString()
+						+ TEXT("#") + (ParentPackage != nullptr ? LexToString(ParentPackage->GetSavedHash()) : FString());
+				}
+				Out.Properties = HashSourceText(Emitter.PropertiesJson);
+				Out.SimTarget = ReadSimTarget(Emitter.PropertiesJson);
+
+				TArray<FString> Renderers;
+				for (const FPlannedRenderer& Renderer : Emitter.Renderers)
+				{
+					FString Entry = (Renderer.Class != nullptr ? Renderer.Class->GetPathName() : FString())
+						+ TEXT("|") + Renderer.PropertiesJson;
+					for (const FPlannedBinding& Binding : Renderer.Bindings)
+					{
+						Entry += TEXT("|") + Binding.PropertyName + TEXT("->") + Binding.Target.ToString();
+					}
+					Renderers.Add(MoveTemp(Entry));
+				}
+				Out.Renderers = HashSourceText(FString::Join(Renderers, TEXT("\n")));
+				Out.RendererCount = Emitter.Renderers.Num();
+
+				for (const FPlannedStack& Stack : Emitter.Stacks)
+				{
+					Digest.bHasSelfReferences |= HasSelfReference(Stack);
+					Out.Stacks.Add(Stack.ScriptName.ToString(), DigestStack(Stack, Dependencies,
+						NodeNames.Find(EmitterStackKey(Emitter.Name, Stack.ScriptName.ToString()))));
+				}
+
+				TArray<FString> Handlers;
+				for (int32 Index = 0; Index < Emitter.EventHandlers.Num(); ++Index)
+				{
+					const FPlannedEventHandler& Handler = Emitter.EventHandlers[Index];
+					Digest.bHasSelfReferences |= HasSelfReference(Handler.Stack);
+					const FString AuxKey = MakeEventStackKey(Index, Handler.Stack.ScriptName);
+					const FStackDigest StackDigest = DigestStack(Handler.Stack, Dependencies,
+						NodeNames.Find(EmitterStackKey(Emitter.Name, AuxKey)));
+					Handlers.Add(DescribeEventSpec(Handler.Spec) + TEXT("|") + DescribeStack(StackDigest));
+					Out.AuxNodeNames.Add(AuxKey, StackDigest.NodeNames);
+				}
+				Out.EventHandlers = HashSourceText(FString::Join(Handlers, TEXT("\n")));
+
+				TArray<FString> Stages;
+				for (int32 Index = 0; Index < Emitter.SimulationStages.Num(); ++Index)
+				{
+					const FPlannedSimulationStage& Stage = Emitter.SimulationStages[Index];
+					Digest.bHasSelfReferences |= HasSelfReference(Stage.Stack);
+					const FString AuxKey = MakeStageStackKey(Index, Stage.Stack.ScriptName);
+					const FStackDigest StackDigest = DigestStack(Stage.Stack, Dependencies,
+						NodeNames.Find(EmitterStackKey(Emitter.Name, AuxKey)));
+					Stages.Add(DescribeStageSpec(Stage.Spec) + TEXT("|") + DescribeStack(StackDigest));
+					Out.AuxNodeNames.Add(AuxKey, StackDigest.NodeNames);
+				}
+				Out.SimulationStages = HashSourceText(FString::Join(Stages, TEXT("\n")));
+
+				TArray<FString> Defaults;
+				for (const FPlannedParameterDefault& Default : Emitter.ParameterDefaults)
+				{
+					Defaults.Add(DescribeParameterDefault(Default.Variable, static_cast<int32>(Default.Mode),
+						Default.Binding, Default.Value, Dependencies));
+				}
+				for (const FParameterDefault& Default : Emitter.InheritedParameterDefaults)
+				{
+					Defaults.Add(TEXT("inherited ") + DescribeParameterDefault(Default.Variable,
+						static_cast<int32>(Default.Mode), Default.Binding, Default.Value, Dependencies));
+				}
+				Out.ParameterDefaults = HashSourceText(FString::Join(Defaults, TEXT("\n")));
+			}
+			return Digest;
+		}
+
 		bool ApplyStack(const FStackAddress& OwnerAddress, const FPlannedStack& Stack,
 			FDiagnosticSink& Diagnostics, TMap<FName, FSourceLocation>& OutModuleLocations,
 			TArray<FDeferredSelfReference>* OutDeferredSelfRefs = nullptr,
-			FDeclaredFacts* OutDeclared = nullptr)
+			FDeclaredFacts* OutDeclared = nullptr, TArray<FName>* OutNodeNames = nullptr)
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ApplyStack);
 			bool bOk = true;
@@ -2770,6 +3459,14 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
+			if (OutNodeNames != nullptr)
+			{
+				for (const FAddedModule& Entry : Added)
+				{
+					OutNodeNames->Add(Entry.Name);
+				}
+			}
+
 			// Pass 2 -- write, against the freshly refreshed stack.
 			for (const FAddedModule& Entry : Added)
 			{
@@ -2779,45 +3476,9 @@ namespace UE::DreamFX::Editor
 				const FStackAddress ModuleAddress = StackAddress.WithModule(Entry.Name);
 				TArray<FString> Errors;
 
-				// The build-safety gate's declaration index: what this source names, addressed the way
-				// the facts are. Recorded HERE because this is the only place a node's name exists --
-				// the engine assigns it when the module is added and `as <name>` may rename it
-				// afterwards, so nothing downstream can recover it, and guessing it (module asset name
-				// plus a count) is exactly the heuristic the gate must not run on.
-				//
-				// The scope is the constant-name prefix the rapid-iteration facts carry:
-				// `Constants.<emitter>.<node>` for an emitter stack, `Constants.<node>` for a
-				// system-scope one (SystemState's own facts are named that way, measured).
 				if (OutDeclared != nullptr)
 				{
-					const FString Constants = StackAddress.EmitterName.IsNone()
-						? FString::Printf(TEXT("Constants.%s"), *Entry.Name.ToString())
-						: FString::Printf(TEXT("Constants.%s.%s"),
-							*StackAddress.EmitterName.ToString(), *Entry.Name.ToString());
-					const FString Scope = TEXT("ri ") + Constants;
-
-					for (const FPlannedInput& Input : Module.Inputs)
-					{
-						// Two spellings of one declaration, both straight out of the parse: the
-						// argument as the author wrote it, and the input's Niagara variable name --
-						// which is the name the rapid-iteration facts are addressed by, and not always
-						// the same string (`Life Cycle Mode` vs `LifeCycleMode`).
-						if (Input.Path.Num() > 0)
-						{
-							OutDeclared->Add(Scope, Input.Path[0].ToString());
-						}
-						if (!Input.NiagaraName.IsNone())
-						{
-							OutDeclared->Add(Scope, Input.NiagaraName.ToString());
-						}
-					}
-
-					// A folded `Set Parameters` entry is a declaration too, and its name is the
-					// parameter it writes.
-					for (const FPlannedSetParameter& Parameter : Module.Parameters)
-					{
-						OutDeclared->Add(Scope, Parameter.Name.ToString());
-					}
+					RecordModuleDeclarations(StackAddress, Entry.Name, Module, *OutDeclared);
 				}
 
 				if (Module.bIsSetParameters)
@@ -3116,8 +3777,18 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
+		/**
+		 * Writes the plan into the system.
+		 *
+		 * With no scope this is the full rebuild: every declared stack is cleared and built again. With
+		 * one, it is the incremental build -- the same code, skipping everything the scope does not
+		 * name, so the parts it does touch go through exactly the steps the full rebuild would run.
+		 * Either way OutNodeNames ends up holding every stack's node names, which is what the next
+		 * build's digest needs.
+		 */
 		bool ApplyPlan(UNiagaraSystem* System, const FPlan& Plan, FDiagnosticSink& Diagnostics,
-			TMap<FName, FSourceLocation>& OutModuleLocations, FDeclaredFacts& OutDeclared)
+			TMap<FName, FSourceLocation>& OutModuleLocations, FDeclaredFacts& OutDeclared, FNodeNameTable& OutNodeNames,
+			const FIncrementalScope* Scope = nullptr, FIncrementalReport* Report = nullptr)
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ApplyPlan);
 			// plan-v6 P1. Every write below shares one edit context until something changes the shape
@@ -3150,10 +3821,88 @@ namespace UE::DreamFX::Editor
 				DeclaredEmitters.Add(Emitter.Name);
 			}
 
+			const bool bFull = Scope == nullptr || Scope->Old == nullptr;
+			const FPlanDigest* Old = bFull ? nullptr : Scope->Old;
+			auto ChangeOf = [Scope, bFull](FName EmitterName) -> const FEmitterChange*
+			{
+				return bFull ? nullptr : Scope->FindEmitter(EmitterName);
+			};
+			// The whole-emitter path: always for the full rebuild, and for an emitter the incremental
+			// build adds or rebuilds.
+			auto IsWhole = [&ChangeOf, bFull](FName EmitterName)
+			{
+				if (bFull)
+				{
+					return true;
+				}
+				const FEmitterChange* Change = ChangeOf(EmitterName);
+				return Change != nullptr && Change->IsWholeEmitter();
+			};
+			auto StackActionOf = [](const TMap<FString, FStackChange>* Changes, FName ScriptName)
+			{
+				const FStackChange* Change = Changes != nullptr ? Changes->Find(ScriptName.ToString()) : nullptr;
+				return Change != nullptr ? Change->Action : EStackAction::Keep;
+			};
+
+			// Resets go first, in one batch, before anything else moves: they address modules by the
+			// names the last build gave them, and every one of them is on a stack this build keeps.
+			TMap<FString, FValueWork> ValueWork;
+			if (!bFull)
+			{
+				TArray<FStackAddress> Resets;
+				for (const FPlannedStack& Stack : Plan.SystemStacks)
+				{
+					const FStackChange* Change = Scope->FindSystemStack(Stack.ScriptName);
+					const FStackDigest* OldStack = Old->SystemStacks.Find(Stack.ScriptName.ToString());
+					if (Change != nullptr && Change->Action == EStackAction::Values && OldStack != nullptr)
+					{
+						FValueWork& Work = ValueWork.Add(SystemStackKey(Stack.ScriptName));
+						PlanStackValueWork(SystemAddress.WithScript(Stack.ScriptName), Stack, *Change, *OldStack, Work);
+						Resets.Append(Work.Resets);
+					}
+				}
+				for (const FPlannedEmitter& Emitter : Plan.Emitters)
+				{
+					const FEmitterChange* Change = ChangeOf(Emitter.Name);
+					const FEmitterDigest* OldEmitter = Old->Emitters.Find(Emitter.Name.ToString());
+					if (Change == nullptr || Change->IsWholeEmitter() || OldEmitter == nullptr)
+					{
+						continue;
+					}
+					for (const FPlannedStack& Stack : Emitter.Stacks)
+					{
+						const FStackChange* StackChange = Change->Stacks.Find(Stack.ScriptName.ToString());
+						const FStackDigest* OldStack = OldEmitter->Stacks.Find(Stack.ScriptName.ToString());
+						if (StackChange != nullptr && StackChange->Action == EStackAction::Values && OldStack != nullptr)
+						{
+							FValueWork& Work = ValueWork.Add(EmitterStackKey(Emitter.Name, Stack.ScriptName.ToString()));
+							PlanStackValueWork(SystemAddress.WithEmitter(Emitter.Name).WithScript(Stack.ScriptName), Stack,
+								*StackChange, *OldStack, Work);
+							Resets.Append(Work.Resets);
+						}
+					}
+				}
+				if (Resets.Num() > 0)
+				{
+					Errors.Reset();
+					if (!FNiagaraAdapter::ResetInputs(System, Resets, Errors))
+					{
+						ReportAdapterErrors(Errors, TEXT("DFX5021"), FSourceLocation(), Diagnostics);
+						return false;
+					}
+					if (Report != nullptr)
+					{
+						Report->InputsReset += Resets.Num();
+					}
+				}
+			}
+
 			// --- user parameters -------------------------------------------------------------
 			// 4.5's identity contract: user variables are keyed by name so blueprint
 			// SetNiagaraVariable* calls survive a rebuild. Existing ones are therefore only removed
 			// when the source stopped declaring them; the rest are re-added, which updates in place.
+			if (bFull || Scope->bUserVariables)
+			{
 			TArray<FUserVariableInfo> ExistingUserVariables;
 			Errors.Reset();
 			if (!FNiagaraAdapter::GetUserVariables(System, ExistingUserVariables, Errors))
@@ -3220,11 +3969,13 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
+			}
+
 			// Group / SortPriority are applied in FinalizeBuild, after the compile and every
 			// parameter sync have settled: the hierarchy rebuild is the last word on organization,
 			// and anything the compile's user-parameter sync does to it cannot outlive the build.
 
-			if (!Plan.SystemPropertiesJson.IsEmpty())
+			if (!Plan.SystemPropertiesJson.IsEmpty() && (bFull || Scope->bSystemProperties))
 			{
 				Errors.Reset();
 				if (!FNiagaraAdapter::SetSystemProperties(System, Plan.SystemPropertiesJson, Errors))
@@ -3240,6 +3991,10 @@ namespace UE::DreamFX::Editor
 			{
 				if (DeclaredEmitters.Contains(Existing))
 				{
+					if (!IsWhole(Existing))
+					{
+						continue; // The incremental build keeps this emitter's contents.
+					}
 					const FPlannedEmitter* Planned = Plan.Emitters.FindByPredicate(
 						[Existing](const FPlannedEmitter& Candidate) { return Candidate.Name == Existing; });
 					if (Planned->Parent) { continue; } // Restored from the parent baseline below.
@@ -3286,7 +4041,10 @@ namespace UE::DreamFX::Editor
 
 				if (bDeclared)
 				{
-					if (!ClearStack(SystemAddress, ScriptName, Diagnostics, FSourceLocation()))
+					const EStackAction Action = bFull ? EStackAction::Rebuild
+						: StackActionOf(&Scope->SystemStacks, ScriptName);
+					if (Action == EStackAction::Rebuild
+						&& !ClearStack(SystemAddress, ScriptName, Diagnostics, FSourceLocation()))
 					{
 						return false;
 					}
@@ -3313,8 +4071,26 @@ namespace UE::DreamFX::Editor
 
 			for (const FPlannedStack& Stack : Plan.SystemStacks)
 			{
-				if (!ApplyStack(SystemAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
-					&OutDeclared))
+				const FString Key = SystemStackKey(Stack.ScriptName);
+				const EStackAction Action = bFull ? EStackAction::Rebuild
+					: StackActionOf(&Scope->SystemStacks, Stack.ScriptName);
+				if (Action == EStackAction::Rebuild)
+				{
+					if (!ApplyStack(SystemAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
+						&OutDeclared, &OutNodeNames.Add(Key)))
+					{
+						return false;
+					}
+					if (!bFull && Report != nullptr)
+					{
+						++Report->StacksRebuilt;
+					}
+					continue;
+				}
+
+				const FStackDigest* OldStack = Old->SystemStacks.Find(Stack.ScriptName.ToString());
+				if (OldStack == nullptr || !ApplyKeptStack(SystemAddress, Stack, *OldStack, ValueWork.Find(Key), Diagnostics,
+					OutModuleLocations, &DeferredSelfRefs, OutDeclared, OutNodeNames.Add(Key), Report))
 				{
 					return false;
 				}
@@ -3322,7 +4098,25 @@ namespace UE::DreamFX::Editor
 
 			for (const FPlannedEmitter& Emitter : Plan.Emitters)
 			{
-				if (Emitter.Parent)
+				const bool bWhole = IsWhole(Emitter.Name);
+				const FEmitterChange* Change = ChangeOf(Emitter.Name);
+				const FEmitterDigest* OldEmitter = bWhole ? nullptr : Old->Emitters.Find(Emitter.Name.ToString());
+				if (!bWhole && OldEmitter == nullptr)
+				{
+					Diagnostics.Error(TEXT("DFX5015"), Emitter.Location, FString::Printf(
+						TEXT("Emitter '%s' has no record in the last build's plan."), *Emitter.Name.ToString()));
+					return false;
+				}
+				if (!bFull && bWhole && Report != nullptr)
+				{
+					++Report->EmittersRebuilt;
+				}
+
+				if (!bWhole)
+				{
+					// Nothing to create or reset: the emitter keeps the handle and contents it has.
+				}
+				else if (Emitter.Parent)
 				{
 					Errors.Reset();
 					if (!FNiagaraAdapter::ResetEmitterFromParent(System, Emitter.Name, Emitter.Parent, Emitter.ParentVersion, Errors))
@@ -3384,7 +4178,7 @@ namespace UE::DreamFX::Editor
 
 				// Emitter settings go on before the stacks: SimTarget in particular changes which
 				// modules and data interfaces are legal, so a GPU emitter must know it is one first.
-				if (!Emitter.PropertiesJson.IsEmpty())
+				if (!Emitter.PropertiesJson.IsEmpty() && (bWhole || (Change != nullptr && Change->bProperties)))
 				{
 					Errors.Reset();
 					if (!FNiagaraAdapter::SetEmitterProperties(EmitterAddress, Emitter.PropertiesJson, Errors))
@@ -3401,7 +4195,7 @@ namespace UE::DreamFX::Editor
 				// fresh. Emptying here and letting the rebuild repopulate is what makes an in-place
 				// build produce the same asset as a build to a new path. Not fatal: an emitter with
 				// residue is the state every build before this one produced.
-				if (!Emitter.Parent)
+				if (!Emitter.Parent && bWhole)
 				{
 					Errors.Reset();
 					if (!FNiagaraAdapter::CleanUpStaleParameters(EmitterAddress, Errors))
@@ -3413,15 +4207,74 @@ namespace UE::DreamFX::Editor
 
 				for (const FPlannedStack& Stack : Emitter.Stacks)
 				{
-					if (Emitter.Parent && !ClearStack(EmitterAddress, Stack.ScriptName, Diagnostics, Stack.Location)) { return false; }
-					if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
-						&OutDeclared))
+					const FString Key = EmitterStackKey(Emitter.Name, Stack.ScriptName.ToString());
+					const EStackAction Action = bWhole ? EStackAction::Rebuild
+						: StackActionOf(Change != nullptr ? &Change->Stacks : nullptr, Stack.ScriptName);
+					if (Action == EStackAction::Rebuild)
+					{
+						// The whole-emitter path cleared a parentless emitter in one go above; a stack
+						// rebuilt on its own is cleared here, like every stack of a parented emitter.
+						if ((Emitter.Parent || !bWhole) && !ClearStack(EmitterAddress, Stack.ScriptName, Diagnostics, Stack.Location)) { return false; }
+						if (!ApplyStack(EmitterAddress, Stack, Diagnostics, OutModuleLocations, &DeferredSelfRefs,
+							&OutDeclared, &OutNodeNames.Add(Key)))
+						{
+							return false;
+						}
+						if (!bWhole && Report != nullptr)
+						{
+							++Report->StacksRebuilt;
+						}
+						continue;
+					}
+
+					const FStackDigest* OldStack = OldEmitter->Stacks.Find(Stack.ScriptName.ToString());
+					if (OldStack == nullptr || !ApplyKeptStack(EmitterAddress, Stack, *OldStack, ValueWork.Find(Key), Diagnostics,
+						OutModuleLocations, &DeferredSelfRefs, OutDeclared, OutNodeNames.Add(Key), Report))
 					{
 						return false;
 					}
 				}
 
-				if (Emitter.Parent && !Emitter.Renderers.IsEmpty())
+				if (!bWhole && Change != nullptr)
+				{
+					// A stack the source stopped declaring is left empty, which is what clearing the
+					// whole emitter leaves it as in the full rebuild.
+					for (const TPair<FString, FStackChange>& StackChange : Change->Stacks)
+					{
+						if (StackChange.Value.Action != EStackAction::Clear)
+						{
+							continue;
+						}
+						if (!ClearStack(EmitterAddress, FName(*StackChange.Key), Diagnostics, Emitter.Location)) { return false; }
+						if (Report != nullptr)
+						{
+							++Report->StacksRebuilt;
+						}
+					}
+
+					// After the stacks, not before: until they are cleared the modules a rebuilt stack
+					// lost are still in it, and their constants are not stale yet.
+					if (!Emitter.Parent && Change->HasStructuralStackChange())
+					{
+						Errors.Reset();
+						if (!FNiagaraAdapter::CleanUpStaleParameters(EmitterAddress, Errors))
+						{
+							UE_LOG(LogDreamFX, Warning, TEXT("emitter '%s': could not clear stale parameters: %s"),
+								*Emitter.Name.ToString(), *FString::Join(Errors, TEXT(" | ")));
+						}
+					}
+				}
+
+				const bool bRenderers = bWhole || (Change != nullptr && Change->bRenderers);
+				if (!bRenderers)
+				{
+					continue;
+				}
+
+				// Clearing a parentless emitter already took its renderers; a parented one keeps the
+				// parent's unless the source declares its own, and an incremental build that rebuilds
+				// renderers has cleared nothing yet.
+				if ((Emitter.Parent && !Emitter.Renderers.IsEmpty()) || !bWhole)
 				{
 					FEmitterInfo Info;
 					Errors.Reset();
@@ -3509,6 +4362,19 @@ namespace UE::DreamFX::Editor
 			{
 				const FStackAddress EmitterAddress = SystemAddress.WithEmitter(Emitter.Name);
 
+				if (!IsWhole(Emitter.Name) && !(ChangeOf(Emitter.Name) != nullptr && ChangeOf(Emitter.Name)->bEventHandlers))
+				{
+					const FEmitterDigest* OldEmitter = Old->Emitters.Find(Emitter.Name.ToString());
+					for (int32 HandlerIndex = 0; HandlerIndex < Emitter.EventHandlers.Num(); ++HandlerIndex)
+					{
+						const FPlannedStack& Stack = Emitter.EventHandlers[HandlerIndex].Stack;
+						const FString AuxKey = MakeEventStackKey(HandlerIndex, Stack.ScriptName);
+						RecordKeptAuxStack(EmitterAddress, Stack, OldEmitter != nullptr ? OldEmitter->AuxNodeNames.Find(AuxKey) : nullptr,
+							OutModuleLocations, OutDeclared, OutNodeNames.Add(EmitterStackKey(Emitter.Name, AuxKey)));
+					}
+					continue;
+				}
+
 				if (Emitter.EventHandlers.Num() == 0)
 				{
 					if (Emitter.Parent) { continue; }
@@ -3522,8 +4388,9 @@ namespace UE::DreamFX::Editor
 					continue;
 				}
 
-				for (const FPlannedEventHandler& Handler : Emitter.EventHandlers)
+				for (int32 HandlerIndex = 0; HandlerIndex < Emitter.EventHandlers.Num(); ++HandlerIndex)
 				{
+					const FPlannedEventHandler& Handler = Emitter.EventHandlers[HandlerIndex];
 					Errors.Reset();
 					if (!FNiagaraAdapter::AddEventHandler(EmitterAddress, Handler.Spec, Errors))
 					{
@@ -3557,7 +4424,8 @@ namespace UE::DreamFX::Editor
 					}
 
 					if (!ApplyStack(EmitterAddress, Handler.Stack, Diagnostics, OutModuleLocations,
-						&DeferredSelfRefs, &OutDeclared))
+						&DeferredSelfRefs, &OutDeclared,
+						&OutNodeNames.Add(EmitterStackKey(Emitter.Name, MakeEventStackKey(HandlerIndex, Handler.Stack.ScriptName)))))
 					{
 						return false;
 					}
@@ -3606,6 +4474,19 @@ namespace UE::DreamFX::Editor
 			{
 				const FStackAddress EmitterAddress = SystemAddress.WithEmitter(Emitter.Name);
 
+				if (!IsWhole(Emitter.Name) && !(ChangeOf(Emitter.Name) != nullptr && ChangeOf(Emitter.Name)->bSimulationStages))
+				{
+					const FEmitterDigest* OldEmitter = Old->Emitters.Find(Emitter.Name.ToString());
+					for (int32 StageIndex = 0; StageIndex < Emitter.SimulationStages.Num(); ++StageIndex)
+					{
+						const FPlannedStack& Stack = Emitter.SimulationStages[StageIndex].Stack;
+						const FString AuxKey = MakeStageStackKey(StageIndex, Stack.ScriptName);
+						RecordKeptAuxStack(EmitterAddress, Stack, OldEmitter != nullptr ? OldEmitter->AuxNodeNames.Find(AuxKey) : nullptr,
+							OutModuleLocations, OutDeclared, OutNodeNames.Add(EmitterStackKey(Emitter.Name, AuxKey)));
+					}
+					continue;
+				}
+
 				// Read off the live emitter rather than the source Settings: a `from` emitter can be
 				// GPU without this .dfs ever saying so. Niagara's own complaint for a CPU stage is a
 				// compile error naming no source line; this one names the emitter and the fix.
@@ -3646,7 +4527,8 @@ namespace UE::DreamFX::Editor
 
 					TArray<FDeferredSelfReference> StageSelfRefs;
 					if (!ApplyStack(EmitterAddress, Stage.Stack, Diagnostics, OutModuleLocations,
-						&StageSelfRefs, &OutDeclared))
+						&StageSelfRefs, &OutDeclared,
+						&OutNodeNames.Add(EmitterStackKey(Emitter.Name, MakeStageStackKey(StageIndex, Stage.Stack.ScriptName)))))
 					{
 						return false;
 					}
@@ -3690,6 +4572,12 @@ namespace UE::DreamFX::Editor
 			// inherited from the parent.
 			for (const FPlannedEmitter& Emitter : Plan.Emitters)
 			{
+				// Every write into an emitter can move a parameter's default mode, so any emitter the
+				// incremental build touched gets the pass; one it left alone still has last build's.
+				if (!bFull && ChangeOf(Emitter.Name) == nullptr)
+				{
+					continue;
+				}
 				if (!ApplyParameterDefaults(SystemAddress.WithEmitter(Emitter.Name), Emitter,
 					&Emitter.InheritedParameterDefaults, Diagnostics))
 				{
@@ -4039,6 +4927,9 @@ namespace UE::DreamFX::Editor
 		FDeclaredFacts Declared;
 		/** `-Force`: the safety gate reports what a rebuild drops instead of refusing it. */
 		bool bForceLossyRebuild = false;
+
+		/** Every stack's node names as this build left them; the next build's digest is made of them. */
+		TMap<FString, TArray<FName>> NodeNames;
 	};
 
 	namespace
@@ -4210,6 +5101,16 @@ namespace UE::DreamFX::Editor
 				}
 			}
 
+			// The baseline for the next incremental build, taken last: the system in memory is now
+			// exactly what is about to be saved, which is what its facts hash has to describe.
+			{
+				FPlanDigest Digest = ComputePlanDigest(Pending.Plan, Pending.NodeNames);
+				TArray<FString> Facts;
+				DescribeSystemFacts(System, Facts);
+				Digest.FactsHash = FBuildSafetyGate::HashFacts(Facts);
+				Stamp.PlanDigest = Digest.ToJson();
+			}
+
 			FProvenance::Write(System, Stamp);
 
 			if (Pending.bSave)
@@ -4237,9 +5138,9 @@ namespace UE::DreamFX::Editor
 			return FString::Printf(TEXT("full rebuild (%s)"), *FallbackReason);
 		}
 		return FString::Printf(
-			TEXT("incremental: %d emitter(s) and %d stack(s) rebuilt, %d input(s) written, %d reset, compile %s"),
+			TEXT("incremental: %d emitter(s) and %d stack(s) rebuilt, %d input(s) written, %d reset, %s"),
 			EmittersRebuilt, StacksRebuilt, InputsWritten, InputsReset,
-			bCompileSkipped ? TEXT("skipped") : TEXT("requested"));
+			bCompileSkipped ? TEXT("nothing to recompile") : TEXT("scripts recompiled"));
 	}
 
 	FGenerateResult FGenerator::GenerateFromFile(const FString& FilePath, const FGenerateOptions& Options,
@@ -4258,10 +5159,6 @@ namespace UE::DreamFX::Editor
 	{
 		FGenerateResult Result;
 		Result.Incremental.bRequested = Options.bIncremental;
-		if (Options.bIncremental)
-		{
-			Result.Incremental.FallbackReason = TEXT("incremental builds are not available yet");
-		}
 		FDocument Flattened;
 		if (!ResolveSystemInheritance(InputDocument, Flattened, Diagnostics)) { return Result; }
 		const FDocument& Document = Flattened;
@@ -4442,9 +5339,58 @@ namespace UE::DreamFX::Editor
 		// generation -- a package that did not exist has no earlier content for a rebuild to replace,
 		// so there is nothing to lose and nothing to compare against.
 		FBuildSafetySnapshot PreBuildFacts;
-		if (Options.bSave && !bCreated)
+		if ((Options.bSave || Options.bIncremental) && !bCreated)
 		{
 			PreBuildFacts = FBuildSafetyGate::Capture(System);
+		}
+
+		// Whether the asset is exactly what its last build left, so that patching only what the
+		// source changed lands on the asset a full rebuild would produce. Every "no" is a full rebuild.
+		FPlanDigest OldDigest;
+		FIncrementalScope IncrementalScope;
+		bool bTryIncremental = false;
+		if (Options.bIncremental)
+		{
+			FString WhyNot;
+			FProvenanceStamp OldStamp;
+			if (bCreated)
+			{
+				WhyNot = TEXT("the asset is new");
+			}
+			else if (!FProvenance::Read(System, OldStamp) || OldStamp.PlanDigest.IsEmpty())
+			{
+				WhyNot = TEXT("the asset carries no plan from a previous build");
+			}
+			else if (!FPlanDigest::FromJson(OldStamp.PlanDigest, OldDigest, WhyNot))
+			{
+				// WhyNot is set by the parse.
+			}
+			else if (OldDigest.Version != FPlanDigest::CurrentVersion)
+			{
+				WhyNot = TEXT("the stored plan has an older format");
+			}
+			else if (OldDigest.GeneratorVersion != FProvenance::GetGeneratorVersion())
+			{
+				WhyNot = TEXT("the asset was built by another generator version");
+			}
+			else if (OldDigest.Backend != GetWriteBackendName())
+			{
+				WhyNot = TEXT("the asset was built through another write path");
+			}
+			else if (!PreBuildFacts.bCaptured || FBuildSafetyGate::HashFacts(PreBuildFacts.Facts) != OldDigest.FactsHash)
+			{
+				WhyNot = TEXT("the asset changed since its last build");
+			}
+			else
+			{
+				const FPlanDigest NewDigest = ComputePlanDigest(Plan, FNodeNameTable());
+				bTryIncremental = DecideIncrementalScope(OldDigest, NewDigest, IncrementalScope, WhyNot);
+			}
+
+			if (!bTryIncremental)
+			{
+				Result.Incremental.FallbackReason = WhyNot;
+			}
 		}
 
 		// Filled by ApplyPlan below, one entry per thing the source names. Without it the gate can
@@ -4454,13 +5400,54 @@ namespace UE::DreamFX::Editor
 		FDeclaredFacts Declared;
 
 		TMap<FName, FSourceLocation> ModuleLocations;
+		FNodeNameTable NodeNames;
 		{
 			// The window holds every structural and value write, and nothing in it needs a compiled
 			// result -- so no engine path gets to launch one against the half-built system. The debt
 			// this records is paid exactly once, by the wait in FinalizeBuild.
 			FNiagaraAdapter::FCompileSuppressionScope SuppressCompiles(System);
 
-			if (!ApplyPlan(System, Plan, Diagnostics, ModuleLocations, Declared))
+			if (bTryIncremental)
+			{
+				UE_LOG(LogDreamFX, Display, TEXT("'%s': incremental build -- %s"),
+					*Plan.FullAssetPath, *IncrementalScope.Describe());
+
+				// Its own sink: if the incremental write fails, the full rebuild below runs from the
+				// state it left and reports for itself -- a failure the full rebuild does not share is
+				// not the source's to answer for.
+				FDiagnosticSink IncrementalDiagnostics;
+				IncrementalDiagnostics.SetFile(Document.SourceFilePath);
+				if (ApplyPlan(System, Plan, IncrementalDiagnostics, ModuleLocations, Declared, NodeNames,
+					&IncrementalScope, &Result.Incremental))
+				{
+					Diagnostics.Append(IncrementalDiagnostics);
+					Result.Incremental.bApplied = true;
+				}
+				else
+				{
+					const FDiagnostic* FirstError = IncrementalDiagnostics.GetDiagnostics().FindByPredicate(
+						[](const FDiagnostic& Candidate) { return Candidate.Severity == EDiagnosticSeverity::Error; });
+					Result.Incremental.FallbackReason = FString::Printf(TEXT("the incremental write failed: %s"),
+						FirstError != nullptr ? *FirstError->Format() : TEXT("no error was reported"));
+					Result.Incremental.EmittersRebuilt = 0;
+					Result.Incremental.StacksRebuilt = 0;
+					Result.Incremental.InputsWritten = 0;
+					Result.Incremental.InputsReset = 0;
+					ModuleLocations.Reset();
+					Declared = FDeclaredFacts();
+					NodeNames.Reset();
+					UE_LOG(LogDreamFX, Display, TEXT("'%s': %s; running the full rebuild."),
+						*Plan.FullAssetPath, *Result.Incremental.FallbackReason);
+				}
+			}
+			else if (Options.bIncremental)
+			{
+				UE_LOG(LogDreamFX, Display, TEXT("'%s': full rebuild (%s)."),
+					*Plan.FullAssetPath, *Result.Incremental.FallbackReason);
+			}
+
+			if (!Result.Incremental.bApplied
+				&& !ApplyPlan(System, Plan, Diagnostics, ModuleLocations, Declared, NodeNames))
 			{
 				return Result;
 			}
@@ -4498,22 +5485,42 @@ namespace UE::DreamFX::Editor
 		Pending.PreBuildFacts = MoveTemp(PreBuildFacts);
 		Pending.Declared = MoveTemp(Declared);
 		Pending.bForceLossyRebuild = Options.bForceLossyRebuild;
+		Pending.NodeNames = MoveTemp(NodeNames);
 
-		// A rebuild whose writes all landed on values the asset already held raises no change id, and
-		// the compile request would then bless whatever VM the asset came in with -- including one
-		// compiled before some write path existed. Re-deriving the compile ids from the live graphs
-		// costs a hash walk and turns "no write changed anything" from an assumption into a check.
-		FNiagaraAdapter::InvalidateCachedCompileIds(System);
+		if (Result.Incremental.bApplied)
+		{
+			// The incremental build patches an asset whose last build already went through the forced
+			// compile below and its staleness check, and whose facts have not moved since -- so the
+			// desynchronized id/VM pair that forcing exists for cannot be in it. The request is an
+			// ordinary one, which compiles only the scripts this build's writes actually reached:
+			// values that land on rapid-iteration parameters reach none, and then the request costs a
+			// compile-id walk and nothing else. It is issued even then, because it is also what pays
+			// the compile debt the suppression window recorded. FinalizeBuild still checks the result
+			// and forces a recompile if anything is stale.
+			TArray<FString> StaleScripts;
+			Result.Incremental.bCompileSkipped = System->ShouldUseRapidIterationParameters()
+				&& FNiagaraAdapter::VerifyCompiledStateCurrent(System, StaleScripts);
+			FNiagaraAdapter::RequestCompileAsync(System, /*bForce=*/false);
+		}
+		else
+		{
+			// A rebuild whose writes all landed on values the asset already held raises no change id,
+			// and the compile request would then bless whatever VM the asset came in with -- including
+			// one compiled before some write path existed. Re-deriving the compile ids from the live
+			// graphs costs a hash walk and turns "no write changed anything" from an assumption into a
+			// check.
+			FNiagaraAdapter::InvalidateCachedCompileIds(System);
 
-		// Issued here for both paths: a pipelined caller overlaps the wait with its next source's
-		// generation; the synchronous path pays it in FinalizeBuild immediately below.
-		//
-		// Forced, because the invalidation above is necessary but not sufficient: a stored id/VM
-		// pair can itself be desynchronized -- NE_C's asset carried the correct graph's id over
-		// bytecode compiled from the all-Unset switch branches, and no id-level comparison can see
-		// that. Forcing re-derives the bytecode too, which overwrites such a pair instead of
-		// trusting it. Measured on the system that had it: ~0.85 s forced vs ~0.89 s judged-current.
-		FNiagaraAdapter::RequestCompileAsync(System, /*bForce=*/true);
+			// Issued here for both paths: a pipelined caller overlaps the wait with its next source's
+			// generation; the synchronous path pays it in FinalizeBuild immediately below.
+			//
+			// Forced, because the invalidation above is necessary but not sufficient: a stored id/VM
+			// pair can itself be desynchronized -- NE_C's asset carried the correct graph's id over
+			// bytecode compiled from the all-Unset switch branches, and no id-level comparison can see
+			// that. Forcing re-derives the bytecode too, which overwrites such a pair instead of
+			// trusting it. Measured on the system that had it: ~0.85 s forced vs ~0.89 s judged-current.
+			FNiagaraAdapter::RequestCompileAsync(System, /*bForce=*/true);
+		}
 
 		if (Options.bDeferCompile)
 		{
