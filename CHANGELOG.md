@@ -58,6 +58,7 @@
   `SaveArgs.Error = GWarn`,失败回到构建错误。
 - DFX7102 不再把 `SpawnParticlesInGrid` 当作按速率生成:它和 `SpawnBurst` 一样是每循环一次的
   burst(X·Y·Z),上限由循环决定。列表只留 `SpawnRate` / `SpawnPerUnit` / `SpawnPerFrame`。
+- `dfx.ps1` 解析 `EngineAssociation` 时,注册表里没有该引擎就改查 Epic Games Launcher 的安装清单(`LauncherInstalled.dat`),launcher 安装的 `5.8` 不再需要手设 `UE_ENGINE_ROOT`。
 
 ### 文档
 

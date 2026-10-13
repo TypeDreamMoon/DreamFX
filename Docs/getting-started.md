@@ -18,7 +18,7 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 list
 ```
 
 That prints every Niagara module on the default search paths. If it errors before printing anything,
-the engine could not be resolved — pass `-Engine <root>` or set `UE_ENGINE_ROOT`.
+the engine could not be resolved (the driver looks the project's `EngineAssociation` up in the registry and in the Epic Games Launcher's install manifest) — pass `-Engine <root>` or set `UE_ENGINE_ROOT`.
 
 ---
 
