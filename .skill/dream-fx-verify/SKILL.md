@@ -60,6 +60,7 @@ editor has open. Large sources are slow for a structural reason, not a fixable o
 | *(positional)* | the source file — absolute, or relative to the working directory |
 | `-All` | every source under every DFX root |
 | `-Force` | bypass the provenance-hash skip. Without it an unchanged file reports `up to date` and proves nothing |
+| `-Incremental` | build only the difference from the plan the asset's last build stored, falling back to a full rebuild when that plan cannot be trusted (the log line says which). Off by default, and **not for gates**: CI and `verify` want the full rebuild's answer. It is a local edit-loop flag — see [Docs/tools/incremental-builds.md](../../Docs/tools/incremental-builds.md) |
 | `-NoSave` | build in memory without writing packages — the right flag for checking that source is valid |
 | `-CleanNew` | delete the `.uasset` files this run wrote, **but only those git reports untracked**, then report the rest |
 | `-NoWriteScope` | build the slow way, rebuilding the edit context per write. Diagnostic only — it exists so a benchmark can measure both halves on one binary |
@@ -199,6 +200,7 @@ A partial path disambiguates and is anchored at the end, so
 | `UnrealEditor-Cmd.exe not found at …` | the engine root is wrong — it must be the directory *containing* `Engine/` |
 | `dfx: FAILED` with no `LogDreamFX` line | re-run with `-Raw`; the failure was before DreamFX got control |
 | `0 built, 1 up to date` | add `-Force` |
+| `full rebuild (<reason>)` under `-Incremental` | not an error: the build could not trust the asset's stored plan and did the full rebuild. The reason is in the line; the table is in [Docs/tools/incremental-builds.md](../../Docs/tools/incremental-builds.md) |
 | `DFX3001` no module named X | run `dfx.ps1 list` to see what the search paths expose, or add the folder to `Settings.ModulePaths` |
 | `DFX7001` no provenance stamp | the asset was not generated from this source. Build it once |
 | `DFX7002` stale asset | source changed since the last build. Run `build` |

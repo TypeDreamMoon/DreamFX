@@ -26,6 +26,10 @@
     ./dfx.ps1 build DFX/Samples/NS_Spark.dfs -Force
 
 .EXAMPLE
+    ./dfx.ps1 build DFX/Samples/NS_Spark.dfs -Incremental
+    Write only what changed since the asset's last build. A local edit-loop flag; gates build in full.
+
+.EXAMPLE
     ./dfx.ps1 build -All
 
 .EXAMPLE
