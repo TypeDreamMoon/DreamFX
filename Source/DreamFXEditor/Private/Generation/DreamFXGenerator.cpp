@@ -4225,6 +4225,22 @@ namespace UE::DreamFX::Editor
 		}
 	}
 
+	FString FIncrementalReport::ToString() const
+	{
+		if (!bRequested)
+		{
+			return TEXT("full rebuild");
+		}
+		if (!bApplied)
+		{
+			return FString::Printf(TEXT("full rebuild (%s)"), *FallbackReason);
+		}
+		return FString::Printf(
+			TEXT("incremental: %d emitter(s) and %d stack(s) rebuilt, %d input(s) written, %d reset, compile %s"),
+			EmittersRebuilt, StacksRebuilt, InputsWritten, InputsReset,
+			bCompileSkipped ? TEXT("skipped") : TEXT("requested"));
+	}
+
 	FGenerateResult FGenerator::GenerateFromFile(const FString& FilePath, const FGenerateOptions& Options,
 		FDiagnosticSink& Diagnostics)
 	{
@@ -4240,6 +4256,11 @@ namespace UE::DreamFX::Editor
 		FDiagnosticSink& Diagnostics)
 	{
 		FGenerateResult Result;
+		Result.Incremental.bRequested = Options.bIncremental;
+		if (Options.bIncremental)
+		{
+			Result.Incremental.FallbackReason = TEXT("incremental builds are not available yet");
+		}
 		FDocument Flattened;
 		if (!ResolveSystemInheritance(InputDocument, Flattened, Diagnostics)) { return Result; }
 		const FDocument& Document = Flattened;

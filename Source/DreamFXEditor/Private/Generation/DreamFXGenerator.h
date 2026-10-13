@@ -55,6 +55,42 @@ namespace UE::DreamFX::Editor
 		 * returns no handle.
 		 */
 		bool bDeferCompile = false;
+
+		/**
+		 * Write only what changed since the asset was last built, instead of clearing and rebuilding
+		 * every stack.
+		 *
+		 * The baseline is the plan digest the previous successful build stored in the asset's
+		 * metadata. Whenever that baseline cannot be trusted -- no digest, another generator version or
+		 * write backend, or an asset whose facts no longer match what the digest recorded because
+		 * somebody edited it by hand -- the build falls back to the full rebuild and says why. The
+		 * result is required to be the asset a full rebuild would produce; the full rebuild stays the
+		 * reference the incremental path is tested against.
+		 */
+		bool bIncremental = false;
+	};
+
+	/** What an incremental build did, or why it did not. */
+	struct FIncrementalReport
+	{
+		/** The caller asked for an incremental build. */
+		bool bRequested = false;
+
+		/** The incremental path wrote the asset. False means the full rebuild ran. */
+		bool bApplied = false;
+
+		/** Why the full rebuild ran instead, when it was requested and not applied. */
+		FString FallbackReason;
+
+		int32 EmittersRebuilt = 0;
+		int32 StacksRebuilt = 0;
+		int32 InputsWritten = 0;
+		int32 InputsReset = 0;
+
+		/** The compiled state was already current after the writes, so no compile was requested. */
+		bool bCompileSkipped = false;
+
+		FString ToString() const;
 	};
 
 	/** A deferred build between its compile request and its finalize. Opaque outside the generator. */
@@ -73,6 +109,8 @@ namespace UE::DreamFX::Editor
 
 		/** Set when Options.bDeferCompile reached the compile request; consumed by FGenerator::Finalize. */
 		TSharedPtr<FPendingBuild> Pending;
+
+		FIncrementalReport Incremental;
 	};
 
 	/**
