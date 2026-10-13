@@ -17,6 +17,8 @@
 - 命令行增量构建默认关闭（CI 和闸门要的是完整重建的答案）：`dfx.ps1 build <源码> -Incremental` / `UnrealEditor-Cmd <uproject> -run=DreamFX -File=<源码> -Incremental` 开启。commandlet 与监视器每个文件记一行，如 `incremental: 0 emitter(s) and 1 stack(s) rebuilt, 3 input(s) written, 1 reset, nothing to recompile` 或 `full rebuild (<原因>)`；生成器动手前也会记下要改动的范围，如 `incremental build -- Sparks ParticleSpawnScript values(+0 ~1 -0)`。闸门不要用该开关。
 - 规划阶段每个进程复用同一个模块库：构建所需的模块探测在一次编辑器会话 / 一次 commandlet 运行里只做一次，不再每次构建都做。
 - `dfx.ps1 pull <源码>`：把资产中实际存储的值写回文本已声明的字面量（默认试运行，`-Apply` 写入，`-Structure` 写回可唯一定位的结构差异，`-Asset` 指定读取的资产）。只改动值所占的字符，保留注释、换行和文件编码；写前备份到 `Saved/DreamFX/Pull/`（`DFX7106`–`DFX7116`）（[#48](https://github.com/TypeDreamMoon/DreamFX/pull/48)）。
+- **在编辑器里写回源码**：Niagara 系统的右键菜单和 Niagara 编辑器工具栏的 DreamFX 菜单新增 *Write Back to Source*，把编辑器里调过的值（含未保存的）用 `pull` 写回它的 `.dfs`，注释和排版不动；结构差异按设置 *Pull Structural Edits*（`bPullStructuralEdits`，默认关）决定写入还是只报告。*Pull on Asset Save*（`bPullOnAssetSave`，默认关）在每次保存生成的系统资产时自动写回；DreamFX 自己的构建、Adopt、自动保存、Cook 和 PIE 中的保存不会触发。编辑器写回的文件不会被源码监视器当成改动再重建一次（按写入内容的哈希识别，之后再改照常重建）。
+- **Bridge `pull` 动作**：VS Code 扩展可以把当前缓冲区（可以未保存）发给编辑器，拿回写回后的文本自己应用；带文本时编辑器从不写文件，`apply` 只记录基线。命令行与编辑器共用同一份基线。详见 `Docs/tools/pull.md` §4e。
 - 系统 `Settings` 新增 `UseFixedBounds`（`bFixedBounds`）：声明 `FixedBounds` 时默认开启，可显式写 `false` 保留不生效的包围盒；反编译在需要时写出该项，往返保持一致。
 - `System(..., Parent="../Base.dfs")` 源码级系统继承：Settings / Properties / 系统栈 / 发射器按名称合并，父链及其 `.dfe` 参与指纹与监听（[#5](https://github.com/TypeDreamMoon/DreamFX/issues/5)）。
 - `Emitter X inherits "/Game/NE_Parent" version "GUID"` 保留 Niagara 原生父发射器关联，重建保留 handle GUID，支持属性、栈、渲染器、事件组和默认值覆盖（[#5](https://github.com/TypeDreamMoon/DreamFX/issues/5)）。
