@@ -19,6 +19,7 @@ namespace UE::DreamFX::Editor
 		const TCHAR* const KeyGenerator      = TEXT("DreamFX.GeneratorVersion");
 		const TCHAR* const KeyModules        = TEXT("DreamFX.ModuleDependencies");
 		const TCHAR* const KeyModuleVersions = TEXT("DreamFX.ModuleVersions");
+		const TCHAR* const KeyPlanDigest     = TEXT("DreamFX.PlanDigest");
 
 		FMetaData* GetPackageMetaData(const UObject* Asset)
 		{
@@ -87,6 +88,15 @@ namespace UE::DreamFX::Editor
 		}
 		VersionPairs.Sort();
 		MetaData->SetValue(Asset, KeyModuleVersions, *FString::Join(VersionPairs, TEXT(";")));
+
+		if (Stamp.PlanDigest.IsEmpty())
+		{
+			MetaData->RemoveValue(Asset, KeyPlanDigest);
+		}
+		else
+		{
+			MetaData->SetValue(Asset, KeyPlanDigest, *Stamp.PlanDigest);
+		}
 	}
 
 	bool FProvenance::Read(const UObject* Asset, FProvenanceStamp& OutStamp)
@@ -109,6 +119,8 @@ namespace UE::DreamFX::Editor
 		{
 			Modules.ParseIntoArray(OutStamp.ModuleDependencies, TEXT(";"), /*InCullEmpty=*/true);
 		}
+
+		OutStamp.PlanDigest = MetaData->GetValue(Asset, KeyPlanDigest);
 
 		OutStamp.ModuleVersions.Reset();
 		const FString Versions = MetaData->GetValue(Asset, KeyModuleVersions);
@@ -141,6 +153,7 @@ namespace UE::DreamFX::Editor
 			MetaData->RemoveValue(Asset, KeyGenerator);
 			MetaData->RemoveValue(Asset, KeyModules);
 			MetaData->RemoveValue(Asset, KeyModuleVersions);
+			MetaData->RemoveValue(Asset, KeyPlanDigest);
 		}
 	}
 

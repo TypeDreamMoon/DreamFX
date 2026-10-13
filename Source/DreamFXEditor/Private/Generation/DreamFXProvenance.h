@@ -42,6 +42,14 @@ namespace UE::DreamFX::Editor
 		 */
 		TMap<FString, FString> ModuleVersions;
 
+		/**
+		 * The plan this build applied (FPlanDigest, as JSON): the baseline the next incremental build
+		 * diffs against. Empty for a stamp written by anything other than a system build -- writing an
+		 * empty one removes it, so an asset that changed any other way can never be patched against a
+		 * plan that no longer describes it.
+		 */
+		FString PlanDigest;
+
 		bool IsValid() const { return !SourceHash.IsEmpty(); }
 	};
 
