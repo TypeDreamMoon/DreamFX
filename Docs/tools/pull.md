@@ -248,6 +248,83 @@ v1 遇到结构对不上就整段拒绝（`DFX7109`）。现在多了一条路�
 
 ---
 
+## 4e. 编辑器里的入口：bridge 的 `pull` 动作
+
+命令行的 `pull` 要启动一个无头编辑器，读的是**磁盘上的**资产。VS Code 扩展面对的是另一种处境：
+编辑器已经开着，Niagara 编辑器里调了一半的值还没存盘，文本缓冲区也可能比磁盘上的文件新。
+bridge（`Saved/DreamFX/Bridge/`，见 `editor-integration.md`）的 `pull` 动作就是这个入口，
+内部是同一份实现（`FPuller::PullBuffer`），不是第二套。
+
+请求（`protocol` 与其他动作一致）：
+
+| 字段 | 含义 |
+|---|---|
+| `action` | `"pull"` |
+| `sourceFile` | 这份 `.dfs` 的绝对路径。只接受 `.dfs`（系统文档），`.dfe` / `.dfm` / 其他扩展名一律 `ok:false` |
+| `text` | 可选。客户端缓冲区的**全文**，可以是没存盘的 |
+| `assetPath` | 可选。等同 `-Asset`：从这个资产读值 |
+| `structure` | 可选，布尔。等同 `-Structure` |
+| `apply` | 可选，布尔。含义见下 |
+
+**有没有 `text` 决定行为，这一条是协议的核心：**
+
+| | 有 `text` | 没有 `text` |
+|---|---|---|
+| 处理的是 | `text`（缓冲区） | 磁盘上的 `sourceFile` |
+| 源文件 | **永远不写**。缓冲区是客户端的，存盘由它决定 | 与命令行一致：`apply:true` 才写，写前备份到 `Saved/DreamFX/Pull/` |
+| 结果文本 | 放在 `pull.newText` 里（预览也给，不论 `apply`） | 没有 `newText` |
+| `apply:true` 的作用 | **只记基线**：客户端承诺会把 `newText` 放进它的缓冲区 | 写文件，并记基线 |
+| `sourceFile` 不存在 | 可以（缓冲区没存过盘） | `ok:false`，`No such source file` |
+
+读的资产是**编辑器进程里的那一份**（`LoadObject` 对已打开的资产返回内存里的对象），所以在 Niagara
+编辑器里改了、还没存盘的值，正是这里读到的值。这与命令行相反：命令行只看得到磁盘。
+
+**基线与命令行共用。** 基线文件的路径只由 `sourceFile` 决定（`Saved/DreamFX/Pull/<相对路径>.baseline.txt`），
+所以同一个文件先在命令行 `-Apply`、再从编辑器预览，用的是同一份记录：文本里比资产新的值照样被
+`DFX7115` 压住（`withheld`），不会被缓冲区请求悄悄改回去。预览（没有 `apply`）和命令行的干跑一样，
+**不记**基线。
+
+响应沿用 bridge 的信封（`protocol` / `requestId` / `ok` / `durationMs` / `message` / `diagnostics`），
+`message` 是一行摘要（如 `1 value(s) differ; 1 withheld (text is newer) (preview)`）；
+另外多一个嵌套对象 `pull`：
+
+```json
+{
+  "ok": true,
+  "message": "1 value(s) differ (preview)",
+  "diagnostics": [ ... ],
+  "pull": {
+    "changed": true,
+    "newText": "...",
+    "edits": 1,
+    "compared": 3,
+    "changedValues": 1,
+    "undeclared": 5,
+    "unwritable": 0,
+    "unaddressable": 0,
+    "withheld": 0,
+    "added": 0,
+    "removed": 0,
+    "structureRefused": 0,
+    "baselineUsed": false,
+    "baselineWritten": false,
+    "wroteFile": false,
+    "reportPath": "…/Saved/DreamFX/Pull/….report.txt",
+    "report": ["…"]
+  }
+}
+```
+
+- `changed`：有 `text` 时是 `newText` 与请求的 `text` 不同；没有 `text` 时是文件被写了。
+  `changedValues` 则是 `FPullResult::Changed`，即有多少个值与资产不一致。
+- `newText` 只在请求带 `text` 时出现。`ok:false` 时（解析失败等）它原样等于请求的 `text`，
+  `changed` 为 `false`，原因在 `diagnostics` 里。
+- 预览会真的把改写后的文本生成出来，所以改写后读不回来（`DFX7110`）在预览里也是 `ok:false`；
+  命令行的干跑不生成文本，没有这个失败模式。
+- 报告文件（`reportPath`）预览时也写，和命令行一样。
+
+---
+
 ## 5. 实测（2026-10-09，本轮全部原始日志在 `Saved/pull-probe/runs/`）
 
 四个用例都用真实资产，文本一律是 `Saved/pull-probe/` 下的副本 —— 工程 `DFX/` 树里一个字节都没动。
