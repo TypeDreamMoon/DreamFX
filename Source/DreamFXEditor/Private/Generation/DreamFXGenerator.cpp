@@ -13,6 +13,7 @@
 #include "Generation/DreamFXModuleGenerator.h"
 #include "Lint/DreamFXLint.h"
 #include "Schema/DreamFXModuleLibrary.h"
+#include "Schema/DreamFXModuleLibraryCache.h"
 #include "SourceFiles/DreamFXPaths.h"
 #include "WriteBack/DreamFXSourceValue.h"
 
@@ -4307,25 +4308,27 @@ namespace UE::DreamFX::Editor
 		FLint::Run(Document, Diagnostics);
 
 		const double PlanStartSeconds = FPlatformTime::Seconds();
-		FModuleLibrary Modules;
+		TArray<FString> ModuleSearchPaths;
 		if (const FPropertyEntry* ModulePaths = Document.FindSetting(TEXT("ModulePaths")))
 		{
-			TArray<FString> Paths;
 			if (ModulePaths->Value.IsValid() && ModulePaths->Value->Kind == EValueKind::Array)
 			{
 				for (const FValuePtr& Element : ModulePaths->Value->Elements)
 				{
 					if (Element.IsValid() && Element->Kind == EValueKind::String)
 					{
-						Paths.Add(Element->Text);
+						ModuleSearchPaths.Add(Element->Text);
 					}
 				}
 			}
-			if (Paths.Num() > 0)
-			{
-				Modules.SetSearchPaths(Paths);
-			}
 		}
+
+		// Shared with the builds before and after this one: the module index and the probes it makes
+		// depend on the Niagara scripts and the search paths, not on the source being built. Held by
+		// reference so that a script saved halfway through this build, which drops the cached
+		// libraries, does not pull this one out from under it.
+		const TSharedRef<FModuleLibrary> SharedModules = FModuleLibraryCache::Get(ModuleSearchPaths);
+		FModuleLibrary& Modules = *SharedModules;
 
 		// Everything that can fail happens here, before the asset is touched (plan 4.5).
 		FPlan Plan;
