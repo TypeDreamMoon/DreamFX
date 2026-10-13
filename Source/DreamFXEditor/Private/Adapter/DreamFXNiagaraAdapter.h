@@ -32,6 +32,9 @@ class UNiagaraSystem;
  *   UNiagaraEmitterFactoryNew::InitializeEmitter
  *
  * No symbol outside that list may be added without re-running the upstream comparison in plan 2.5.
+ * ResetInputs steps outside the list because the API has no reset: it calls UNiagaraStackFunctionInput's
+ * CanReset and Reset through the view model walk in DreamFXStackLookup.h, and every symbol on that path
+ * carries NIAGARAEDITOR_API in the stock 5.8 install.
  * DreamFX types never leak Niagara editor structs: everything crossing this boundary is either a
  * plain struct declared below or a Niagara *runtime* type (FNiagaraTypeDefinition, UNiagaraScript),
  * which is stable public API.
