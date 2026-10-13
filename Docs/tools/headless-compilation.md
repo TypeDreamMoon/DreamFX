@@ -25,3 +25,10 @@ rebuilds the same system without `-Force`, and checks the new compiled constant,
 data, and source ID for direct calls and native inherited stacks. It checks that an unchanged module
 still allows a cache hit, then removes bytecode while preserving the successful status to verify that the completion gate
 rejects an incomplete executable. The test creates unsaved assets under a unique `/Game` path.
+
+## Published build behavior [#incremental-builds]
+
+This heading preserves an older documentation link. The published command interface does not
+provide `-Incremental`: source changes use the normal generation and compilation path described
+above. An unchanged source may be skipped when provenance matches; that is an up-to-date check,
+not a partial asset edit. See [build on save and up-to-date checks](build-on-save.md).

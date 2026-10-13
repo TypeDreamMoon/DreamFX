@@ -388,6 +388,13 @@ a different engine is a different module set, and enabling a content plugin adds
 Nothing compares them yet — that needs a live editor to compare against — so rebuilding is a command
 rather than something guessed at.
 
+## Published save-to-build behavior [#incremental-build-on-save]
+
+This heading preserves an older documentation link. The published plugin rebuilds source through
+the normal watcher queue when it is saved; it has no **Incremental Build On Save** setting.
+**Rebuild from Source** drains that same queue immediately. See
+[build on save and up-to-date checks](build-on-save.md) for the available behavior and batch gate.
+
 ## See also
 
 - [Getting started](../getting-started/quickstart.md) — the editor-side workflow in order
