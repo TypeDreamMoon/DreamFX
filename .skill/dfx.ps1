@@ -108,6 +108,11 @@ param(
     # Slower by design -- the AddModule-batching round's A/B and escape hatch.
     [switch]$RebuildPerAdd,
 
+    # build: patch only what changed since the asset's last build, falling back to the full rebuild
+    # when the asset's stored plan cannot be trusted. The editor does this on save; the command line
+    # defaults to the full rebuild.
+    [switch]$Incremental,
+
     # list: show dynamic inputs instead of modules.
     [switch]$DynamicInputs,
 
@@ -391,6 +396,7 @@ switch ($Command) {
         if ($RebuildOnStructural) { $arguments += '-RebuildOnStructural' }
         if ($RebuildOnSwitch) { $arguments += '-RebuildOnSwitch' }
         if ($RebuildPerAdd) { $arguments += '-RebuildPerAdd' }
+        if ($Incremental) { $arguments += '-Incremental' }
         if ($Window -gt 0) { $arguments += "-Window=$Window" }
     }
     'verify' {
