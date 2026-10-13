@@ -2386,6 +2386,35 @@ namespace UE::DreamFX::Editor
 		FEpochGuard Epoch(EmitterAddress.System);
 		FEditContext ContextHolder(EmitterAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
+
+		// A handle view model keeps a raw pointer into the system's emitter handle array. Removing an
+		// emitter shrinks that array, and the engine's refresh afterwards retires the view model that
+		// was last in line by asking it for its stack view model -- which, on an engine that defers
+		// that stack until it is asked for, builds it then, from a handle that is no longer there:
+		// delegates bound into destroyed memory, and a heap that is corrupt by the time anything else
+		// touches it (long-lived process only; a fresh one tends to get away with it).
+		//
+		// Asking for that stack now, while its handle is alive, makes the later ask a plain lookup. The
+		// context's own view model is not reachable from here, so the ask is a read of the last
+		// emitter's first script, which resolves the stack the same way. A no-op where the stack is
+		// built eagerly, and the read's errors are discarded: it is not the operation being reported.
+		if (EmitterAddress.System != nullptr)
+		{
+			const TArray<FNiagaraEmitterHandle>& Handles = EmitterAddress.System->GetEmitterHandles();
+			const bool bHasEmitter = Handles.ContainsByPredicate([&EmitterAddress](const FNiagaraEmitterHandle& Handle)
+				{
+					return Handle.GetName() == EmitterAddress.EmitterName;
+				});
+			if (bHasEmitter)
+			{
+				FNiagaraExt_ScriptStackTopology Resolved;
+				UNiagaraExternalEditUtilities::GetScriptStackTopology(
+					ToReference(FStackAddress(EmitterAddress.System).WithEmitter(Handles.Last().GetName()).WithScript(TEXT("EmitterSpawnScript"))),
+					Resolved, Context);
+				Context.Errors.Reset();
+			}
+		}
+
 		UNiagaraExternalEditUtilities::RemoveEmitter(ToReference(EmitterAddress), Context);
 		return Drain(Context, OutErrors);
 	}
