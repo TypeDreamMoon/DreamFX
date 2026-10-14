@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/tools/skills.md",
+  "translationFile": "Docs/zh-CN/tools/skills.md",
+  "sourceHash": null,
+  "importedSourceHash": "3b4692527f649611afd7ec009321c1a6bc9d6429f19fdb4acc51bd6016d51acb",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "a332f47dc57fd34d019fc94531e522290a14e08ea5a43668fcf5f679d80be443",
+  "origin": "website-import",
+  "importedFrom": [
+    "tools/skills"
+  ],
+  "pageMetadata": {
+    "tools/skills": {
+      "title": "AI 技能",
+      "description": "插件自带的四个 agent 技能，以及一个编码代理写 DreamFXLang 时那条\"必须先读 schema\"的循环。"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/getting-started/installation.md",
+  "translationFile": "Docs/zh-CN/getting-started/installation.md",
+  "sourceHash": null,
+  "importedSourceHash": "9a07edee5a689553b4cf7f027d30235457e34214c1127752393bd16467cd5670",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "ac77c82cbf6bf94127c5677200f3e28008635db3698574087bc14721200582a2",
+  "origin": "website-import",
+  "importedFrom": [
+    "start/installation"
+  ],
+  "pageMetadata": {
+    "start/installation": {
+      "title": "安装与探活",
+      "description": "启用 DreamFX 插件、确认驱动脚本能摸到引擎，以及运行环境的三条硬要求。"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/language/dfe.md",
+  "translationFile": "Docs/zh-CN/language/dfe.md",
+  "sourceHash": null,
+  "importedSourceHash": "14e458f3e0f52ab45a6d23c624e80eb5101ca657f0cd6293bcd2b76643d30c22",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "75a1a186ca50ddaa471940b3f9e6579993d7ccb74622aea852e0ce148a1fd8b2",
+  "origin": "website-import",
+  "importedFrom": [
+    "language/dfe"
+  ],
+  "pageMetadata": {
+    "language/dfe": {
+      "title": ".dfe — 可复用 emitter",
+      "description": "一个 Emitter 文件、from 的合并粒度，以及「拷贝而不是继承」这个决定的两个后果。"
+    }
+  }
+}

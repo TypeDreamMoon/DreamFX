@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/history/unpublished-codes.md",
+  "translationFile": "Docs/zh-CN/diagnostics/history/unpublished-codes.md",
+  "sourceHash": "cc531cb5892263a7bab97b3fb53a608628bba0576dcf835adb37946344a5891b",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "source": "## DFX5015\n\n**Compatibility entry only.** This number appeared in an earlier documentation snapshot, but\nit is not emitted by the published implementation documented here and is not part of its\n172-code generated catalog. The heading preserves existing links; it does not introduce a\nsupported diagnostic or describe an unreleased feature. Use the\n[published diagnostic catalog](../README.md) to look up codes from this version.\n\n## DFX5020\n\n**Compatibility entry only.** This number is absent from the published implementation and its\n172-code generated catalog. It remains here solely so links from the earlier documentation\nsnapshot have a destination. No current behavior or remedy is associated with this number in\nthis manual. Consult the [published diagnostic catalog](../README.md) for supported codes.\n",
+  "translationHash": "048f1e6a9479cb6e1fdd9ce44f544a6826f52b83d71c0216333d83f3aee2f196",
+  "origin": "assistant-draft"
+}

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/DFX8xxx.md",
+  "translationFile": "Docs/zh-CN/diagnostics/DFX8xxx.md",
+  "sourceHash": null,
+  "importedSourceHash": "71008ad758ed8a8c0cc4827129d12d17621983c403b0fb099bd3edc626f2638e",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "1868c5fddd2907353fab9c19497cb0f6d9b14db1029a5bbc670cba4ff160bccb",
+  "origin": "website-import",
+  "importedFrom": [
+    "diagnostics/dfx8xxx"
+  ],
+  "pageMetadata": {
+    "diagnostics/dfx8xxx": {
+      "title": "DFX8xxx — 反编译器",
+      "description": "DFX8xxx 段的全部诊断码，每条带严重级别、逐字消息、成因与修法。"
+    }
+  }
+}

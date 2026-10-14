@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/language/dfs.md",
+  "translationFile": "Docs/zh-CN/language/dfs.md",
+  "sourceHash": null,
+  "importedSourceHash": "1ea8a1ca9c5bdead1142f6144933bad34bf27c5929acb4ab19fa9b2bcd5c81d2",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "2beca566e3bcc11f03119c429872a25940bd864dd8ab09cd2ab88c91b8e3fce9",
+  "origin": "website-import",
+  "importedFrom": [
+    "language/dfs"
+  ],
+  "pageMetadata": {
+    "language/dfs": {
+      "title": ".dfs — 一个系统",
+      "description": "系统 Settings、user 参数、六个栈里的模块调用与赋值、Defaults、renderer 与绑定，以及引用 .dfe。"
+    }
+  }
+}

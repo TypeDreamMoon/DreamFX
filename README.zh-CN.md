@@ -20,7 +20,7 @@
       </p>
       <p>
         <a href="README.md">English</a> &nbsp;·&nbsp;
-        <a href="Docs/getting-started.md">快速上手</a> &nbsp;·&nbsp;
+        <a href="Docs/getting-started/quickstart.md">快速上手</a> &nbsp;·&nbsp;
         <a href="Docs/language/README.md">语法参考</a> &nbsp;·&nbsp;
         <a href="Docs/diagnostics/README.md">诊断码</a> &nbsp;·&nbsp;
         <a href="Docs/tools/editor-integration.md">编辑器工具</a> &nbsp;·&nbsp;
@@ -125,7 +125,7 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion
 pwsh -File Plugins/DreamFX/.skill/ci.ps1
 ```
 
-十五分钟走完一遍:[Docs/getting-started.md](Docs/getting-started.md)。
+十五分钟走完一遍:[Docs/getting-started/quickstart.md](Docs/getting-started/quickstart.md)。
 
 ## 生成什么
 
@@ -157,10 +157,10 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 
 | | |
 | :-- | :-- |
-| **[快速上手](Docs/getting-started.md)** | 从零到跑起来,不开编辑器 |
+| **[快速上手](Docs/getting-started/quickstart.md)** | 从零到跑起来,不开编辑器 |
 | **[语法参考](Docs/language/README.md)** | `.dfs` / `.dfe` / `.dfm`、值、曲线、事件、stage |
 | **继承** | [系统源码 `Parent`](Docs/language/system-inheritance.md) 与 [原生发射器 `inherits`](Docs/language/native-emitter-inheritance.md) |
-| **[诊断码](Docs/diagnostics/README.md)** | 143 个 `DFXnnnn` 全带文件/行/列,从源码生成并防漂移 |
+| **[诊断码](Docs/diagnostics/README.md)** | 全部 `DFXnnnn` 全带文件/行/列,从源码生成并防漂移 |
 | **[编辑器工具](Docs/tools/editor-integration.md)** | 菜单、右键、工具栏、VSCode workspace |
 | **[增量构建](Docs/tools/incremental-builds.md)** | 存盘写什么、各类修改的代价、何时退回完整重建 |
 | **[更新日志](CHANGELOG.md)** | 每个版本做了什么,以及已知问题清单 |
@@ -193,3 +193,5 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
   Scalability 条件逻辑。发射器 `from` 是源码拷贝,原生资产继承使用 `inherits`,系统源码继承使用 `Parent`。
   降级全部有诊断,绝不静默——
   1.0.0 已知问题清单见 [CHANGELOG](CHANGELOG.md)。
+
+文档：[English](Docs/README.md) · [简体中文](Docs/zh-CN/README.md)（迁入译文待核对）。

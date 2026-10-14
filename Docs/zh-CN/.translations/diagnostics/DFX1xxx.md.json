@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/DFX1xxx.md",
+  "translationFile": "Docs/zh-CN/diagnostics/DFX1xxx.md",
+  "sourceHash": null,
+  "importedSourceHash": "c017c7d7a8a3c6b6ede54f8d91f616f47761f855e7cd12cf02340deea6e7dc7c",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "8a472172bfc6dda22af0ba27e91e9cec0a5359dd5915984cd4843f40c5d30366",
+  "origin": "website-import",
+  "importedFrom": [
+    "diagnostics/dfx1xxx"
+  ],
+  "pageMetadata": {
+    "diagnostics/dfx1xxx": {
+      "title": "DFX1xxx — 驱动与文件 I/O",
+      "description": "DFX1xxx 段的全部诊断码，每条带严重级别、逐字消息、成因与修法。"
+    }
+  }
+}

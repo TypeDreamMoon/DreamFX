@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/generation/pipeline.md",
+  "translationFile": "Docs/zh-CN/generation/pipeline.md",
+  "sourceHash": null,
+  "importedSourceHash": "beddddd1036eb4d23fd1525e9ae3c346191dd9ff7dac9d38ad890e4cd0ff9e59",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "87f7c3d286253398ff96b2b63f4dd8109da84ff22d947e9c27740098c27e8951",
+  "origin": "website-import",
+  "importedFrom": [
+    "generation/pipeline"
+  ],
+  "pageMetadata": {
+    "generation/pipeline": {
+      "title": "构建流水线",
+      "description": "一次 build 到底发生了什么：发现、顺序、schema 探测、写入、Niagara 编译、存盘、盖戳，以及为什么\"没改就跳过\"。"
+    }
+  }
+}

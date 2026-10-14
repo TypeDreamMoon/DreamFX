@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/limitations.md",
+  "translationFile": "Docs/zh-CN/diagnostics/limitations.md",
+  "sourceHash": null,
+  "importedSourceHash": "81f9a8fa8e91601eb7b13a836ba21e279845f1ac24540303904952d1ad5d9b47",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "c644a5545696d4903f05f6b9256ec2f54b8d858a2d5bdebdc781b50d77a87257",
+  "origin": "website-import",
+  "importedFrom": [
+    "diagnostics/limitations"
+  ],
+  "pageMetadata": {
+    "diagnostics/limitations": {
+      "title": "能力边界",
+      "description": "有意不做的、还没做的、往返带不走的，以及 1.0.0 的已知问题清单 —— 附带它们各自会怎么显形。"
+    }
+  }
+}

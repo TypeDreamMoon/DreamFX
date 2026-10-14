@@ -20,7 +20,7 @@
       </p>
       <p>
         <a href="README.zh-CN.md">中文文档</a> &nbsp;·&nbsp;
-        <a href="Docs/getting-started.md">Getting started</a> &nbsp;·&nbsp;
+        <a href="Docs/getting-started/quickstart.md">Getting started</a> &nbsp;·&nbsp;
         <a href="Docs/language/README.md">Language reference</a> &nbsp;·&nbsp;
         <a href="Docs/diagnostics/README.md">Diagnostics</a> &nbsp;·&nbsp;
         <a href="Docs/tools/editor-integration.md">Editor tools</a> &nbsp;·&nbsp;
@@ -130,7 +130,7 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion
 pwsh -File Plugins/DreamFX/.skill/ci.ps1
 ```
 
-Fifteen-minute walkthrough: [Docs/getting-started.md](Docs/getting-started.md).
+Fifteen-minute walkthrough: [Docs/getting-started/quickstart.md](Docs/getting-started/quickstart.md).
 
 ## What it generates
 
@@ -163,12 +163,15 @@ build and on the stock installed engine.
 
 ## Documentation
 
+Start with the [complete documentation index](Docs/README.md). English originals live in this repository;
+the documentation site publishes generated English pages and reviewed Chinese translations.
+
 | | |
 | :-- | :-- |
-| **[Getting started](Docs/getting-started.md)** | nothing → running effect, no editor required |
+| **[Getting started](Docs/getting-started/quickstart.md)** | nothing → running effect, no editor required |
 | **[Language reference](Docs/language/README.md)** | `.dfs` / `.dfe` / `.dfm`, values, curves, events, stages |
 | **Inheritance** | [System source `Parent`](Docs/language/system-inheritance.md) and [native emitter `inherits`](Docs/language/native-emitter-inheritance.md) |
-| **[Diagnostics](Docs/diagnostics/README.md)** | all 143 `DFXnnnn` codes with file/line/column, generated from source and drift-checked |
+| **[Diagnostics](Docs/diagnostics/README.md)** | all `DFXnnnn` codes with file/line/column, generated from source and drift-checked |
 | **[Editor tools](Docs/tools/editor-integration.md)** | menus, right-click actions, toolbar, VSCode workspace |
 | **[Incremental builds](Docs/tools/incremental-builds.md)** | what a save writes, what each edit costs, when it falls back to a full rebuild |
 | **[Changelog](CHANGELOG.md)** | what each release covers, and the known-issue list |
@@ -203,3 +206,5 @@ debug and migrate effects headlessly.
   conditions, Scalability conditions. Emitter `from` copies source; native asset inheritance uses
   `inherits`, and system source inheritance uses `Parent`. Degradations are
   diagnosed, not silent — see [CHANGELOG](CHANGELOG.md) for the 1.0.0 known-issues list.
+
+Documentation: [English](Docs/README.md) · [简体中文](Docs/zh-CN/README.md) (imported translations awaiting review).

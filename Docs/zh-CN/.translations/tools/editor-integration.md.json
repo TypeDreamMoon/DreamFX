@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/tools/editor-integration.md",
+  "translationFile": "Docs/zh-CN/tools/editor-integration.md",
+  "sourceHash": null,
+  "importedSourceHash": "4752c76239f9200be4f3e667c5a6e279925fdc130af6e8ccb9dfb27ea8a3f700",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "edd26ca6c879840fbb1467b5d8d7b99b5cf9aeda7df2c371e5c6fb1a67064ed6",
+  "origin": "website-import",
+  "importedFrom": [
+    "tools/editor"
+  ],
+  "pageMetadata": {
+    "tools/editor": {
+      "title": "编辑器集成",
+      "description": "Tools 菜单、关卡工具栏、Content Browser 右键、Niagara 编辑器工具栏、toast、file watcher 与项目设置。"
+    }
+  }
+}

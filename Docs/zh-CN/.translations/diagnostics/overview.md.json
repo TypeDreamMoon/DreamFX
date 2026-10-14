@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/overview.md",
+  "translationFile": "Docs/zh-CN/diagnostics/overview.md",
+  "sourceHash": null,
+  "importedSourceHash": "c8d602fda4801176f2db17dbdd0563a574c2da2384db230b69f7af506ad25b29",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "90e21d4e940c2a4bcc0ce23c4774d129aaa230fb761c17db367dff8e86c5c4ec",
+  "origin": "website-import",
+  "importedFrom": [
+    "diagnostics/index"
+  ],
+  "pageMetadata": {
+    "diagnostics/index": {
+      "title": "诊断码",
+      "description": "全部 DFXnnnn 诊断码：怎么读一条诊断、八个族各自属于流水线的哪一段，以及按码速查。"
+    }
+  }
+}

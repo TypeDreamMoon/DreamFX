@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/getting-started/about.md",
+  "translationFile": "Docs/zh-CN/getting-started/about.md",
+  "sourceHash": null,
+  "importedSourceHash": "47088f3d0a11b0eabfe3040dca995250b30045b8701084e4e47ffa3dc2cb6f0f",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "7e9dcaf44c6cab22bc62cabb3854ed2b9f7deadbb9267e48034f532427b0fb8a",
+  "origin": "website-import",
+  "importedFrom": [
+    "start/about"
+  ],
+  "pageMetadata": {
+    "start/about": {
+      "title": "DreamFX 是什么",
+      "description": "它做什么、不做什么，以及几条贯穿始终的设计立场：文本是唯一真相、缺口必须显形、菜单不是第二套实现。"
+    }
+  }
+}

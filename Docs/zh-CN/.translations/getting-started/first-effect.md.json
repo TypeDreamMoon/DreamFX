@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/getting-started/first-effect.md",
+  "translationFile": "Docs/zh-CN/getting-started/first-effect.md",
+  "sourceHash": null,
+  "importedSourceHash": "d195dc4485f5afc99f5b4542d29ce240796ff5e34341218c75dd07527a0c11ab",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "75ca7e1986d0e6515b6dde889ffab48c666dfda32e8d30b1eedcb7c61a1ddd16",
+  "origin": "website-import",
+  "importedFrom": [
+    "start/first-effect"
+  ],
+  "pageMetadata": {
+    "start/first-effect": {
+      "title": "第一个特效",
+      "description": "从空目录到一个能跑的 NS_Hello：写一个 .dfs，跑一条命令，得到一个标准 UNiagaraSystem。"
+    }
+  }
+}
