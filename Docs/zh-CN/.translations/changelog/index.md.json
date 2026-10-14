@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/changelog/index.md",
+  "translationFile": "Docs/zh-CN/changelog/index.md",
+  "sourceHash": null,
+  "importedSourceHash": "78e2a389257724ad6b62e8f6e2462882cd65446e21b96292d6f5212900b7f316",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "a84af04773dcb58afa69c0bf792dbd819e22674eb0c6cd65cf48f1c6010bc476",
+  "origin": "website-import",
+  "importedFrom": [
+    "changelog/index"
+  ],
+  "pageMetadata": {
+    "changelog/index": {
+      "title": "更新日志",
+      "description": "DreamFX 每个版本覆盖了什么，以及 1.0.0 的发布验证快照与已知问题。"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/DFX7xxx.md",
+  "translationFile": "Docs/zh-CN/diagnostics/DFX7xxx.md",
+  "sourceHash": null,
+  "importedSourceHash": "78091c818f0834595933499e6c82d34f1bf79cf1b4d427215699f772a60d757a",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "13b6d4bcf261120e891be377beb793beeef0f61946a023fc304671f11efcf584",
+  "origin": "website-import",
+  "importedFrom": [
+    "diagnostics/dfx7xxx"
+  ],
+  "pageMetadata": {
+    "diagnostics/dfx7xxx": {
+      "title": "DFX7xxx — 溯源、漂移与 lint",
+      "description": "DFX7xxx 段的全部诊断码，每条带严重级别、逐字消息、成因与修法。"
+    }
+  }
+}

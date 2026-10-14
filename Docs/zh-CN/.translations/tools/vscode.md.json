@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/tools/vscode.md",
+  "translationFile": "Docs/zh-CN/tools/vscode.md",
+  "sourceHash": null,
+  "importedSourceHash": "c12329eb100e9ce4c59a906e5e45ada3ac4ca3b48b41ac4e6078a4dbb941c5f5",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "26803dca4e01b18f28f7f97b1c562f706f2516259ecab00be088ce139a6859fa",
+  "origin": "website-import",
+  "importedFrom": [
+    "tools/vscode"
+  ],
+  "pageMetadata": {
+    "tools/vscode": {
+      "title": "VSCode 与模块索引",
+      "description": "workspace 文件长什么样、VSCode 怎么被找到、跳转链接的规则，以及 .dfx-index.json 里为什么要有输入签名。"
+    }
+  }
+}

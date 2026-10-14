@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/language/events-and-stages.md",
+  "translationFile": "Docs/zh-CN/language/events-and-stages.md",
+  "sourceHash": null,
+  "importedSourceHash": "326885cda6b96d4e157cd253d033a997c851e8143351dd36167fc663e3eadcf0",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "5fbcc2cadcc8367a732820788a68e170d37137850a7cbbbec6979b5e572765db",
+  "origin": "website-import",
+  "importedFrom": [
+    "language/events-and-stages"
+  ],
+  "pageMetadata": {
+    "language/events-and-stages": {
+      "title": "事件与 Simulation Stage",
+      "description": "OnEvent 事件处理器与具名 Stage 块：怎么写、各自的硬限制，以及 DataInterface 名字为什么就是全部语义。"
+    }
+  }
+}

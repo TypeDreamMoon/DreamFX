@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/overview.md",
+  "translationFile": "Docs/zh-CN/overview.md",
+  "sourceHash": null,
+  "importedSourceHash": "2aea93ca4bdbc457bf6aa20e64577fd88d84b00f3e9e5813aaf31c879209aa5d",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "bc5a2ff4859bc22c1e656c36a623742810656774d671b39c9bd21d528f165ab0",
+  "origin": "website-import",
+  "importedFrom": [
+    "index"
+  ],
+  "pageMetadata": {
+    "index": {
+      "title": "概览",
+      "description": "DreamFXLang 是 Unreal Niagara 特效的文本化语言，由 DreamFX 插件编译成标准 Niagara 资产，并能把现有系统反编译回源码。"
+    }
+  }
+}

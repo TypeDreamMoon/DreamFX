@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/language/values.md",
+  "translationFile": "Docs/zh-CN/language/values.md",
+  "sourceHash": null,
+  "importedSourceHash": "468ffd285f1836eb1a480609aa7f811cac38b301ff9bd1e2cacf383227120ac2",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "bdf9db2b1a4f11b51ce190a29683b0511db9e2b8e43a31a0a4631f3af2e6bf3d",
+  "origin": "website-import",
+  "importedFrom": [
+    "language/values"
+  ],
+  "pageMetadata": {
+    "language/values": {
+      "title": "值、类型与规则",
+      "description": "等号右边能出现的一切：四种值形态、curve 字面量、内联表达式白名单、类型对照表，以及 L2 / L3 / L6 / L7。"
+    }
+  }
+}

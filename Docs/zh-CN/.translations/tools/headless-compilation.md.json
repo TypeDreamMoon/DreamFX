@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/tools/headless-compilation.md",
+  "translationFile": "Docs/zh-CN/tools/headless-compilation.md",
+  "sourceHash": null,
+  "importedSourceHash": "92cde1684eceae51e0fb222d77f3c7666c9170a452a7e3b6df1829d1524cdd29",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "9cd153977b914ff8f75983fc831eaa07f66bc728b0079a49b2e5063a03100277",
+  "origin": "website-import",
+  "importedFrom": [
+    "tools/cli"
+  ],
+  "pageMetadata": {
+    "tools/cli": {
+      "title": "dfx.ps1 命令行",
+      "description": "headless 驱动的每一个子命令与参数：build、verify、lint、decompile、mirror-diff、asset-diff、coverage、schema、index、corpus。"
+    }
+  }
+}

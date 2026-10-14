@@ -1,9 +1,11 @@
 # DreamFX documentation
 
+[English](README.md) · [简体中文](zh-CN/README.md)
+
 These English Markdown documents are the maintained originals for the plugin and its
 [documentation site](https://fx.toolchain.64hz.cn/en/docs). Edit the source here. The site maps
-these files to stable page URLs, generates English pages, and proposes Chinese translations in
-pull requests for human review. Moving a source file does not require changing its public URL.
+these files to stable page URLs and publishes both languages. Chinese translation pull requests
+are opened and reviewed in this plugin repository. Moving a source file does not require changing its public URL.
 
 ## Getting started
 
@@ -66,3 +68,7 @@ editing their generated sections. The hand-authored diagnostic overview is separ
 The website's `docs-sync/config.json` maps source files to existing page IDs, including legacy
 `plugin/` routes. Keep those IDs when reorganizing source paths. This navigation file is excluded
 from automatic page discovery so it does not create another website route.
+
+The `zh-CN/` tree mirrors English source paths. Imported translations are unreviewed; its README lists missing translations, and `.translations/` records source versions without treating an import as approval. Website-only notes remain in the website repository.
+
+Check translation status locally with `python -B Docs/translation-status.py`; add `--all` to include every source or `--json` for structured output. This read-only tool does not need the website repository or a Git checkout.

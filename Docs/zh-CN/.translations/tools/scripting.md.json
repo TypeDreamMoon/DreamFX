@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/tools/scripting.md",
+  "translationFile": "Docs/zh-CN/tools/scripting.md",
+  "sourceHash": null,
+  "importedSourceHash": "c497946ef32d170f153359569f3ce172a3d79ab4b4cce38d06cbb7da6d9d1c3d",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "7090a3aecd271ebdb6c0d0af883a18a759608a86e069db6e5b43b59253c97f77",
+  "origin": "website-import",
+  "importedFrom": [
+    "tools/scripting"
+  ],
+  "pageMetadata": {
+    "tools/scripting": {
+      "title": "Python 与蓝图接口",
+      "description": "UDreamFXEditorLibrary 把每一条编辑器命令暴露给脚本，以及为什么这不是\"顺便加的\"。"
+    }
+  }
+}

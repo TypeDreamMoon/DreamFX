@@ -191,3 +191,5 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
   Scalability 条件逻辑。发射器 `from` 是源码拷贝,原生资产继承使用 `inherits`,系统源码继承使用 `Parent`。
   降级全部有诊断,绝不静默——
   1.0.0 已知问题清单见 [CHANGELOG](CHANGELOG.md)。
+
+文档：[English](Docs/README.md) · [简体中文](Docs/zh-CN/README.md)（迁入译文待核对）。

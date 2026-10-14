@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/generation/adopt.md",
+  "translationFile": "Docs/zh-CN/generation/adopt.md",
+  "sourceHash": null,
+  "importedSourceHash": "debe5627b2d39e57deef587e5b0fdb56f2b6656dd49c09eb46b84096da4cf3a3",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "7b6babeb460dc1e636f205f258eff6f35a257fb5c3c289a4431c6a8877cb4c23",
+  "origin": "website-import",
+  "importedFrom": [
+    "generation/adopt"
+  ],
+  "pageMetadata": {
+    "generation/adopt": {
+      "title": "Export 与 Adopt",
+      "description": "两个都做反编译，区别在之后发生什么 —— 镜像命名空间、接管流程，以及三条拒绝的理由。"
+    }
+  }
+}

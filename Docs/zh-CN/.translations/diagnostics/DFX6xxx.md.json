@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/DFX6xxx.md",
+  "translationFile": "Docs/zh-CN/diagnostics/DFX6xxx.md",
+  "sourceHash": null,
+  "importedSourceHash": "3bdacff08bf92ec696e7941039285f8d2bbd6f309774121c73054a3afcc44c1d",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "8446d48bbd7057a14d5bd86ece4be736692586ad06b55fa7ea5ce13badff8d22",
+  "origin": "website-import",
+  "importedFrom": [
+    "diagnostics/dfx6xxx"
+  ],
+  "pageMetadata": {
+    "diagnostics/dfx6xxx": {
+      "title": "DFX6xxx — Niagara 编译",
+      "description": "DFX6xxx 段的全部诊断码，每条带严重级别、逐字消息、成因与修法。"
+    }
+  }
+}

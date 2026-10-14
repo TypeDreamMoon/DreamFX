@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/tools/ci.md",
+  "translationFile": "Docs/zh-CN/tools/ci.md",
+  "sourceHash": null,
+  "importedSourceHash": "b973f3c8a538e79f8d5bccbfed0e4e3d565cbbc3f381315f2393eebbd2eb27f9",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "8a4d6052ecce7ad2690cacc9909f88a3a3375a301cae3aee582f4d10344d707c",
+  "origin": "website-import",
+  "importedFrom": [
+    "tools/ci"
+  ],
+  "pageMetadata": {
+    "tools/ci": {
+      "title": "ci.ps1 与门禁",
+      "description": "四步 CI 各自抓什么、参数怎么选、文档漂移检查，以及一条能放进流水线的最小配置。"
+    }
+  }
+}

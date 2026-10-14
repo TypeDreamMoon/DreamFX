@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/DFX3xxx.md",
+  "translationFile": "Docs/zh-CN/diagnostics/DFX3xxx.md",
+  "sourceHash": null,
+  "importedSourceHash": "68525e37957f2209f568967856b32808dada026a2634b6f92be2f6bf96a2c395",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "18bcbc182020b16b35eaa366cbf767254d1c9a8a08d640bc5659cf9be9e87ba9",
+  "origin": "website-import",
+  "importedFrom": [
+    "diagnostics/dfx3xxx"
+  ],
+  "pageMetadata": {
+    "diagnostics/dfx3xxx": {
+      "title": "DFX3xxx — 声明与文档结构",
+      "description": "DFX3xxx 段的全部诊断码，每条带严重级别、逐字消息、成因与修法。"
+    }
+  },
+  "missingSections": [
+    "DFX3048",
+    "DFX3049",
+    "DFX3050",
+    "DFX3051",
+    "DFX3052",
+    "DFX3053",
+    "DFX3054",
+    "DFX3055",
+    "DFX3056",
+    "DFX3057"
+  ]
+}

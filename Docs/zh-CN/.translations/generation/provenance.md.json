@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/generation/provenance.md",
+  "translationFile": "Docs/zh-CN/generation/provenance.md",
+  "sourceHash": null,
+  "importedSourceHash": "0f98594fc8b2fbc622a93db129570ac6a742fc9fca3b3b8bde0a416969b1b985",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "cc0d76ccdc52a8c17c777d8f5c2b56589e825de616b7c6722821ac878d0afb9e",
+  "origin": "website-import",
+  "importedFrom": [
+    "generation/provenance"
+  ],
+  "pageMetadata": {
+    "generation/provenance": {
+      "title": "溯源与 verify",
+      "description": "每个生成资产上盖的那枚戳里有什么，verify 报的三种漂移，以及 lint 的四条规则。"
+    }
+  }
+}

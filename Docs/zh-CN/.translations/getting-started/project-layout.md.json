@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/getting-started/project-layout.md",
+  "translationFile": "Docs/zh-CN/getting-started/project-layout.md",
+  "sourceHash": null,
+  "importedSourceHash": "fa31d14b57f605ec0efa533388b980effabfe28a693ac6d89c8a8e4b60795053",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "863c01a0352bbe9955318580d9de5c9a512de8a8fb95c800433bff1048479e0d",
+  "origin": "website-import",
+  "importedFrom": [
+    "start/project-layout"
+  ],
+  "pageMetadata": {
+    "start/project-layout": {
+      "title": "目录与命名",
+      "description": "DFX 源码根、Root 与 Name 怎么解析成资产路径、模块搜索路径，以及哪些东西该进版本控制。"
+    }
+  }
+}

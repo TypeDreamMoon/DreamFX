@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/diagnostics/DFX5xxx.md",
+  "translationFile": "Docs/zh-CN/diagnostics/DFX5xxx.md",
+  "sourceHash": null,
+  "importedSourceHash": "5188993b4a4fd46c7c0e5cd9845c6fb1df99e61e4ff1a3b782e9326aebc013e2",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "b3e3fb074e90a650e87093d8a66069fb0e44278add0bead92370b72a947af3be",
+  "origin": "website-import",
+  "importedFrom": [
+    "diagnostics/dfx5xxx"
+  ],
+  "pageMetadata": {
+    "diagnostics/dfx5xxx": {
+      "title": "DFX5xxx — 生成与资产写入",
+      "description": "DFX5xxx 段的全部诊断码，每条带严重级别、逐字消息、成因与修法。"
+    }
+  },
+  "missingSections": [
+    "DFX5027",
+    "DFX5035",
+    "DFX5036"
+  ]
+}

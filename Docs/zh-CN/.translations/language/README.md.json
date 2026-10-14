@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/language/README.md",
+  "translationFile": "Docs/zh-CN/language/README.md",
+  "sourceHash": null,
+  "importedSourceHash": "a757be5741ea751e109e7a46f33999b9c5d949860079686198ca4244a4b35412",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "caaf3617eeeb2c636e376a9aa80fdd836b620c3f867a564240a7214e20271e28",
+  "origin": "website-import",
+  "importedFrom": [
+    "language/overview"
+  ],
+  "pageMetadata": {
+    "language/overview": {
+      "title": "文件模型",
+      "description": "每个 DreamFXLang 文件的形状：头、块、语句、注释、属性，以及八条 L 规则的索引。"
+    }
+  }
+}

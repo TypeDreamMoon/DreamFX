@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/generation/roundtrip.md",
+  "translationFile": "Docs/zh-CN/generation/roundtrip.md",
+  "sourceHash": null,
+  "importedSourceHash": "7160b9803cbfd6db782204a8e6d811f78b81eb83a93d4165d4b0a7609242662d",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "df2fe4cc5f964d02c0a01a2b2810a7bc9c0725b7cef4369c8993d78b78cffe87",
+  "origin": "website-import",
+  "importedFrom": [
+    "generation/roundtrip"
+  ],
+  "pageMetadata": {
+    "generation/roundtrip": {
+      "title": "往返与等价",
+      "description": "反编译的契约、缺口怎么显形、四层验证各自回答什么问题，以及三个\"全绿也不等于对\"的教训。"
+    }
+  }
+}

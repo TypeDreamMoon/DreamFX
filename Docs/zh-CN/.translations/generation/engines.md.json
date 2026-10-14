@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/generation/engines.md",
+  "translationFile": "Docs/zh-CN/generation/engines.md",
+  "sourceHash": null,
+  "importedSourceHash": "0c91f3cbd1d915db9e9014fb125ab7c9aef9a4a1c3887155b8ca073e43f2a949",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "80036819f194b3c78578f789be156b4366f95a6694a93195c0c0ac252dc0d025",
+  "origin": "website-import",
+  "importedFrom": [
+    "generation/engines"
+  ],
+  "pageMetadata": {
+    "generation/engines": {
+      "title": "引擎与后端",
+      "description": "同一份插件源码怎么在自维护引擎和预编译安装版上都跑 —— 零 #if 分叉、三种 .dfm 生成结果，以及实验性 API 的漂移策略。"
+    }
+  }
+}

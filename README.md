@@ -202,3 +202,5 @@ debug and migrate effects headlessly.
   conditions, Scalability conditions. Emitter `from` copies source; native asset inheritance uses
   `inherits`, and system source inheritance uses `Parent`. Degradations are
   diagnosed, not silent — see [CHANGELOG](CHANGELOG.md) for the 1.0.0 known-issues list.
+
+Documentation: [English](Docs/README.md) · [简体中文](Docs/zh-CN/README.md) (imported translations awaiting review).

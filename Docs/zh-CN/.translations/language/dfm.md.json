@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/language/dfm.md",
+  "translationFile": "Docs/zh-CN/language/dfm.md",
+  "sourceHash": null,
+  "importedSourceHash": "2de0e0fb4162f720ddf4ba95f91b45c8ec46d6ed924ba3a3a8df49d95b106995",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "c90647e0eebd507a1c9ab7841ccb7ec822c1e42785921ad1b8bb78aeb8515efb",
+  "origin": "website-import",
+  "importedFrom": [
+    "language/dfm"
+  ],
+  "pageMetadata": {
+    "language/dfm": {
+      "title": ".dfm — 模块与动态输入",
+      "description": "用文本写一个 Niagara 模块或动态输入：Usage、Inputs、HLSL Body，以及哪些引擎能生成它。"
+    }
+  }
+}

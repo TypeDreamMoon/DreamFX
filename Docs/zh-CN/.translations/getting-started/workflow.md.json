@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sourceFile": "Docs/getting-started/workflow.md",
+  "translationFile": "Docs/zh-CN/getting-started/workflow.md",
+  "sourceHash": null,
+  "importedSourceHash": "a938e3233cd7083691ca6957395944051e32d7b535e1fcc1d8281c9368febc1d",
+  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
+  "translationHash": "3f937f7a04bc2da9f16cb1cc3007fee76d00ad53af149fad04fc8708add787e7",
+  "origin": "website-import",
+  "importedFrom": [
+    "start/workflow"
+  ],
+  "pageMetadata": {
+    "start/workflow": {
+      "title": "日常循环",
+      "description": "保存即重建、实时预览、批量重建闸门、必须遵守的两条硬规矩，以及提交前的四步 CI。"
+    }
+  }
+}
