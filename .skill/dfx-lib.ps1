@@ -26,3 +26,31 @@ function Get-DreamFXAssetChanges {
         }
     }
 }
+
+function Get-DreamFXLauncherEngineRoot {
+    # The Epic Games Launcher records every engine it installs in LauncherInstalled.dat, but writes
+    # the HKLM "Unreal Engine\<version>" key only on some installs: an engine moved to another drive,
+    # or installed by a newer launcher, has the manifest entry and no key, so a project with
+    # EngineAssociation "5.8" resolves nowhere in the registry. The engine itself is the entry whose
+    # AppName is exactly UE_<association>; the same InstallLocation also appears under plugin
+    # artifacts (FabPlugin_5.8, QuixelBridge_5.8), which is why the name is matched whole.
+    param(
+        [string]$Association,
+        [string]$ManifestPath = (Join-Path $env:ProgramData 'Epic/UnrealEngineLauncher/LauncherInstalled.dat')
+    )
+
+    if (-not $Association -or -not $ManifestPath -or -not (Test-Path -LiteralPath $ManifestPath)) { return $null }
+    try {
+        $manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+
+    foreach ($entry in @($manifest.InstallationList)) {
+        if ($entry.AppName -ceq "UE_$Association" -and $entry.InstallLocation -and (Test-Path -LiteralPath $entry.InstallLocation)) {
+            return (Resolve-Path -LiteralPath $entry.InstallLocation).Path
+        }
+    }
+    return $null
+}

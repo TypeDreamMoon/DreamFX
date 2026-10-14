@@ -1248,6 +1248,9 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 	// first without meaning the second (see FGenerateOptions::bForceLossyRebuild).
 	Options.bForceLossyRebuild = Options.bForce;
 	Options.bSave = !FParse::Param(*Params, TEXT("NoSave")) && !Options.bVerifyOnly;
+	// Off by default here: a command-line build is what CI and the gate run, and those want the
+	// full rebuild's answer, not a patch on top of whatever the last build left.
+	Options.bIncremental = FParse::Param(*Params, TEXT("Incremental"));
 
 	// -Window=N: how many systems may sit between their compile request and their finalize. Source
 	// N+1 generates on the game thread while N's scripts compile on the task pool; 1 restores the
@@ -1415,6 +1418,10 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 
 		TUniquePtr<FDiagnosticSink> Diagnostics = MakeUnique<FDiagnosticSink>();
 		const FGenerateResult Result = FGenerator::GenerateFromFile(SourceFile, FileOptions, *Diagnostics);
+		if (Result.Incremental.bRequested && !Result.bSkipped)
+		{
+			UE_LOG(LogDreamFX, Display, TEXT("%s: %s"), *FPaths::GetCleanFilename(SourceFile), *Result.Incremental.ToString());
+		}
 
 		if (Result.Pending.IsValid())
 		{

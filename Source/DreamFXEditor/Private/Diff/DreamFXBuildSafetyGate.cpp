@@ -1,7 +1,9 @@
 #include "Diff/DreamFXBuildSafetyGate.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "Diff/DreamFXAssetFacts.h"
 #include "DreamFXModule.h"
+#include "DreamFXTypes.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -234,6 +236,7 @@ namespace UE::DreamFX::Editor
 
 	FBuildSafetySnapshot FBuildSafetyGate::Capture(UNiagaraSystem* System)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_SafetyGate_Capture);
 		FBuildSafetySnapshot Snapshot;
 		if (System == nullptr)
 		{
@@ -243,6 +246,14 @@ namespace UE::DreamFX::Editor
 		DescribeSystemFacts(System, Snapshot.Facts);
 		Snapshot.bCaptured = true;
 		return Snapshot;
+	}
+
+	FString FBuildSafetyGate::HashFacts(const TArray<FString>& RawFacts)
+	{
+		TArray<FString> Facts;
+		CollectComparableFacts(RawFacts, Facts);
+		Facts.Sort();
+		return HashSourceText(FString::Join(Facts, TEXT("|")));
 	}
 
 	FBuildSafetyGate::FComparison FBuildSafetyGate::Compare(const TArray<FString>& BeforeFactsRaw,

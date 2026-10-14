@@ -24,6 +24,15 @@ namespace UE::DreamFX::Editor
 		void InvalidateFile(const FString& File);
 
 		/**
+		 * Lets the owner say that a changed source file is a write this process made itself.
+		 *
+		 * Asked once for each file a batch of notifications reports as changed. A file it answers true
+		 * for is not queued for its own rebuild, but everything that depends on it still is: a parent
+		 * .dfs rewritten by write-back changes what its children inherit.
+		 */
+		void SetOwnWriteFilter(TFunction<bool(const FString&)> InIsOwnWrite) { IsOwnWrite = MoveTemp(InIsOwnWrite); }
+
+		/**
 		 * Current subscriptions. Recursive watches cover the DFX roots only; everything else -- the
 		 * directory holding each root, external dependency directories and their parents -- is a
 		 * shallow watch that reports direct children. A recursive watch above a root would deliver
@@ -41,7 +50,8 @@ namespace UE::DreamFX::Editor
 		void Reindex();
 		void ProcessChanges(const TArray<FFileChangeData>& Changes);
 		void ReconcileWatches();
-		void Invalidate(TArray<FString> ChangedFiles, const TArray<FString>& ChangedDirectories);
+		void Invalidate(TArray<FString> ChangedFiles, const TArray<FString>& ChangedDirectories,
+			const TArray<FString>& OwnWrites = {});
 		void GetKnownFiles(TArray<FString>& Out) const;
 		TArray<FWatchSpec> DesiredWatches() const;
 		bool IsRootSource(const FString& File) const;
@@ -49,6 +59,7 @@ namespace UE::DreamFX::Editor
 
 		IDirectoryWatcher& Watcher;
 		TFunction<void(const TSet<FString>&)> QueueSources;
+		TFunction<bool(const FString&)> IsOwnWrite;
 		TMap<FString, FDelegateHandle> RecursiveHandles;
 		TMap<FString, FDelegateHandle> ShallowHandles;
 		/** Watched directories that were themselves added, removed or renamed and must be re-subscribed. */

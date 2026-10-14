@@ -32,6 +32,9 @@ class UNiagaraSystem;
  *   UNiagaraEmitterFactoryNew::InitializeEmitter
  *
  * No symbol outside that list may be added without re-running the upstream comparison in plan 2.5.
+ * ResetInputs steps outside the list because the API has no reset: it calls UNiagaraStackFunctionInput's
+ * CanReset and Reset through the view model walk in DreamFXStackLookup.h, and every symbol on that path
+ * carries NIAGARAEDITOR_API in the stock 5.8 install.
  * DreamFX types never leak Niagara editor structs: everything crossing this boundary is either a
  * plain struct declared below or a Niagara *runtime* type (FNiagaraTypeDefinition, UNiagaraScript),
  * which is stable public API.
@@ -770,6 +773,58 @@ namespace UE::DreamFX::Editor
 		// --- value writes --------------------------------------------------------------------
 
 		static bool SetInput(const FStackAddress& InputAddress, const FInputValue& Value, TArray<FString>& OutErrors);
+
+		/**
+		 * Puts each addressed input back to what its module gives it when freshly added -- the thing the
+		 * stack UI's reset arrow does, through UNiagaraStackFunctionInput::Reset.
+		 *
+		 * This is the other half of SetInput for an incremental build. A source that stops mentioning an
+		 * input has not asked for any value, it has asked for the module's own, and writing that value
+		 * back by hand would be a second opinion about what "default" means. The external edit API has no
+		 * reset at all, and on the stock 5.8 install it cannot even hand out the stack input (the
+		 * reference's GetInput and the context's view model are not exported). So this builds its own
+		 * view model, reaches the input by the walk the compatibility layer already proved -- see
+		 * DreamFXStackLookup.h -- and calls the two exported members the UI itself calls.
+		 *
+		 * Addresses are the ones SetInput takes: emitter name (none for the system stacks), script name,
+		 * module name, and InputNameStack, which goes through a dynamic input's chain for a nested input.
+		 *
+		 * What resolves: the two system stacks and the four main emitter stacks. An event handler or a
+		 * simulation stage is one of several stacks sharing a usage, told apart by an id the walk does
+		 * not key on, so those fail with "not supported for this stack" and the caller rebuilds that
+		 * stack instead. An inline edit condition (a bool that only gates another input) is not a stack
+		 * input of its own and fails too, saying so.
+		 *
+		 * An input already at its default is a successful no-op. Everything else is an error naming the
+		 * address and the reason: an address that does not resolve, an object-asset input (the engine's
+		 * CanReset compares those the wrong way round, so neither answer can be trusted), or an input
+		 * that still differs from its default after the reset. The caller is expected to answer any of
+		 * them with a full rebuild, which is why this is strict rather than forgiving.
+		 *
+		 * Nothing is reset until every address has resolved, so a bad address leaves the system exactly
+		 * as it was. After that the resets run in the stack's own containment order, children before the
+		 * entries that contain them, whatever order the caller listed them in: a dynamic input's chain
+		 * inputs go before the dynamic input, and the inputs a static switch gates go before the switch.
+		 * That is what lets a batch name both ends of a chain. Resetting the parent first would remove the
+		 * child's entry (a dynamic input's chain), or leave the child to be reset while hidden, which writes
+		 * a constant that the switch's default branch never has. Each address is resolved again immediately
+		 * before its reset, so an entry a previous reset removed is reported as an error and never touched
+		 * through a stale pointer. On a false return some inputs may already have been reset; only the
+		 * failure to resolve is atomic.
+		 *
+		 * Resetting a static switch also hides the inputs it had revealed, and the engine leaves their rapid
+		 * iteration constants behind in the scripts (the UI's reset arrow does the same). Those are cleared
+		 * here, so the scripts end up holding what a freshly added module's do.
+		 *
+		 * The shared edit context is dropped before the call builds its view model and the epoch ends
+		 * with the call: a reset changes the graph behind any context the write scope was keeping, and a
+		 * second live view model on the same system is exactly what the write scope exists to avoid. The
+		 * view model built here does not outlive the call, and no transaction is opened beyond the one
+		 * Reset opens itself. A system with an open read scope is refused, because a reset is a write.
+		 */
+		static bool ResetInputs(UNiagaraSystem* System, TArrayView<const FStackAddress> InputAddresses,
+			TArray<FString>& OutErrors);
+
 		static bool SetRendererProperties(const FStackAddress& RendererAddress, const FString& PropertiesJson,
 			TArray<FString>& OutErrors);
 

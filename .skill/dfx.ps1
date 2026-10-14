@@ -26,6 +26,10 @@
     ./dfx.ps1 build DFX/Samples/NS_Spark.dfs -Force
 
 .EXAMPLE
+    ./dfx.ps1 build DFX/Samples/NS_Spark.dfs -Incremental
+    Write only what changed since the asset's last build. A local edit-loop flag; gates build in full.
+
+.EXAMPLE
     ./dfx.ps1 build -All
 
 .EXAMPLE
@@ -107,6 +111,11 @@ param(
     # build: pay the engine's per-add stack refresh again instead of one batch refresh per stack.
     # Slower by design -- the AddModule-batching round's A/B and escape hatch.
     [switch]$RebuildPerAdd,
+
+    # build: patch only what changed since the asset's last build, falling back to the full rebuild
+    # when the asset's stored plan cannot be trusted. The editor does this on save; the command line
+    # defaults to the full rebuild.
+    [switch]$Incremental,
 
     # list: show dynamic inputs instead of modules.
     [switch]$DynamicInputs,
@@ -242,6 +251,10 @@ function Resolve-EngineRoot {
         $entry = (Get-ItemProperty -Path $installed -ErrorAction SilentlyContinue).InstalledDirectory
         if ($entry) { return (Resolve-Path -LiteralPath $entry).Path }
     }
+
+    # An engine the launcher installed is not always in the registry; its own manifest still lists it.
+    $launcher = Get-DreamFXLauncherEngineRoot -Association $association
+    if ($launcher) { return $launcher }
 
     throw "EngineAssociation '$association' is not registered. Pass -Engine <root> or set UE_ENGINE_ROOT."
 }
@@ -387,6 +400,7 @@ switch ($Command) {
         if ($RebuildOnStructural) { $arguments += '-RebuildOnStructural' }
         if ($RebuildOnSwitch) { $arguments += '-RebuildOnSwitch' }
         if ($RebuildPerAdd) { $arguments += '-RebuildPerAdd' }
+        if ($Incremental) { $arguments += '-Incremental' }
         if ($Window -gt 0) { $arguments += "-Window=$Window" }
     }
     'verify' {

@@ -1,4 +1,5 @@
 #include "DreamFXModuleLibrary.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "DreamFXModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -10,27 +11,115 @@
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 
+#include <atomic>
+
 namespace UE::DreamFX::Editor
 {
 	FModuleLibrary::FModuleLibrary()
 	{
+		static std::atomic<uint32> NextSerial{ 1 };
+		Serial = NextSerial++;
 		AddDefaultSearchPaths();
 	}
 
 	FModuleLibrary::~FModuleLibrary()
 	{
-		if (ProbeSystem != nullptr)
+		// A shared library can outlive the editor module that made it, and be destroyed by a static
+		// destructor after the object system is gone. The probe is not rooted in anything then, and
+		// touching it would write to a freed object array.
+		if (ProbeSystem != nullptr && UObjectInitialized())
 		{
 			ProbeSystem->RemoveFromRoot();
-			ProbeSystem = nullptr;
 		}
+		ProbeSystem = nullptr;
+	}
+
+	const TArray<FString>& FModuleLibrary::GetDefaultSearchPaths()
+	{
+		static const TArray<FString> Defaults = {
+			TEXT("/Niagara/Modules"),
+			TEXT("/Niagara/DynamicInputs"),
+			TEXT("/Niagara/Functions")
+		};
+		return Defaults;
 	}
 
 	void FModuleLibrary::AddDefaultSearchPaths()
 	{
-		SearchPaths.AddUnique(TEXT("/Niagara/Modules"));
-		SearchPaths.AddUnique(TEXT("/Niagara/DynamicInputs"));
-		SearchPaths.AddUnique(TEXT("/Niagara/Functions"));
+		for (const FString& Path : GetDefaultSearchPaths())
+		{
+			SearchPaths.AddUnique(Path);
+		}
+	}
+
+	void FModuleLibrary::Track(const UObject* Object)
+	{
+		if (Object != nullptr)
+		{
+			TrackedObjects.Add(Object);
+		}
+	}
+
+	void FModuleLibrary::Track(const FNiagaraTypeDefinition& Type)
+	{
+		if (Type.IsValid())
+		{
+			Track(Type.GetStruct());
+			Track(Type.GetEnum());
+		}
+	}
+
+	void FModuleLibrary::Track(const FInputValue& Value)
+	{
+		Track(Value.LiteralStruct);
+		Track(Value.EnumType);
+		Track(Value.LinkedVariable.GetType());
+		Track(Value.DynamicInputAsset);
+		Track(Value.DataInterfaceClass);
+		Track(Value.ObjectAsset);
+	}
+
+	void FModuleLibrary::Track(const FModuleSchema& Schema)
+	{
+		for (const FInputSchema& Input : Schema.Inputs)
+		{
+			Track(Input.Type);
+		}
+		for (const FInputSchema& Output : Schema.Outputs)
+		{
+			Track(Output.Type);
+		}
+	}
+
+	bool FModuleLibrary::HasStaleReferences() const
+	{
+		if (bProbeCompromised)
+		{
+			return true;
+		}
+
+		for (const TWeakObjectPtr<const UObject>& Object : TrackedObjects)
+		{
+			if (!Object.IsValid())
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void FModuleLibrary::PruneSchemaCache()
+	{
+		// Keyed weakly, so a destroyed script's entry can never be hit again -- not even by a script
+		// loaded back at the same address, which has a different serial number. It would only sit here
+		// for as long as the library lives, which is now long enough to matter.
+		for (auto It = SchemaCache.CreateIterator(); It; ++It)
+		{
+			if (!It.Key().IsValid())
+			{
+				It.RemoveCurrent();
+			}
+		}
 	}
 
 	void FModuleLibrary::SetSearchPaths(const TArray<FString>& InSearchPaths)
@@ -49,6 +138,7 @@ namespace UE::DreamFX::Editor
 
 	void FModuleLibrary::BuildIndex()
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ModuleLibrary_BuildIndex);
 		if (bIndexBuilt)
 		{
 			return;
@@ -443,6 +533,7 @@ namespace UE::DreamFX::Editor
 
 	bool FModuleLibrary::EnsureProbeSystem(FString& OutError)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ModuleLibrary_EnsureProbeSystem);
 		if (ProbeSystem != nullptr)
 		{
 			return true;
@@ -463,7 +554,11 @@ namespace UE::DreamFX::Editor
 
 		// /Temp is the engine's scratch mount: nothing under it is ever written to disk, so the probe
 		// leaves no trace even if the build crashes partway through.
-		ProbeSystem = FNiagaraAdapter::AcquireSystem(TEXT("/Temp/DreamFX"), TEXT("DreamFXSchemaProbe"), bCreated, Errors);
+		//
+		// Named for the library: several can be alive at once now (a cached one for builds, a local one
+		// for a decompile), and two probes sharing a fixed name would be one object edited by both.
+		ProbeSystem = FNiagaraAdapter::AcquireSystem(TEXT("/Temp/DreamFX"),
+			FString::Printf(TEXT("DreamFXSchemaProbe_%u"), Serial), bCreated, Errors);
 		if (ProbeSystem == nullptr)
 		{
 			bProbeSystemFailed = true;
@@ -586,6 +681,7 @@ namespace UE::DreamFX::Editor
 	const FModuleSchema* FModuleLibrary::GetStackSchema(UNiagaraScript* Module, EStackKind Stack,
 		TArrayView<const TPair<FName, FInputValue>> SwitchValues, const FGuid& VersionGuid, FString& OutError)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ModuleLibrary_GetStackSchema);
 		if (Module == nullptr)
 		{
 			OutError = TEXT("Cannot read the schema of a null module.");
@@ -650,7 +746,7 @@ namespace UE::DreamFX::Editor
 					*Module->GetName(), *FString::Join(Errors, TEXT(" | ")));
 
 				TArray<FString> RemoveErrors;
-				FNiagaraAdapter::RemoveModule(ModuleAddress, RemoveErrors);
+				bProbeCompromised |= !FNiagaraAdapter::RemoveModule(ModuleAddress, RemoveErrors);
 				return nullptr;
 			}
 		}
@@ -723,9 +819,10 @@ namespace UE::DreamFX::Editor
 		}
 
 		// Always remove, even when the topology read failed: a probe left in the stack would change
-		// what the next module sees.
+		// what the next module sees. A removal that fails leaves exactly that behind, and a library
+		// that is reused would carry it into every later build -- so it is marked as no longer usable.
 		Errors.Reset();
-		FNiagaraAdapter::RemoveModule(ModuleAddress, Errors);
+		bProbeCompromised |= !FNiagaraAdapter::RemoveModule(ModuleAddress, Errors);
 
 		if (!bReadTopology)
 		{
@@ -734,6 +831,7 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
+		Track(Schema);
 		return StackSchemaCache.Add(Key, MakeUnique<FModuleSchema>(MoveTemp(Schema))).Get();
 	}
 
@@ -753,6 +851,7 @@ namespace UE::DreamFX::Editor
 		EStackKind Stack, TArrayView<const TPair<FName, FInputValue>> SwitchValues,
 		const FGuid& VersionGuid, FString& OutError)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(DFX_ModuleLibrary_GetStackDefaults);
 		if (Module == nullptr)
 		{
 			OutError = TEXT("Cannot read the defaults of a null module.");
@@ -803,7 +902,7 @@ namespace UE::DreamFX::Editor
 					*Module->GetName(), *FString::Join(Errors, TEXT(" | ")));
 
 				TArray<FString> RemoveErrors;
-				FNiagaraAdapter::RemoveModule(ModuleAddress, RemoveErrors);
+				bProbeCompromised |= !FNiagaraAdapter::RemoveModule(ModuleAddress, RemoveErrors);
 				return nullptr;
 			}
 		}
@@ -829,11 +928,12 @@ namespace UE::DreamFX::Editor
 		TMap<FName, FInputValue> Defaults;
 		for (TTuple<FName, FInputValue>& Entry : Values)
 		{
+			Track(Entry.Get<1>());
 			Defaults.Add(Entry.Get<0>(), MoveTemp(Entry.Get<1>()));
 		}
 
 		Errors.Reset();
-		FNiagaraAdapter::RemoveModule(ModuleAddress, Errors);
+		bProbeCompromised |= !FNiagaraAdapter::RemoveModule(ModuleAddress, Errors);
 
 		if (!bRead)
 		{
@@ -878,7 +978,7 @@ namespace UE::DreamFX::Editor
 		const bool bRead = FNiagaraAdapter::GetRendererProperties(EmitterAddress.WithRenderer(Index), Json, Errors);
 
 		Errors.Reset();
-		FNiagaraAdapter::RemoveRenderer(EmitterAddress.WithRenderer(Index), Errors);
+		bProbeCompromised |= !FNiagaraAdapter::RemoveRenderer(EmitterAddress.WithRenderer(Index), Errors);
 
 		if (!bRead)
 		{
@@ -924,7 +1024,7 @@ namespace UE::DreamFX::Editor
 		const bool bRead = FNiagaraAdapter::GetRendererBindings(EmitterAddress.WithRenderer(Index), Bindings, Errors);
 
 		Errors.Reset();
-		FNiagaraAdapter::RemoveRenderer(EmitterAddress.WithRenderer(Index), Errors);
+		bProbeCompromised |= !FNiagaraAdapter::RemoveRenderer(EmitterAddress.WithRenderer(Index), Errors);
 
 		if (!bRead)
 		{
@@ -982,6 +1082,8 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
+		PruneSchemaCache();
+		Track(Schema);
 		return SchemaCache.Add(Module, MakeUnique<FModuleSchema>(MoveTemp(Schema))).Get();
 	}
 
@@ -1006,6 +1108,8 @@ namespace UE::DreamFX::Editor
 			return nullptr;
 		}
 
+		PruneSchemaCache();
+		Track(Schema);
 		return SchemaCache.Add(DynamicInput, MakeUnique<FModuleSchema>(MoveTemp(Schema))).Get();
 	}
 
@@ -1052,6 +1156,7 @@ namespace UE::DreamFX::Editor
 			UE_LOG(LogDreamFX, Warning,
 				TEXT("Falling back to the asset-level schema for dynamic input '%s': %s Static switches on it stay invisible."),
 				*DynamicInput->GetName(), *Reason);
+			Track(Fallback);
 			return DynamicInputStackSchemaCache.Add(Key, MakeUnique<FModuleSchema>(Fallback)).Get();
 		};
 
@@ -1138,6 +1243,7 @@ namespace UE::DreamFX::Editor
 		Errors.Reset();
 		if (!FNiagaraAdapter::RemoveModule(ModuleAddress, Errors))
 		{
+			bProbeCompromised = true;
 			UE_LOG(LogDreamFX, Warning, TEXT("Could not remove the dynamic input probe module: %s"),
 				*FString::Join(Errors, TEXT(" | ")));
 		}
@@ -1147,6 +1253,7 @@ namespace UE::DreamFX::Editor
 			return FallBack(TEXT("the probe chain could not be read."));
 		}
 
+		Track(Probed);
 		return DynamicInputStackSchemaCache.Add(Key, MakeUnique<FModuleSchema>(MoveTemp(Probed))).Get();
 	}
 }

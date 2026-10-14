@@ -38,7 +38,8 @@ are opened and reviewed in this plugin repository. Moving a source file does not
 ## Tools
 
 - [Headless command line](tools/headless-compilation.md) and [CI gates](tools/ci.md).
-- [Editor integration](tools/editor-integration.md) and [build on save and up-to-date checks](tools/build-on-save.md).
+- [Editor integration](tools/editor-integration.md), [incremental builds](tools/incremental-builds.md),
+  and [build on save and up-to-date checks](tools/build-on-save.md).
 - [Asset comparison and export](tools/asset-comparison-and-export.md).
 - [Pull asset values into source](tools/pull.md).
 - [Write-back coverage study](tools/write-back-coverage.md): dated evidence and implementation
@@ -69,6 +70,6 @@ The website's `docs-sync/config.json` maps source files to existing page IDs, in
 `plugin/` routes. Keep those IDs when reorganizing source paths. This navigation file is excluded
 from automatic page discovery so it does not create another website route.
 
-The `zh-CN/` tree mirrors English source paths. Imported translations are unreviewed; its README lists missing translations, and `.translations/` records source versions without treating an import as approval. Website-only notes remain in the website repository.
+The `zh-CN/` tree mirrors English source paths. Imported translations are unreviewed; the [TRANSLATIONS.md snapshot](zh-CN/TRANSLATIONS.md) preserves the initial migration inventory, and `.translations/` records source versions without treating an import as approval. Website-only notes remain in the website repository.
 
 Check translation status locally with `python -B Docs/translation-status.py`; add `--all` to include every source or `--json` for structured output. This read-only tool does not need the website repository or a Git checkout.

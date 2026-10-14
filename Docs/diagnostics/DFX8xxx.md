@@ -140,7 +140,7 @@ Could not read emitter '%s': %s
 '%s' cannot be adopted: '%s' has no DreamFXLang form yet, so adopting would destroy it on the first rebuild. Export .dfs instead.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:516`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:540`
 <!-- generated:end DFX8010 -->
 
 **Cause.** **Adopt** refuses an asset that has features DreamFXLang cannot express. One line is raised per feature.
@@ -160,7 +160,7 @@ This is the gate that makes adoption safe. Adopting means the text becomes the o
 Cannot adopt '%s': source destination or another source already exists at '%s'. Edit that file instead; Adopt never replaces existing source.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:432`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:456`
 <!-- generated:end DFX8011 -->
 
 **Cause.** Another `.dfs` already declares the same target asset. Two sources generating one asset take turns overwriting each other, and whichever built last wins.
@@ -180,7 +180,7 @@ Neither source can detect this at build time -- both succeed. The only place to 
 '%s' was adopted, but re-exporting the rebuilt asset does not reproduce this file. First difference at %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:612`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:636`
 <!-- generated:end DFX8012 -->
 
 **Cause.** The asset was adopted and rebuilt, but re-exporting the rebuilt asset does not reproduce the file that was written. The first differing line is in the message.
@@ -200,7 +200,7 @@ Because DFX8010 already ruled out every *known* gap, a mismatch here is a real d
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:3869`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4757`
 <!-- generated:end DFX8013 -->
 
 **Cause.** The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its
@@ -311,7 +311,7 @@ emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in N
 '%s' was not saved: rebuilding it would drop %d fact(s) this source cannot express, and a save would destroy them. They are listed above, and the asset still holds every one of them. -Force writes anyway; full lists in %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:532`, `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:538`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4072`
+**Raised by** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:543`, `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:549`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4963`
 <!-- generated:end DFX8018 -->
 
 **Cause.** A rebuild would leave the asset holding less than it holds now, so the save was refused. One line is

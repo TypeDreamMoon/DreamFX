@@ -10,6 +10,7 @@
 
 #include "DreamFXModule.h"
 
+#include "Adapter/DreamFXStackLookup.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/ARFilter.h"
 #include "EdGraphSchema_Niagara.h"
@@ -45,66 +46,11 @@
 
 #define LOCTEXT_NAMESPACE "DreamFXExternalEditCompat"
 
+// The walk from a view model down to a stack input is shared with the adapter; see DreamFXStackLookup.h.
+using namespace UE::DreamFX::Editor::StackLookup;
+
 namespace
 {
-	/**
-	 * A view model configured exactly as the engine configures its own for external edits.
-	 *
-	 * Every flag matters in a commandlet. Data-processing-only keeps the model out of edit mode,
-	 * and the other three keep it from starting work nothing will ever service: there is no editor
-	 * tick to finish a simulation, and an auto-compile launched per view model is how a build turns
-	 * into hundreds of aborted compiles. bCompileForEdit false additionally avoids the engine's own
-	 * documented ensure when OnSystemCompiled lands on a partially destructed model.
-	 */
-	TSharedPtr<FNiagaraSystemViewModel> CreateSystemViewModel(UNiagaraSystem& System)
-	{
-		TSharedPtr<FNiagaraSystemViewModel> ViewModel = MakeShared<FNiagaraSystemViewModel>();
-
-		FNiagaraSystemViewModelOptions Options;
-		Options.bCanModifyEmittersFromTimeline = false;
-		Options.bCompileForEdit = false;
-		Options.bCanSimulate = false;
-		Options.bCanAutoCompile = false;
-		Options.bIsForDataProcessingOnly = true;
-		Options.MessageLogGuid = System.GetAssetGuid();
-
-		ViewModel->Initialize(System, Options);
-		return ViewModel;
-	}
-
-	/**
-	 * ENiagaraScriptUsage from the name a stack reference carries.
-	 *
-	 * Both spellings are accepted -- "ParticleUpdateScript" and "ENiagaraScriptUsage::ParticleUpdateScript"
-	 * -- because the API this mirrors is itself inconsistent about which it produces, and the adapter
-	 * has a matching tolerance on its side. Rejecting the qualified form here would break exactly the
-	 * read-then-write round trip that tolerance exists for.
-	 */
-	bool ScriptUsageFromName(FName ScriptName, ENiagaraScriptUsage& OutUsage)
-	{
-		const UEnum* UsageEnum = StaticEnum<ENiagaraScriptUsage>();
-		if (UsageEnum == nullptr || ScriptName.IsNone())
-		{
-			return false;
-		}
-
-		FString Name = ScriptName.ToString();
-		int32 ColonIndex;
-		if (Name.FindLastChar(TEXT(':'), ColonIndex))
-		{
-			Name = Name.RightChop(ColonIndex + 1);
-		}
-
-		const int64 Value = UsageEnum->GetValueByNameString(Name);
-		if (Value == INDEX_NONE)
-		{
-			return false;
-		}
-
-		OutUsage = static_cast<ENiagaraScriptUsage>(Value);
-		return true;
-	}
-
 	FName NameForScriptUsage(ENiagaraScriptUsage Usage)
 	{
 		const UEnum* UsageEnum = StaticEnum<ENiagaraScriptUsage>();
@@ -123,152 +69,6 @@ namespace
 			if (Handle.GetName() == EmitterName)
 			{
 				return &Handle;
-			}
-		}
-		return nullptr;
-	}
-
-	/** Every child of Entry, recursively, that is a T. Categories and value collections are walked through. */
-	template <typename T>
-	void CollectDescendants(UNiagaraStackEntry* Entry, TArray<T*>& Out, bool bStopAtT)
-	{
-		if (Entry == nullptr)
-		{
-			return;
-		}
-
-		TArray<UNiagaraStackEntry*> Children;
-		Entry->GetUnfilteredChildren(Children);
-		for (UNiagaraStackEntry* Child : Children)
-		{
-			if (T* Typed = Cast<T>(Child))
-			{
-				Out.Add(Typed);
-				if (bStopAtT)
-				{
-					continue;
-				}
-			}
-			CollectDescendants<T>(Child, Out, bStopAtT);
-		}
-	}
-
-	/**
-	 * The stack root for a system reference (EmitterName none) or an emitter reference.
-	 *
-	 * The engine reaches these through FNiagaraStackRootQuery, which is 5.8-only. The underlying walk
-	 * is the same one written out: the system's own stack view model, or the emitter handle view
-	 * model's, and their root entry.
-	 */
-	UNiagaraStackEntry* GetStackRoot(FNiagaraSystemViewModel& ViewModel, FName EmitterName)
-	{
-		if (EmitterName.IsNone())
-		{
-			UNiagaraStackViewModel* SystemStack = ViewModel.GetSystemStackViewModel();
-			return SystemStack != nullptr ? SystemStack->GetRootEntry() : nullptr;
-		}
-
-		for (const TSharedRef<FNiagaraEmitterHandleViewModel>& HandleViewModel : ViewModel.GetEmitterHandleViewModels())
-		{
-			if (HandleViewModel->GetName() == EmitterName)
-			{
-				UNiagaraStackViewModel* EmitterStack = HandleViewModel->GetEmitterStackViewModel();
-				return EmitterStack != nullptr ? EmitterStack->GetRootEntry() : nullptr;
-			}
-		}
-		return nullptr;
-	}
-
-	UNiagaraStackScriptItemGroup* FindScriptGroup(FNiagaraSystemViewModel& ViewModel, FName EmitterName,
-		ENiagaraScriptUsage Usage)
-	{
-		UNiagaraStackEntry* Root = GetStackRoot(ViewModel, EmitterName);
-		if (Root == nullptr)
-		{
-			return nullptr;
-		}
-
-		TArray<UNiagaraStackScriptItemGroup*> Groups;
-		CollectDescendants<UNiagaraStackScriptItemGroup>(Root, Groups, /*bStopAtT=*/true);
-		for (UNiagaraStackScriptItemGroup* Group : Groups)
-		{
-			if (Group->GetScriptUsage() == Usage)
-			{
-				return Group;
-			}
-		}
-		return nullptr;
-	}
-
-	UNiagaraStackModuleItem* FindModuleItem(UNiagaraStackScriptItemGroup& Group, FName ModuleName)
-	{
-		TArray<UNiagaraStackModuleItem*> Modules;
-		CollectDescendants<UNiagaraStackModuleItem>(&Group, Modules, /*bStopAtT=*/true);
-		for (UNiagaraStackModuleItem* Module : Modules)
-		{
-			if (FName(*Module->GetModuleNode().GetFunctionName()) == ModuleName)
-			{
-				return Module;
-			}
-		}
-		return nullptr;
-	}
-
-	/**
-	 * The inputs a module or a dynamic input exposes, flattened, in walk order.
-	 *
-	 * Descends INTO a function input's own children, and that is the whole point: a module's inputs are
-	 * a *hierarchy*, and an input a static switch reveals is a child of the switch rather than a sibling
-	 * of it (NiagaraStackFunctionInput.cpp, the HierarchyScriptParameter block -- one
-	 * UNiagaraStackFunctionInput per hierarchy child whose variable the current configuration uses).
-	 * `InitializeParticle`'s `Lifetime` hangs off `LifetimeMode`, `UniformSpriteSize` off
-	 * `SpriteSizeMode`. A walk that stopped at the first input found the thirteen top-level entries and
-	 * none of the conditional ones, so writing the switch appeared to do nothing and every argument it
-	 * reveals was reported as a typo.
-	 *
-	 * Stops at a Dynamic-mode input, whose children are the dynamic input chain: those are addressed by
-	 * pushing a name onto InputNameStack and belong to GetDynamicInputChain, not to this module's flat
-	 * namespace. Same two rules as the engine's ForEachFunctionInput with
-	 * { bRecurseIntoInputs = true, bRecurseIntoChainChildren = false }, which is what every 5.8 topology,
-	 * value and resolve endpoint walks with.
-	 */
-	void CollectInputs(UNiagaraStackEntry* Entry, TArray<UNiagaraStackFunctionInput*>& Out)
-	{
-		if (Entry == nullptr)
-		{
-			return;
-		}
-
-		TArray<UNiagaraStackEntry*> Children;
-		Entry->GetUnfilteredChildren(Children);
-		for (UNiagaraStackEntry* Child : Children)
-		{
-			if (UNiagaraStackFunctionInput* Input = Cast<UNiagaraStackFunctionInput>(Child))
-			{
-				Out.Add(Input);
-				if (Input->GetValueMode() != UNiagaraStackFunctionInput::EValueMode::Dynamic)
-				{
-					CollectInputs(Input, Out);
-				}
-			}
-			else
-			{
-				// A category, a value collection, or the hierarchy root a dynamic input hangs its chain
-				// from -- containers the flat namespace reads through.
-				CollectInputs(Child, Out);
-			}
-		}
-	}
-
-	UNiagaraStackFunctionInput* FindInputByName(UNiagaraStackEntry* SearchRoot, FName InputName)
-	{
-		TArray<UNiagaraStackFunctionInput*> Inputs;
-		CollectInputs(SearchRoot, Inputs);
-		for (UNiagaraStackFunctionInput* Input : Inputs)
-		{
-			if (Input->GetInputParameterHandle().GetName() == InputName)
-			{
-				return Input;
 			}
 		}
 		return nullptr;

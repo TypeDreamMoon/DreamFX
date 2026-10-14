@@ -69,6 +69,7 @@ titled *Decompiler*:
 | :-- | :-- | :-- | :-- |
 | `DreamFX.OpenSource` | **Open Source** | `Icons.OpenInExternalEditor` | Opens the `.dfs` named in the stamp |
 | `DreamFX.RebuildFromSource` | **Rebuild from Source** | `Icons.Refresh` | Queues that one file and builds it at once — [below](#rebuild-from-source) |
+| `DreamFX.PullIntoSource` | **Write Back to Source** | `Icons.Save` | Writes the values tuned in the asset back into the literals of its `.dfs` — [below](#write-back-to-source) |
 | `DreamFX.VerifyAsset` | **Verify** | `Icons.Adjust` | Checks this asset against its source |
 
 ### Emitter submenu
@@ -125,6 +126,9 @@ calls it are queued together.
 
 Decompiled exports are included, like any other source. See [Export vs Adopt](#export-vs-adopt).
 
+*Rebuild DFX* always rebuilds in full: it is the escape hatch from the [incremental
+build](#incremental-build-on-save) a save uses.
+
 The watcher also follows `.dfs` `Parent` chains and emitter `from` references outside the DFX
 roots. Only the DFX roots are watched recursively. The directory holding each root, the directory of
 each external reference and that directory's parent are watched shallowly — direct children only —
@@ -156,7 +160,8 @@ carried a position all along; before this it only reached the log.
 
 Queues the source named in the asset's stamp into the same watcher queue a save uses, and drains the
 queue at once instead of after the debounce. So it is the same forced rebuild as a save, with the same
-toasts as *Rebuild DFX*, and it cannot succeed where saving the file would fail.
+toasts as *Rebuild DFX*, and it cannot succeed where saving the file would fail. It rebuilds in full, never incrementally, so it is
+also the way to get the reference answer for an asset that looks wrong after a save.
 
 A standalone script (`.dfm`) whose editor is open gets one more step. The Niagara script editor edits
 a copy of the asset and copies it back on *Apply*, so a rebuild under it would not show, and the next
@@ -164,6 +169,85 @@ a copy of the asset and copies it back on *Apply*, so a rebuild under it would n
 not yet applied — and reopened after the build, whether the build worked or not. *Cancel* on that
 prompt keeps the editor and skips the rebuild, with a toast saying so. A script whose editor is not
 open is rebuilt without opening one. System editors work on the asset itself and are left open.
+
+### Incremental build on save
+
+A save does not clear and rewrite the whole system. Each successful build stores a *plan digest* in the
+asset's package metadata (`DreamFX.PlanDigest`, next to the provenance stamp), and the watcher's next
+build compares the new plan with it and writes only the difference: changed argument values, a stack
+whose modules changed, an emitter that was added — and nothing else. On a 1230-line system that is
+about a second for a one-value edit, against 17 s for the full rebuild on the MoonEngine build and 56 s on the
+stock prebuilt UE 5.8.
+
+It is controlled by *Project Settings ▸ Plugins ▸ DreamFX ▸ Workspace ▸ **Incremental Build on Save***
+(`bIncrementalBuildOnSave`, default on) and applies to the watcher's save-triggered rebuilds only.
+*Rebuild DFX*, *Rebuild from Source* and the bulk batch's **Rebuild them now** link always rebuild in
+full.
+
+The build falls back to a full rebuild by itself whenever the digest cannot be trusted — a new asset,
+an asset edited outside DreamFX, an older DreamFX's build, reordered emitters — and the Output Log says
+which, one line per file:
+
+```text
+incremental: 0 emitter(s) and 1 stack(s) rebuilt, 3 input(s) written, 1 reset, nothing to recompile
+full rebuild (the asset changed since its last build)
+```
+
+The result is required to be the same asset a full rebuild of the same text produces. What each edit
+costs, every fallback reason and how the guarantee is tested are in [Incremental
+builds](incremental-builds.md).
+
+### Write Back to Source
+
+The editor-side entry to [`dfx pull -Apply`](pull.md): the values an asset stores — what a slider in the
+Niagara editor leaves behind — go back into the literals its `.dfs` already declares, so the next
+rebuild does not overwrite them. It is in the [System submenu](#system-submenu), which both the Content
+Browser and the Niagara system editor toolbar show, and is offered for any system with a provenance
+stamp. The source is resolved from the stamp exactly as *Open Source* and *Rebuild from Source* do it.
+
+Only the literal's own bytes are replaced, so comments, indentation and line endings stay. A value the
+text changed since the last write-back is left alone (the text is newer), values the text does not
+declare are reported and never added, and a stack whose shape the asset and the text disagree on is
+refused whole. The toast gives the counts — written, withheld, not declared, refused stacks, and
+statements added or removed — and its link opens the report file under `Saved/DreamFX/Pull/`. The same
+numbers go to the Output Log with the pull's `DFX71xx` diagnostics. Unsaved changes in the open asset
+are included: the pull reads the asset in memory.
+
+Two settings, both under *Project Settings ▸ Plugins ▸ DreamFX ▸ Workspace* and both off by default:
+
+- **Write Back Structural Edits** (`bPullStructuralEdits`) — also add and remove statements. With it off
+  a module the editor added or removed is reported (`DFX7113`) and the whole stack is left untouched;
+  with it on it is written, but only where the correspondence between asset and text is unique
+  ([`pull.md` §4d](pull.md)). The command and the save hook below both read it.
+- **Write Back to Source on Asset Save** (`bPullOnAssetSave`) — run the same write-back whenever the
+  author saves a generated system. Saving the asset is the trigger, the work is done on the next editor
+  tick, never inside the save, and the toast appears only when something was written or a stack was
+  refused.
+
+Write-back on save starts only from the author's own save. It starts nothing for a save DreamFX makes
+itself: every build ends by saving the system it generated, and a pull after that would write the values
+the build had just applied back into the file the build had just read. The generator's save goes through
+one function, which opens a scope while it runs; the hook declines while the scope is open (and the
+package-saved event is raised synchronously inside the save, so the scope covers exactly that save). It
+also declines for an autosave, a cook or any procedural save, a commandlet run, an automation run, and
+while the editor is playing.
+
+**Loop guard.** Write-back rewrites a file the source watcher is watching, and the watcher cannot tell
+that from the author saving: it would rebuild the asset the values had just come from. So the command
+tells the watcher what it wrote — `FSourceWatcher::IgnoreOwnWrite(File)` records a hash of the file as
+it stands right after the write — and the watcher drops that file's own rebuild while the file still
+hashes to it. Anything that depends on the file (a child `.dfs` that inherits from it) is still
+rebuilt. The rules are deliberately about the content, not about notifications:
+
+- the author editing the file again changes the hash, so that save rebuilds as usual, and the record is
+  discarded;
+- several notifications for one write (the OS reports more than one, and the watcher batches them by
+  tick) are all skipped, and none at all costs nothing — the record expires on its own after 10 seconds;
+- a rescan or a directory move says nothing about who wrote the content, so it still queues the file;
+- *Rebuild from Source* and *Rebuild DFX* queue the file directly and are never skipped.
+
+The asset is not touched by a write-back, so its provenance stamp still names the text as it was before
+the write. The next full build sees the new text, finds the stamp stale, and rebuilds to the same values.
 
 ### The bulk batch
 
@@ -182,7 +266,7 @@ it, which is the same failure the gate exists to prevent, only quieter. If the t
 → DreamFX → Rebuild DFX* does the same thing.
 
 An ordinary save is never gated — one file, or any batch at or under the threshold, rebuilds
-immediately, because that path is the iteration loop. An explicit *Rebuild DFX* is never gated
+immediately (incrementally, with the setting on), because that path is the iteration loop. An explicit *Rebuild DFX* is never gated
 either: it was asked for.
 
 > [!NOTE]
@@ -312,6 +396,9 @@ Opening a **workspace** honours *Open Workspace In New Window*. Opening a **file
 | Setting | Default | Effect |
 | :-- | :-- | :-- |
 | **Open Workspace In New Window** | `true` | Only the workspace launcher reads it |
+| **Incremental Build on Save** (*Workspace*) | `true` | The watcher's save-triggered rebuilds write only what changed since the last build, and fall back to a full rebuild when they cannot. *Rebuild DFX*, *Rebuild from Source* and **Rebuild them now** always rebuild in full. See [Incremental builds](incremental-builds.md) |
+| **Write Back to Source on Asset Save** (*Workspace*) | `false` | Saving a generated system writes its stored values back into its `.dfs`, as *Write Back to Source* does. Never for DreamFX's own saves, autosaves, cooks, commandlets or while playing. See [Write Back to Source](#write-back-to-source) |
+| **Write Back Structural Edits** (*Workspace*) | `false` | Let a write-back add and remove statements as well as rewrite values; off means they are reported and the stack is left alone. Read by the command and by the save hook |
 | **Decompiled Output Directory** | `DFX/Decompiled` | Where *Export .dfs* / *Export .dfe* write, relative to the project directory. Ordinary source: discovered, watched and built. Files here must name an asset in the `Decompiled/` namespace (DFX8013) |
 
 ## Scripting the same commands
@@ -388,17 +475,12 @@ a different engine is a different module set, and enabling a content plugin adds
 Nothing compares them yet — that needs a live editor to compare against — so rebuilding is a command
 rather than something guessed at.
 
-## Published save-to-build behavior [#incremental-build-on-save]
-
-This heading preserves an older documentation link. The published plugin rebuilds source through
-the normal watcher queue when it is saved; it has no **Incremental Build On Save** setting.
-**Rebuild from Source** drains that same queue immediately. See
-[build on save and up-to-date checks](build-on-save.md) for the available behavior and batch gate.
-
 ## See also
 
 - [Getting started](../getting-started/quickstart.md) — the editor-side workflow in order
 - [Language reference](../language/README.md) — what the exported text means
+- [Incremental builds](incremental-builds.md) — what a save writes, and when it falls back to a full rebuild
+- [pull](pull.md) — the write-back behind *Write Back to Source*: what it may touch and what it refuses
 - [Asset comparison and export](asset-comparison-and-export.md) — comparison failures and export coverage limits
 - [Diagnostics](../diagnostics/README.md) — every `DFXnnnn`, including `DFX8010`–`DFX8018`, the
   gap codes that say what a decompile could not carry

@@ -9,6 +9,7 @@
 #include "UI/DreamFXAssetCommands.h"
 #include "UI/DreamFXEditorGeneration.h"
 #include "Workspace/DreamFXSourceWatcher.h"
+#include "WriteBack/DreamFXPull.h"
 
 #include "Containers/Ticker.h"
 #include "Dom/JsonObject.h"
@@ -158,6 +159,16 @@ namespace UE::DreamFX::Editor
 			FString Message;
 			FString OutputPath;
 			FDiagnosticSink Diagnostics;
+
+			/**
+			 * An action's own result object, written under `PayloadField` beside the common fields.
+			 *
+			 * The common envelope (ok, message, outputPath, diagnostics) is what every client reads; an
+			 * action that has more to say than that puts it in one nested object, so the envelope stays
+			 * the same shape for every action and a client that does not know the action ignores it.
+			 */
+			FString PayloadField;
+			TSharedPtr<FJsonObject> Payload;
 		};
 
 		FActionResult Fail(const FString& Message)
@@ -214,6 +225,143 @@ namespace UE::DreamFX::Editor
 				: Generated.bDrifted ? TEXT("The asset has drifted from its source.")
 				: Generated.bSucceeded ? (bVerifyOnly ? TEXT("Verified.") : TEXT("Built."))
 				: TEXT("Failed.");
+			return Result;
+		}
+
+		/**
+		 * `pull`: asset values back into a .dfs, from the running editor.
+		 *
+		 * Two modes, chosen by whether the request carries `text`:
+		 *
+		 *   * with `text` -- the client's buffer, possibly unsaved and newer than the file. The text is
+		 *     pulled in memory and handed back as `newText`; the source file is NEVER written, because
+		 *     the buffer is the client's and saving it is the client's decision (it may hold edits the
+		 *     file does not, and writing the file under an editor that has it open would fight it).
+		 *     `apply` here only records the baseline: it is the client promising to put `newText` into
+		 *     its buffer.
+		 *   * without -- the same thing the command line does: `apply` rewrites the file, with a backup.
+		 *
+		 * Either way the system is the one in this process (PullBuffer resolves it with no override, and
+		 * loading an asset that is already open returns the object in memory), so a value tuned in the
+		 * Niagara editor and not yet saved is the value read. The baseline is the file the command line
+		 * uses, so the two entry points agree about which values the text has already settled.
+		 */
+		FActionResult RunPull(const TSharedPtr<FJsonObject>& Request, const FString& SourceFile, const FString& AssetPath)
+		{
+			if (SourceFile.IsEmpty())
+			{
+				return Fail(TEXT("pull needs 'sourceFile'."));
+			}
+
+			// Only a system document has values to pull: a .dfe is merged into its host by copy, so there
+			// is no asset of its own to compare it against.
+			EDocumentKind Kind = EDocumentKind::System;
+			if (!FParser::DocumentKindFromExtension(FPaths::GetExtension(SourceFile), Kind) || Kind != EDocumentKind::System)
+			{
+				return Fail(FString::Printf(
+					TEXT("pull reads a .dfs (a system) and the Niagara system it names; '%s' is not one."), *SourceFile));
+			}
+
+			FString Text;
+			const bool bHasText = Request->TryGetStringField(TEXT("text"), Text);
+			if (!bHasText && !FPaths::FileExists(SourceFile))
+			{
+				return Fail(FString::Printf(TEXT("No such source file: '%s'."), *SourceFile));
+			}
+
+			FPullOptions Options;
+			Options.AssetOverride = AssetPath;
+			Request->TryGetBoolField(TEXT("structure"), Options.bStructure);
+			Request->TryGetBoolField(TEXT("apply"), Options.bApply);
+
+			FActionResult Result;
+			FPullResult Pulled;
+			FString NewText;
+			if (bHasText)
+			{
+				// A preview of a buffer has to show the text, whether or not the client applies it.
+				Options.bPreviewText = true;
+				Pulled = FPuller::PullBuffer(SourceFile, Text, Options, Result.Diagnostics, NewText);
+			}
+			else
+			{
+				Pulled = FPuller::PullFile(SourceFile, Options, Result.Diagnostics);
+			}
+
+			Result.bOk = Pulled.bSucceeded;
+			const bool bChanged = bHasText ? (Pulled.bSucceeded && NewText != Text) : Pulled.bWroteFile;
+
+			// One line for a status bar; the counts are in the `pull` object.
+			if (!Pulled.bSucceeded)
+			{
+				Result.Message = TEXT("Pull failed; see the diagnostics.");
+			}
+			else
+			{
+				TArray<FString> Parts;
+				Parts.Add(Pulled.Changed > 0
+					? FString::Printf(TEXT("%d value(s) differ"), Pulled.Changed)
+					: FString(TEXT("No value differs")));
+				if (Pulled.Added > 0 || Pulled.Removed > 0)
+				{
+					Parts.Add(FString::Printf(TEXT("%d statement(s) added, %d removed"), Pulled.Added, Pulled.Removed));
+				}
+				if (Pulled.Withheld > 0)
+				{
+					Parts.Add(FString::Printf(TEXT("%d withheld (text is newer)"), Pulled.Withheld));
+				}
+				if (Pulled.StructureRefused > 0)
+				{
+					Parts.Add(FString::Printf(TEXT("%d structure difference(s) not written"), Pulled.StructureRefused));
+				}
+				if (Pulled.Unaddressable > 0)
+				{
+					Parts.Add(FString::Printf(TEXT("%d stack(s) not addressed"), Pulled.Unaddressable));
+				}
+				Result.Message = FString::Join(Parts, TEXT("; "));
+				if (!Options.bApply)
+				{
+					Result.Message += TEXT(" (preview)");
+				}
+				else if (bHasText)
+				{
+					Result.Message += TEXT(" (baseline recorded)");
+				}
+				else
+				{
+					Result.Message += Pulled.bWroteFile ? TEXT(" (file written)") : TEXT(" (file unchanged)");
+				}
+			}
+
+			const TSharedPtr<FJsonObject> Pull = MakeShared<FJsonObject>();
+			Pull->SetBoolField(TEXT("changed"), bChanged);
+			if (bHasText)
+			{
+				Pull->SetStringField(TEXT("newText"), NewText);
+			}
+			Pull->SetNumberField(TEXT("edits"), Pulled.Edits);
+			Pull->SetNumberField(TEXT("compared"), Pulled.Compared);
+			Pull->SetNumberField(TEXT("changedValues"), Pulled.Changed);
+			Pull->SetNumberField(TEXT("undeclared"), Pulled.Undeclared);
+			Pull->SetNumberField(TEXT("unwritable"), Pulled.Unwritable);
+			Pull->SetNumberField(TEXT("unaddressable"), Pulled.Unaddressable);
+			Pull->SetNumberField(TEXT("withheld"), Pulled.Withheld);
+			Pull->SetNumberField(TEXT("added"), Pulled.Added);
+			Pull->SetNumberField(TEXT("removed"), Pulled.Removed);
+			Pull->SetNumberField(TEXT("structureRefused"), Pulled.StructureRefused);
+			Pull->SetBoolField(TEXT("baselineUsed"), Pulled.bBaselineUsed);
+			Pull->SetBoolField(TEXT("baselineWritten"), Pulled.bBaselineWritten);
+			Pull->SetBoolField(TEXT("wroteFile"), Pulled.bWroteFile);
+			Pull->SetStringField(TEXT("reportPath"), Pulled.ReportPath);
+			TArray<TSharedPtr<FJsonValue>> Report;
+			for (const FString& Line : Pulled.Report)
+			{
+				Report.Add(MakeShared<FJsonValueString>(Line));
+			}
+			Pull->SetArrayField(TEXT("report"), Report);
+
+			Result.PayloadField = TEXT("pull");
+			Result.Payload = Pull;
 			return Result;
 		}
 
@@ -349,10 +497,15 @@ namespace UE::DreamFX::Editor
 					: Fail(FString::Printf(TEXT("Index export failed (%d)."), Code));
 			}
 
+			if (Action == TEXT("pull"))
+			{
+				return RunPull(Request, SourceFile, AssetPath);
+			}
+
 			// Never silent. A client that asked for something this build does not have needs to be
 			// told so, not left waiting for a response that is never coming.
 			return Fail(FString::Printf(
-				TEXT("Unknown action '%s'. This build understands: ping, build, verify, decompile, adopt, openAsset, revealSource, refreshIndex."),
+				TEXT("Unknown action '%s'. This build understands: ping, build, verify, decompile, adopt, openAsset, revealSource, refreshIndex, pull."),
 				*Action));
 		}
 
@@ -368,6 +521,11 @@ namespace UE::DreamFX::Editor
 			Writer->WriteValue(TEXT("message"), Result.Message);
 			if (!Result.OutputPath.IsEmpty()) { Writer->WriteValue(TEXT("outputPath"), Result.OutputPath); }
 			WriteDiagnosticsArray(Writer, Result.Diagnostics);
+			if (Result.Payload.IsValid() && !Result.PayloadField.IsEmpty())
+			{
+				FJsonSerializer::Serialize(MakeShared<FJsonValueObject>(Result.Payload), Result.PayloadField,
+					Writer, /*bCloseWriter=*/false);
+			}
 			Writer->WriteObjectEnd();
 			Writer->Close();
 

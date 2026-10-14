@@ -65,6 +65,12 @@ in the text are reported **one by one, without truncation**. Real assets can hav
 `破空灰尘` has 94. These names appear only in this report, and each represents an input that a
 rebuild must recover from its module default. Truncation would hide that risk.
 
+The editor exposes the same operation through **Write Back to Source** in the asset context menu
+and the Niagara system editor toolbar's DreamFX menu. It is equivalent to `-Apply`, with `-Structure`
+controlled by `bPullStructuralEdits`. Optional write-back on asset save uses `bPullOnAssetSave`
+(default off). After writing a file, the editor notifies the source watcher so it does not rebuild
+the asset it just read. See [editor integration](editor-integration.md#write-back-to-source).
+
 ## 2. What `-Apply` means
 
 - **Without `-Apply`**, read the asset, parse the source and compute each replacement literal.
@@ -250,6 +256,86 @@ Without `-Structure`, addressable differences produce `DFX7113`, describing both
 switch that can apply them. **No bytes in that stack change**, since positional value addressing
 cannot proceed while its structure is unresolved. `DFX7109` remains “cannot establish
 correspondence at all.” `DFX7112` reports each **applied** structural edit.
+
+## 4e. Editor entry point: the bridge `pull` action
+
+Command-line `pull` starts a headless editor and reads assets **from disk**. The VS Code extension
+has a different situation: the editor is already running, values tuned in Niagara may be unsaved,
+and the text buffer may be newer than the file on disk. The bridge's `pull` action
+(`Saved/DreamFX/Bridge/`; see [editor integration](editor-integration.md)) handles this case through
+the same implementation, `FPuller::PullBuffer`.
+
+The request uses the same `protocol` as other actions:
+
+| Field | Meaning |
+|---|---|
+| `action` | `"pull"` |
+| `sourceFile` | The absolute path of this `.dfs`. Only system documents (`.dfs`) are accepted; `.dfe`, `.dfm` and all other extensions return `ok:false` |
+| `text` | Optional. The client's **complete buffer**, which may be unsaved |
+| `assetPath` | Optional. Equivalent to `-Asset`: read values from this asset |
+| `structure` | Optional boolean. Equivalent to `-Structure` |
+| `apply` | Optional boolean. Its meaning is described below |
+
+**Whether `text` is present determines the behavior:**
+
+| | With `text` | Without `text` |
+|---|---|---|
+| Input processed | `text` (the buffer) | `sourceFile` on disk |
+| Source file | **Never written.** The client owns the buffer and decides when to save | As on the command line: only `apply:true` writes, after backing up to `Saved/DreamFX/Pull/` |
+| Result text | Returned in `pull.newText`, including previews, regardless of `apply` | No `newText` |
+| Effect of `apply:true` | **Record the baseline only**: the client promises to put `newText` into its buffer | Write the file and record the baseline |
+| Missing `sourceFile` | Allowed: the buffer may never have been saved | `ok:false`, `No such source file` |
+
+The asset is the object **in the editor process**: `LoadObject` returns the in-memory object for an
+already open asset. Values changed in the Niagara editor but not yet saved are therefore the values
+read here. Command-line `pull` can only see the asset on disk.
+
+**The baseline is shared with the command line.** Its path depends only on `sourceFile`
+(`Saved/DreamFX/Pull/<relative path>.baseline.txt`). Applying on the command line and then previewing
+the same file in the editor uses the same record. Values whose text is newer than the asset are
+still withheld by `DFX7115`; a buffer request cannot silently change them back. A preview without
+`apply`, like a command-line dry run, **does not record** a baseline.
+
+The response keeps the bridge envelope (`protocol`, `requestId`, `ok`, `durationMs`, `message`,
+`diagnostics`). `message` is a one-line summary, for example
+`1 value(s) differ; 1 withheld (text is newer) (preview)`. A nested `pull` object adds the results:
+
+```json
+{
+  "ok": true,
+  "message": "1 value(s) differ (preview)",
+  "diagnostics": [ ... ],
+  "pull": {
+    "changed": true,
+    "newText": "...",
+    "edits": 1,
+    "compared": 3,
+    "changedValues": 1,
+    "undeclared": 5,
+    "unwritable": 0,
+    "unaddressable": 0,
+    "withheld": 0,
+    "added": 0,
+    "removed": 0,
+    "structureRefused": 0,
+    "baselineUsed": false,
+    "baselineWritten": false,
+    "wroteFile": false,
+    "reportPath": "…/Saved/DreamFX/Pull/….report.txt",
+    "report": ["…"]
+  }
+}
+```
+
+- With `text`, `changed` means `newText` differs from the request's `text`; without `text`, it means
+  the file was written. `changedValues` is `FPullResult::Changed`: the number of values that differ
+  from the asset.
+- `newText` is present only when the request includes `text`. On `ok:false`, such as a parse
+  failure, it equals the request's `text` unchanged, `changed` is `false`, and `diagnostics` explains why.
+- A preview actually produces the rewritten text. If that text fails to parse (`DFX7110`), the
+  preview returns `ok:false`. A command-line dry run does not generate rewritten text and does not
+  have this failure mode.
+- The report file (`reportPath`) is written even during a preview, as on the command line.
 
 ## 5. Measurements (2026-10-09; raw logs in `Saved/pull-probe/runs/`)
 

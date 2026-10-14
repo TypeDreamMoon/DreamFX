@@ -519,12 +519,50 @@ namespace UE::DreamFX::Editor
 			return false;
 		};
 
+		// Only interfaces the asset actually holds. A build leaves others behind in memory until the
+		// next garbage collection: the interfaces of module nodes it removed, the cached defaults a
+		// recompile renamed to `Invalidated_*`, and the transient placeholders the stack view model
+		// edits through. None of them is saved and none comes back on reload, so counting them made
+		// one asset describe itself differently before and after a collection or a save. Reachable
+		// from the system through non-transient references is what a save writes, so that is the test.
+		TSet<const UObject*> Reachable;
+		{
+			UPackage* Package = System->GetOutermost();
+			TArray<UObject*> Pending;
+			Pending.Add(System);
+			for (const UObject* Root : Roots)
+			{
+				Pending.Add(const_cast<UObject*>(Root));
+			}
+			while (Pending.Num() > 0)
+			{
+				UObject* Object = Pending.Pop(EAllowShrinking::No);
+				if (Object == nullptr || Reachable.Contains(Object) || Object->HasAnyFlags(RF_Transient))
+				{
+					continue;
+				}
+				Reachable.Add(Object);
+
+				TArray<UObject*> Referenced;
+				FReferenceFinder Finder(Referenced, Package, /*bInRequireDirectOuter=*/false,
+					/*bInShouldIgnoreArchetype=*/true, /*bInSerializeRecursively=*/false, /*bInShouldIgnoreTransient=*/true);
+				Finder.FindReferences(Object);
+				for (UObject* Next : Referenced)
+				{
+					if (Next != nullptr && !Reachable.Contains(Next))
+					{
+						Pending.Add(Next);
+					}
+				}
+			}
+		}
+
 		TArray<UObject*> Inner;
 		GetObjectsWithOuter(System->GetOutermost(), Inner, EGetObjectsFlags::IncludeNestedObjects);
 		for (UObject* Object : Inner)
 		{
 			UNiagaraDataInterface* Interface = Cast<UNiagaraDataInterface>(Object);
-			if (Interface == nullptr || !BelongsToSystem(Interface))
+			if (Interface == nullptr || !BelongsToSystem(Interface) || !Reachable.Contains(Interface))
 			{
 				continue;
 			}

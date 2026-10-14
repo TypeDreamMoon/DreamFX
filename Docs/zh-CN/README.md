@@ -2,6 +2,8 @@
 
 [English](../README.md) · 简体中文
 
+首次迁移清单已另存为 [TRANSLATIONS.md](TRANSLATIONS.md)。本导航页以后可以由英文 README 的中文译文替换；迁移快照仍会保留。最新状态请运行 `python -B Docs/translation-status.py`，或查看文档站仓库的翻译状态 Issue。
+
 从原文档站迁入的文档目前为**待核对的旧译文**，尚未确认与当前英文一致。本次新增译文单独列在下方，待本 PR 审阅。英文仍是技术内容的原文；中文修订由插件仓库中的翻译 PR 审阅，合并后再同步到网站。
 
 网站独有页面和 `docs-sync:notes` 补充保留在网站，不属于这里的翻译。

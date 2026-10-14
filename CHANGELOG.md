@@ -12,7 +12,13 @@
 
 ### 新增
 
+- **增量构建**：每次成功的系统构建把「计划摘要」（`DreamFX.PlanDigest`）写进资产的包元数据，与溯源记录并列。摘要是展平后的构建计划（`.dfe` 合并、继承与模块版本已解析）的哈希树，加上构建给每个模块起的节点名，以及资产构建安全事实的哈希。下一次增量构建拿新计划与它比较，只写差异：改变的参数值被写入；动态输入链形状改变的参数先重置再整组重写；源码不再设置的字面量/枚举参数、曲线等数据接口值的变化，以及模块、顺序、版本、`as` 名、`disabled`、Set Parameters 条目或静态开关变了的堆栈单独清空重建（按完整重建的顺序：先清空、再清理残留常量、再添加）；新增的发射器、父级（`inherits`）或 `SimTarget` 变了的发射器、以及其堆栈与另一个被重建的堆栈共用模块的发射器整个重建，被删的发射器被移除；发射器设置、渲染器、事件处理器、模拟阶段、参数默认值、用户参数和系统设置只在变化时重新应用。结果必须与对同一文本做完整重建得到的资产相同，完整重建仍是对照基准。1230 行的系统（`NS_Magic_Explosion`）改一个值：编辑器内完整重建每次存盘 17 秒（MoonEngine 构建）/ 56 秒（原版预编译 UE 5.8，写入 API 更慢），增量构建约 1 秒（原版 5.8 约 1.7 秒），大部分是 Niagara 对系统的重编译；单独重建两个堆栈约 2.5 秒；原版预编译引擎上增量只覆盖改值和增删发射器，其余结构性改动走完整重建（那个引擎每次编辑都发起编译，被隐藏输入的常量最终取值取决于编译的先后顺序，局部重建与整体重建落不到同一个资产上）；命令行整个 commandlet 约 3 秒，大部分是进程启动和编辑器会缓存的冷模块探测。增量构建请求 Niagara 做普通（非强制）编译，只重编需要重编的脚本；完整重建仍强制编译，构建结束后照旧校验编译状态、发现过期则强制重编。以下情况自动退回完整重建，Output Log 会写明原因（如 `full rebuild (the asset changed since its last build)`）：资产是新的；没有存储的计划（旧版 DreamFX 构建或 Adopt 得到）；存储的计划格式、生成器版本或写入路径（MoonEngine 快速编辑 / 原版引擎）不同；资产的事实与上次构建记录的不符，即在 DreamFX 之外被改过（Niagara 编辑器里手改、源码管理回退）；发射器被重排；数据接口按位置引用发射器或渲染器（自引用 token），而发射器或渲染器集合变了；增量写入本身失败（同一次构建里改跑完整重建并报告它自己的诊断）。详见 `Docs/tools/incremental-builds.md`。
+- 编辑器里增量构建默认只用于源码监视器的存盘触发重建，设置项为 *Project Settings ▸ Plugins ▸ DreamFX ▸ Workspace ▸ Incremental Build on Save*（`bIncrementalBuildOnSave`，默认开）。*Rebuild DFX*、*Rebuild from Source* 和批量积压的「Rebuild them now」始终完整重建，是退路。
+- 命令行增量构建默认关闭（CI 和闸门要的是完整重建的答案）：`dfx.ps1 build <源码> -Incremental` / `UnrealEditor-Cmd <uproject> -run=DreamFX -File=<源码> -Incremental` 开启。commandlet 与监视器每个文件记一行，如 `incremental: 0 emitter(s) and 1 stack(s) rebuilt, 3 input(s) written, 1 reset, nothing to recompile` 或 `full rebuild (<原因>)`；生成器动手前也会记下要改动的范围，如 `incremental build -- Sparks ParticleSpawnScript values(+0 ~1 -0)`。闸门不要用该开关。
+- 规划阶段每个进程复用同一个模块库：构建所需的模块探测在一次编辑器会话 / 一次 commandlet 运行里只做一次，不再每次构建都做。
 - `dfx.ps1 pull <源码>`：把资产中实际存储的值写回文本已声明的字面量（默认试运行，`-Apply` 写入，`-Structure` 写回可唯一定位的结构差异，`-Asset` 指定读取的资产）。只改动值所占的字符，保留注释、换行和文件编码；写前备份到 `Saved/DreamFX/Pull/`（`DFX7106`–`DFX7116`）（[#48](https://github.com/TypeDreamMoon/DreamFX/pull/48)）。
+- **在编辑器里写回源码**：Niagara 系统的右键菜单和 Niagara 编辑器工具栏的 DreamFX 菜单新增 *Write Back to Source*，把编辑器里调过的值（含未保存的）用 `pull` 写回它的 `.dfs`，注释和排版不动；结构差异按设置 *Pull Structural Edits*（`bPullStructuralEdits`，默认关）决定写入还是只报告。*Pull on Asset Save*（`bPullOnAssetSave`，默认关）在每次保存生成的系统资产时自动写回；DreamFX 自己的构建、Adopt、自动保存、Cook 和 PIE 中的保存不会触发。编辑器写回的文件不会被源码监视器当成改动再重建一次（按写入内容的哈希识别，之后再改照常重建）。
+- **Bridge `pull` 动作**：VS Code 扩展可以把当前缓冲区（可以未保存）发给编辑器，拿回写回后的文本自己应用；带文本时编辑器从不写文件，`apply` 只记录基线。命令行与编辑器共用同一份基线。详见 `Docs/tools/pull.md` §4e。
 - 系统 `Settings` 新增 `UseFixedBounds`（`bFixedBounds`）：声明 `FixedBounds` 时默认开启，可显式写 `false` 保留不生效的包围盒；反编译在需要时写出该项，往返保持一致。
 - `System(..., Parent="../Base.dfs")` 源码级系统继承：Settings / Properties / 系统栈 / 发射器按名称合并，父链及其 `.dfe` 参与指纹与监听（[#5](https://github.com/TypeDreamMoon/DreamFX/issues/5)）。
 - `Emitter X inherits "/Game/NE_Parent" version "GUID"` 保留 Niagara 原生父发射器关联，重建保留 handle GUID，支持属性、栈、渲染器、事件组和默认值覆盖（[#5](https://github.com/TypeDreamMoon/DreamFX/issues/5)）。
@@ -21,6 +27,7 @@
 
 ### 修复
 
+- **构建安全事实（`DescribeSystemFacts`，供构建安全闸与 `asset-diff` 使用）只统计从系统经非瞬态引用可达的数据接口**：重建后遗留在内存里的接口（被移除的节点、`Invalidated_*` 缓存默认值、瞬态占位）不再被报告。此前同一份资产在垃圾回收或保存前后会给出不同的描述。
 - **事件处理器的源不再"要么是名字、要么建不出来"**：反编译器解析不出源发射器时写 `` `<unresolved GUID>` ``（复制系统没重映射 handler id 的典型形状——多个系统会共用同一个陈旧 id），无效 id 写 `` `<none>` ``，而写侧只接受发射器名 ⇒ 读侧产出写侧拒绝的 token，这类文本永远重建不了（与 `Docs/tools/write-back-coverage.md` §3.3 同型）。现在两种 token 都按原样回写，资产保持它原有的 id；悬空 id 额外报 `DFX5036` 警告——那类处理器本来就不触发（运行时用 id 的字符串形式建查找名、再按名字取事件集，`NiagaraEmitterInstanceImpl.cpp:418-419`、`:1307`），但这是资产的事实，不该是拒绝构建的理由。新增往返语料 `Tests/Corpus/RoundTrip/EventHandlerUnresolvedSource.dfs`。
 
 - 源码位置按 DFX 根与根内相对路径判断：同一源码树在另一台机器、CI 或测试宿主的检出路径下不再被当成"已移动"而全量重建、重存资产；溯源记录的绝对路径不存在时，Open Source / Rebuild 按根与相对路径找到源码（[#37](https://github.com/TypeDreamMoon/DreamFX/issues/37)）。
@@ -58,6 +65,7 @@
   `SaveArgs.Error = GWarn`,失败回到构建错误。
 - DFX7102 不再把 `SpawnParticlesInGrid` 当作按速率生成:它和 `SpawnBurst` 一样是每循环一次的
   burst(X·Y·Z),上限由循环决定。列表只留 `SpawnRate` / `SpawnPerUnit` / `SpawnPerFrame`。
+- `dfx.ps1` 解析 `EngineAssociation` 时,注册表里没有该引擎就改查 Epic Games Launcher 的安装清单(`LauncherInstalled.dat`),launcher 安装的 `5.8` 不再需要手设 `UE_ENGINE_ROOT`。
 
 ### 文档
 

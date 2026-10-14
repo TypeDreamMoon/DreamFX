@@ -35,6 +35,29 @@ namespace UE::DreamFX::Editor
 		/** Adds the engine's own module directories. Called by the constructor. */
 		void AddDefaultSearchPaths();
 
+		/** The directories every library searches whatever the source says. */
+		static const TArray<FString>& GetDefaultSearchPaths();
+
+		/**
+		 * Which instance this is, counted in creation order and never reused.
+		 *
+		 * An address does not say: a library freed and a new one made straight after commonly share
+		 * one, which is exactly the case a cache that hands libraries out has to be able to tell apart.
+		 */
+		uint32 GetSerial() const { return Serial; }
+
+		/**
+		 * Whether something this library cached has been destroyed since.
+		 *
+		 * The caches hold raw pointers inside their payloads -- the struct or enum behind an input's
+		 * type, the dynamic input or asset a default value points at -- and a library that lives
+		 * across builds can outlive any of them. A library that kept a pointer to a destroyed object
+		 * would hand it to the next build, so the owner of a long-lived one asks first and drops it
+		 * when the answer is yes. The same goes for a probe system that a failed removal left with
+		 * a module in its stack: it would change what every later probe sees.
+		 */
+		bool HasStaleReferences() const;
+
 		/**
 		 * Finds a module script by the name written in source.
 		 *
@@ -247,6 +270,15 @@ namespace UE::DreamFX::Editor
 		 */
 		void BuildIndex();
 
+		/** Remembers every object a cached payload points at, so HasStaleReferences can check them. */
+		void Track(const UObject* Object);
+		void Track(const FNiagaraTypeDefinition& Type);
+		void Track(const FInputValue& Value);
+		void Track(const FModuleSchema& Schema);
+
+		/** Drops SchemaCache entries whose script no longer exists. */
+		void PruneSchemaCache();
+
 		/** Lazily creates the transient system + emitter that GetStackSchema probes against. */
 		bool EnsureProbeSystem(FString& OutError);
 
@@ -263,6 +295,15 @@ namespace UE::DreamFX::Editor
 		 * RendererBindingDefaultsCache is exempt: its getter copies out, so nothing outlives the call.
 		 */
 		TArray<FString> SearchPaths;
+		uint32 Serial = 0;
+
+		/**
+		 * Weak, so that tracking an object never keeps it alive: a module the user deletes must be
+		 * deletable while a library still remembers what its inputs looked like.
+		 */
+		TSet<TWeakObjectPtr<const UObject>> TrackedObjects;
+		bool bProbeCompromised = false;
+
 		bool bIndexBuilt = false;
 		/** Lowercased short name -> every package path that declares it. */
 		TMap<FString, TArray<FString>> PackagesByName;

@@ -1,10 +1,17 @@
 #include "DreamFXNiagaraAdapter.h"
 
+#include "Adapter/DreamFXStackLookup.h"
 #include "DreamFXModule.h"
+#include "Workspace/DreamFXPullOnSave.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "EdGraphSchema_Niagara.h"
+#include "ViewModels/NiagaraSystemViewModel.h"
 #include "ViewModels/Stack/NiagaraParameterHandle.h"
+#include "ViewModels/Stack/NiagaraStackFunctionInput.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
+#include "ViewModels/Stack/NiagaraStackModuleItem.h"
+#include "ViewModels/Stack/NiagaraStackScriptItemGroup.h"
 #include "DataHierarchyViewModelBase.h"
 #include "NiagaraCommon.h"
 #include "NiagaraEditorUtilities.h"
@@ -108,7 +115,11 @@ namespace UE::DreamFX::Editor
 		struct FOpTimer
 		{
 			explicit FOpTimer(const TCHAR* InLabel)
-				: Label(InLabel), Start(FPlatformTime::Seconds()) {}
+				: Label(InLabel), Start(FPlatformTime::Seconds())
+#if CPUPROFILERTRACE_ENABLED
+				, TraceScope(InLabel, true)
+#endif
+			{}
 
 			~FOpTimer()
 			{
@@ -121,6 +132,10 @@ namespace UE::DreamFX::Editor
 
 			FString Label;
 			double Start;
+#if CPUPROFILERTRACE_ENABLED
+			// Same label in an Insights capture, so the engine scopes beneath an operation are attributed to it.
+			FCpuProfilerTrace::FDynamicEventScope TraceScope;
+#endif
 		};
 
 		/** One-shot counters for the build's summary line (plan-v6 P0). */
@@ -1442,6 +1457,11 @@ namespace UE::DreamFX::Editor
 		const FString FileName = FPackageName::LongPackageNameToFilename(
 			Package->GetName(), FPackageName::GetAssetPackageExtension());
 
+		// Every save DreamFX makes of a generated system ends up here -- the build's own, Adopt's, the
+		// bridge's -- so this is the one place to say that it is not the author saving. The event it
+		// raises is synchronous, inside SavePackage, so the scope covers exactly this call.
+		const FPullOnSave::FSelfSaveScope SelfSave;
+
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
 		// FSavePackageArgs::Error defaults to GError, which turns a failed save (a sharing violation when
@@ -2372,6 +2392,35 @@ namespace UE::DreamFX::Editor
 		FEpochGuard Epoch(EmitterAddress.System);
 		FEditContext ContextHolder(EmitterAddress.System);
 		FNiagaraExternalEditContext& Context = ContextHolder.Get();
+
+		// A handle view model keeps a raw pointer into the system's emitter handle array. Removing an
+		// emitter shrinks that array, and the engine's refresh afterwards retires the view model that
+		// was last in line by asking it for its stack view model -- which, on an engine that defers
+		// that stack until it is asked for, builds it then, from a handle that is no longer there:
+		// delegates bound into destroyed memory, and a heap that is corrupt by the time anything else
+		// touches it (long-lived process only; a fresh one tends to get away with it).
+		//
+		// Asking for that stack now, while its handle is alive, makes the later ask a plain lookup. The
+		// context's own view model is not reachable from here, so the ask is a read of the last
+		// emitter's first script, which resolves the stack the same way. A no-op where the stack is
+		// built eagerly, and the read's errors are discarded: it is not the operation being reported.
+		if (EmitterAddress.System != nullptr)
+		{
+			const TArray<FNiagaraEmitterHandle>& Handles = EmitterAddress.System->GetEmitterHandles();
+			const bool bHasEmitter = Handles.ContainsByPredicate([&EmitterAddress](const FNiagaraEmitterHandle& Handle)
+				{
+					return Handle.GetName() == EmitterAddress.EmitterName;
+				});
+			if (bHasEmitter)
+			{
+				FNiagaraExt_ScriptStackTopology Resolved;
+				UNiagaraExternalEditUtilities::GetScriptStackTopology(
+					ToReference(FStackAddress(EmitterAddress.System).WithEmitter(Handles.Last().GetName()).WithScript(TEXT("EmitterSpawnScript"))),
+					Resolved, Context);
+				Context.Errors.Reset();
+			}
+		}
+
 		UNiagaraExternalEditUtilities::RemoveEmitter(ToReference(EmitterAddress), Context);
 		return Drain(Context, OutErrors);
 	}
@@ -2776,6 +2825,442 @@ namespace UE::DreamFX::Editor
 			++GStats.ValueCalls;
 		}
 		return bResult;
+	}
+
+	namespace
+	{
+		/**
+		 * The stacks ResetInputs can reach: the two system stacks and the four main emitter stacks.
+		 *
+		 * Anything else sharing a usage with another stack -- an event handler, a simulation stage --
+		 * would resolve to whichever came first, because the walk keys on usage and not on usage id.
+		 * Refusing them by name is the honest answer; the caller rebuilds that stack instead.
+		 */
+		bool IsMainStackUsage(ENiagaraScriptUsage Usage)
+		{
+			switch (Usage)
+			{
+			case ENiagaraScriptUsage::SystemSpawnScript:
+			case ENiagaraScriptUsage::SystemUpdateScript:
+			case ENiagaraScriptUsage::EmitterSpawnScript:
+			case ENiagaraScriptUsage::EmitterUpdateScript:
+			case ENiagaraScriptUsage::ParticleSpawnScript:
+			case ENiagaraScriptUsage::ParticleUpdateScript:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		/** An input address in the words an error needs: where it points, outermost first. */
+		FString DescribeInputAddress(const FStackAddress& Address)
+		{
+			FString Path = Address.EmitterName.IsNone()
+				? FString(TEXT("system"))
+				: FString::Printf(TEXT("emitter '%s'"), *Address.EmitterName.ToString());
+			Path += FString::Printf(TEXT(" %s module '%s'"), *Address.ScriptName.ToString(),
+				*Address.ModuleName.ToString());
+			for (int32 Index = 0; Index < Address.InputNameStack.Num(); ++Index)
+			{
+				Path += FString::Printf(TEXT("%s'%s'"), Index == 0 ? TEXT(" input ") : TEXT(" > "),
+					*Address.InputNameStack[Index].ToString());
+			}
+			return Path;
+		}
+
+		/**
+		 * Whether a name is an inline edit condition on this module: a bool the stack draws as the
+		 * checkbox beside the input it gates, which has no stack input of its own to reset.
+		 */
+		bool IsInlineEditCondition(UNiagaraStackEntry& ModuleItem, FName InputName)
+		{
+			TArray<UNiagaraStackFunctionInput*> Inputs;
+			StackLookup::CollectInputs(&ModuleItem, Inputs);
+			for (UNiagaraStackFunctionInput* Input : Inputs)
+			{
+				if (!Input->GetShowEditConditionInline())
+				{
+					continue;
+				}
+				const TOptional<FNiagaraVariable> Variable = Input->GetEditConditionVariable();
+				if (Variable.IsSet() && Variable->GetName() == InputName)
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/**
+		 * The stack input an address names, against a live view model.
+		 *
+		 * This is FNiagaraExt_StackItemReference::GetInput written out, because on the stock 5.8 install
+		 * neither it nor the external edit context's view model is exported: name 0 resolves against the
+		 * module's flattened inputs, and each name after it drills into the chain of the dynamic input
+		 * the previous one found.
+		 *
+		 * @param OutModule  the module item the input belongs to, for the caller's containment walk
+		 * @param OutWhy     the reason, when this returns null
+		 */
+		UNiagaraStackFunctionInput* ResolveStackInput(FNiagaraSystemViewModel& ViewModel,
+			const FStackAddress& Address, UNiagaraStackModuleItem*& OutModule, FString& OutWhy)
+		{
+			OutModule = nullptr;
+			if (Address.ScriptName.IsNone() || Address.ModuleName.IsNone() || Address.InputNameStack.IsEmpty())
+			{
+				OutWhy = TEXT("the address needs a script name, a module name and at least one input name");
+				return nullptr;
+			}
+
+			ENiagaraScriptUsage Usage;
+			if (!StackLookup::ScriptUsageFromName(Address.ScriptName, Usage))
+			{
+				OutWhy = FString::Printf(TEXT("'%s' is not a script usage"), *Address.ScriptName.ToString());
+				return nullptr;
+			}
+			if (!IsMainStackUsage(Usage))
+			{
+				OutWhy = FString::Printf(
+					TEXT("not supported for this stack: '%s' is not one of the two system stacks or the four main emitter stacks"),
+					*Address.ScriptName.ToString());
+				return nullptr;
+			}
+
+			if (StackLookup::GetStackRoot(ViewModel, Address.EmitterName) == nullptr)
+			{
+				OutWhy = Address.EmitterName.IsNone()
+					? FString(TEXT("the system has no stack to search"))
+					: FString::Printf(TEXT("emitter '%s' was not found"), *Address.EmitterName.ToString());
+				return nullptr;
+			}
+
+			UNiagaraStackScriptItemGroup* Group = StackLookup::FindScriptGroup(ViewModel, Address.EmitterName, Usage);
+			if (Group == nullptr)
+			{
+				OutWhy = FString::Printf(TEXT("%s has no %s stack"),
+					Address.EmitterName.IsNone() ? TEXT("the system") : *FString::Printf(TEXT("emitter '%s'"), *Address.EmitterName.ToString()),
+					*Address.ScriptName.ToString());
+				return nullptr;
+			}
+
+			UNiagaraStackModuleItem* Module = StackLookup::FindModuleItem(*Group, Address.ModuleName);
+			if (Module == nullptr)
+			{
+				OutWhy = FString::Printf(TEXT("module '%s' was not found in that stack"), *Address.ModuleName.ToString());
+				return nullptr;
+			}
+
+			UNiagaraStackEntry* SearchRoot = Module;
+			UNiagaraStackFunctionInput* Found = nullptr;
+			for (int32 Index = 0; Index < Address.InputNameStack.Num(); ++Index)
+			{
+				if (Index > 0 && Found->GetValueMode() != UNiagaraStackFunctionInput::EValueMode::Dynamic)
+				{
+					OutWhy = FString::Printf(TEXT("input '%s' is not a dynamic input, so it exposes no chain to reach '%s' through"),
+						*Address.InputNameStack[Index - 1].ToString(), *Address.InputNameStack[Index].ToString());
+					return nullptr;
+				}
+
+				Found = StackLookup::FindInputByName(SearchRoot, Address.InputNameStack[Index]);
+				if (Found == nullptr)
+				{
+					OutWhy = Index == 0 && Address.InputNameStack.Num() == 1
+						&& IsInlineEditCondition(*Module, Address.InputNameStack[0])
+						? FString::Printf(TEXT("'%s' is an inline edit condition, which has no stack input of its own to reset"),
+							*Address.InputNameStack[0].ToString())
+						: FString::Printf(TEXT("input '%s' was not found"), *Address.InputNameStack[Index].ToString());
+					return nullptr;
+				}
+				SearchRoot = Found;
+			}
+
+			OutModule = Module;
+			return Found;
+		}
+
+		/**
+		 * The names of the module inputs hanging off a static switch.
+		 *
+		 * Read before the switch is reset, while they are the inputs the current branch shows. Inputs of a
+		 * dynamic input inside the branch are left out: they belong to that dynamic input's node and go with it.
+		 */
+		void CollectRevealedInputNames(UNiagaraStackFunctionInput& Switch, UNiagaraStackModuleItem& Module,
+			TArray<FName>& OutNames)
+		{
+			TArray<UNiagaraStackFunctionInput*> Revealed;
+			StackLookup::CollectDescendants<UNiagaraStackFunctionInput>(&Switch, Revealed, /*bStopAtT=*/false);
+			for (const UNiagaraStackFunctionInput* Child : Revealed)
+			{
+				if (&Child->GetInputFunctionCallNode() == &Module.GetModuleNode())
+				{
+					OutNames.AddUnique(Child->GetInputParameterHandle().GetName());
+				}
+			}
+		}
+
+		/**
+		 * Removes the rapid iteration constants of captured inputs the module no longer shows.
+		 *
+		 * Resetting a static switch hides the inputs it had revealed -- the entries stay in the stack, flagged
+		 * hidden -- and the engine leaves their constants in the scripts; the reset arrow does the same. A
+		 * freshly added module never materialised constants for inputs its switches hide, so an incremental
+		 * build that kept them would differ from a full one in state nothing reads.
+		 *
+		 * The engine's own stale-constant cleanup is not exported, so this matches the constants by the name
+		 * they carry, `Constants.<emitter>.<module>.<input>` (the system scripts leave the emitter out). A
+		 * constant is removed only when both its module and its input name match, which keeps a change to
+		 * that spelling from deleting anything it should not: the worst it can do is leave a constant behind.
+		 * It looks in every script of the owner rather than working out which one a usage maps to.
+		 */
+		void DropVanishedConstants(UNiagaraSystem& System, FName EmitterName, UNiagaraStackModuleItem& Module,
+			TArrayView<const FName> Captured)
+		{
+			TArray<UNiagaraStackFunctionInput*> Remaining;
+			StackLookup::CollectInputs(&Module, Remaining);
+			TSet<FName> Vanished(Captured);
+			for (const UNiagaraStackFunctionInput* Input : Remaining)
+			{
+				if (!Input->GetIsHidden())
+				{
+					Vanished.Remove(Input->GetInputParameterHandle().GetName());
+				}
+			}
+			if (Vanished.IsEmpty())
+			{
+				return;
+			}
+
+			TArray<UNiagaraScript*> Scripts;
+			if (EmitterName.IsNone())
+			{
+				Scripts.Add(System.GetSystemSpawnScript());
+				Scripts.Add(System.GetSystemUpdateScript());
+			}
+			else
+			{
+				for (const FNiagaraEmitterHandle& Handle : System.GetEmitterHandles())
+				{
+					if (Handle.GetName() == EmitterName && Handle.GetEmitterData() != nullptr)
+					{
+						Handle.GetEmitterData()->GetScripts(Scripts, /*bCompilableOnly=*/false);
+					}
+				}
+			}
+
+			const FString FunctionName = Module.GetModuleNode().GetFunctionName();
+			const int32 ModuleSegment = EmitterName.IsNone() ? 1 : 2;
+			for (UNiagaraScript* Script : Scripts)
+			{
+				if (Script == nullptr)
+				{
+					continue;
+				}
+
+				TArray<FNiagaraVariableBase> Stale;
+				for (const FNiagaraVariableWithOffset& Constant : Script->RapidIterationParameters.ReadParameterVariables())
+				{
+					TArray<FString> Segments;
+					Constant.GetName().ToString().ParseIntoArray(Segments, TEXT("."));
+					if (Segments.Num() > ModuleSegment + 1 && Segments[0] == TEXT("Constants") && Segments[ModuleSegment] == FunctionName)
+					{
+						const FString InputName = FString::Join(
+							TArrayView<FString>(Segments).Slice(ModuleSegment + 1, Segments.Num() - ModuleSegment - 1), TEXT("."));
+						if (Vanished.Contains(FName(*InputName)))
+						{
+							Stale.Add(Constant);
+						}
+					}
+				}
+
+				for (const FNiagaraVariableBase& Constant : Stale)
+				{
+					Script->Modify();
+					Script->RapidIterationParameters.RemoveParameter(Constant);
+				}
+			}
+		}
+
+		/**
+		 * How deep every input under an entry sits, counting the inputs that contain it.
+		 *
+		 * Unlike the flat lookup this walks through dynamic inputs too, so the chain inputs of a dynamic
+		 * input come out deeper than the dynamic input, and the inputs a static switch reveals deeper than
+		 * the switch. That is the order a reset batch has to run in.
+		 */
+		void MapInputDepths(UNiagaraStackEntry& Entry, int32 Depth, TMap<const UNiagaraStackFunctionInput*, int32>& OutDepths)
+		{
+			TArray<UNiagaraStackEntry*> Children;
+			Entry.GetUnfilteredChildren(Children);
+			for (UNiagaraStackEntry* Child : Children)
+			{
+				if (const UNiagaraStackFunctionInput* Input = Cast<UNiagaraStackFunctionInput>(Child))
+				{
+					OutDepths.Add(Input, Depth + 1);
+					MapInputDepths(*Child, Depth + 1, OutDepths);
+				}
+				else
+				{
+					MapInputDepths(*Child, Depth, OutDepths);
+				}
+			}
+		}
+	}
+
+	bool FNiagaraAdapter::ResetInputs(UNiagaraSystem* System, TArrayView<const FStackAddress> InputAddresses,
+		TArray<FString>& OutErrors)
+	{
+		FOpTimer OpTimer(TEXT("ResetInputs"));
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot reset inputs on a null system."));
+			return false;
+		}
+		if (InputAddresses.IsEmpty())
+		{
+			return true;
+		}
+
+		// A reset is a write, and the read scope's view model would be left describing the old graph.
+		// Building a second one beside it is the very thing the scopes exist to avoid.
+		if (GReadScopedSystems.Contains(System))
+		{
+			OutErrors.Add(TEXT("Cannot reset inputs while a read scope is open on the system: a reset writes."));
+			return false;
+		}
+
+		bool bAddressesBelong = true;
+		for (const FStackAddress& Address : InputAddresses)
+		{
+			if (Address.System != nullptr && Address.System != System)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Cannot reset an input of module '%s': the address belongs to a different system."),
+					*Address.ModuleName.ToString()));
+				bAddressesBelong = false;
+			}
+		}
+		if (!bAddressesBelong)
+		{
+			return false;
+		}
+
+		// The reset changes the graph behind whatever context a write scope is keeping, so the epoch ends
+		// when this call does. The context goes now as well, before the view model below exists: the
+		// engine tolerates two view models on one system, but the scope's would be left holding a stack
+		// that this call is about to change underneath it.
+		FEpochGuard Epoch(System);
+		DropSharedContext(System);
+
+		++GStats.ContextsBuilt;
+		TSharedPtr<FNiagaraSystemViewModel> ViewModel;
+		{
+			FOpTimer Timer(TEXT("~context build (view model)"));
+			ViewModel = StackLookup::CreateSystemViewModel(*System);
+		}
+
+		// Resolve everything first. A bad address then costs nothing but its error, and the resolution
+		// is also where the containment depth comes from: one walk per module, however many of its
+		// inputs are named.
+		struct FPlannedReset
+		{
+			int32 AddressIndex = INDEX_NONE;
+			int32 Depth = 0;
+		};
+		TArray<FPlannedReset> Plan;
+		TMap<const UNiagaraStackModuleItem*, TMap<const UNiagaraStackFunctionInput*, int32>> DepthsByModule;
+		bool bAllResolved = true;
+		for (int32 AddressIndex = 0; AddressIndex < InputAddresses.Num(); ++AddressIndex)
+		{
+			const FStackAddress& Address = InputAddresses[AddressIndex];
+			UNiagaraStackModuleItem* Module = nullptr;
+			FString Why;
+			const UNiagaraStackFunctionInput* Input = ResolveStackInput(*ViewModel, Address, Module, Why);
+			if (Input == nullptr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Cannot reset %s: %s."), *DescribeInputAddress(Address), *Why));
+				bAllResolved = false;
+				continue;
+			}
+
+			TMap<const UNiagaraStackFunctionInput*, int32>* Depths = DepthsByModule.Find(Module);
+			if (Depths == nullptr)
+			{
+				Depths = &DepthsByModule.Add(Module);
+				MapInputDepths(*Module, 0, *Depths);
+			}
+			Plan.Add({ AddressIndex, Depths->FindRef(Input) });
+		}
+		if (!bAllResolved)
+		{
+			return false;
+		}
+
+		Plan.StableSort([](const FPlannedReset& Left, const FPlannedReset& Right) { return Left.Depth > Right.Depth; });
+
+		bool bSucceeded = true;
+		for (const FPlannedReset& Step : Plan)
+		{
+			const FStackAddress& Address = InputAddresses[Step.AddressIndex];
+
+			// Again, against the stack as the resets so far left it: an entry one of them removed has to
+			// come back as an error here rather than as a pointer into a refreshed hierarchy.
+			UNiagaraStackModuleItem* Module = nullptr;
+			FString Why;
+			UNiagaraStackFunctionInput* Input = ResolveStackInput(*ViewModel, Address, Module, Why);
+			if (Input == nullptr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Cannot reset %s: an earlier reset in this batch changed the stack and it no longer resolves (%s)."),
+					*DescribeInputAddress(Address), *Why));
+				bSucceeded = false;
+				continue;
+			}
+
+			// The engine's CanReset compares an object-asset input's nodes with == where every other
+			// mode compares with !=, in 5.6 and 5.8 alike, so the answer is inverted and neither yes nor
+			// no says whether the value is overridden.
+			if (Input->GetValueMode() == UNiagaraStackFunctionInput::EValueMode::ObjectAsset)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Cannot reset %s: it holds an object asset, and the engine's CanReset cannot tell whether one is overridden."),
+					*DescribeInputAddress(Address)));
+				bSucceeded = false;
+				continue;
+			}
+
+			if (!Input->CanReset())
+			{
+				// Already at its default, or a module that declares none. The engine does not tell the two
+				// apart and leaves such an input alone itself.
+				continue;
+			}
+
+			// A switch hides what it had revealed, so those inputs are noted while they are still shown.
+			TArray<FName> RevealedNames;
+			const bool bIsSwitch = Input->IsStaticParameter();
+			if (bIsSwitch)
+			{
+				CollectRevealedInputNames(*Input, *Module, RevealedNames);
+			}
+
+			Input->Reset();
+
+			if (bIsSwitch)
+			{
+				// The engine refreshes what a switch gates on a tick that a commandlet never runs, so the
+				// module is refreshed here: the entries the switch gated are hidden or gone, and the later
+				// resolutions in this batch see the shape the module now has.
+				Module->RefreshChildren();
+				DropVanishedConstants(*System, Address.EmitterName, *Module, RevealedNames);
+			}
+
+			// Read back through a fresh resolution: a refresh may have replaced the entry itself.
+			Input = ResolveStackInput(*ViewModel, Address, Module, Why);
+			if (Input == nullptr || Input->CanReset())
+			{
+				OutErrors.Add(FString::Printf(TEXT("Cannot reset %s: it %s after the reset."), *DescribeInputAddress(Address),
+					Input == nullptr ? TEXT("could not be read back") : TEXT("still differs from its default")));
+				bSucceeded = false;
+			}
+		}
+		return bSucceeded;
 	}
 
 	bool FNiagaraAdapter::SetRendererProperties(const FStackAddress& RendererAddress, const FString& PropertiesJson,
