@@ -53,6 +53,18 @@
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
+#if DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT
+#include "Misc/DefinePrivateMemberPtr.h"
+
+// The view model an external edit context works through. FNiagaraExternalEditContext::GetSystemViewModel
+// is not exported, and refreshing one module after a static switch write needs exactly this model --
+// not "a" view model of the system: FNiagaraEditorModule::GetExistingViewModelForSystem answers with the
+// first one registered, which is the Niagara editor's own whenever the author has the system open.
+// The engine's own helper for this, so a renamed or retyped member fails the build rather than a run.
+UE_DEFINE_PRIVATE_MEMBER_PTR(TSharedPtr<FNiagaraSystemViewModel>, GDreamFXEditContextViewModel,
+	FNiagaraExternalEditContext, SystemViewModel);
+#endif
+
 namespace UE::DreamFX::Editor
 {
 	namespace
@@ -156,6 +168,9 @@ namespace UE::DreamFX::Editor
 
 			/** Of the structural calls, the ones that kept the context because the engine refreshed. */
 			int32 RefreshedInPlaceCalls = 0;
+
+			/** Of the static switch writes, the ones that refreshed their module instead of the context. */
+			int32 StaticSwitchRefreshedInPlace = 0;
 
 			/** Compiles an engine path launched inside a suppression scope anyway, and that were aborted. */
 			int32 StrayCompilesAborted = 0;
@@ -1404,16 +1419,43 @@ namespace UE::DreamFX::Editor
 		DropSharedContext(System);
 	}
 
-	void FNiagaraAdapter::OnStaticSwitchWritten(UNiagaraSystem* System)
+	void FNiagaraAdapter::OnStaticSwitchWritten(const FStackAddress& ModuleAddress)
 	{
-		// Unconditional since switches moved to the pin route. The engine's external write path used
-		// to refresh the owning module item synchronously, which let the epoch survive a switch; a pin
-		// default written straight onto the node has no such courtesy -- nothing tells the live edit
-		// context that a whole set of sibling inputs just came into existence. Every later call would
-		// be reading a view model built before the switch.
+		// A pin default written straight onto the module node tells the live edit context nothing --
+		// not that a whole set of sibling inputs just came into existence, nor that others went. The
+		// engine's own external write path answered that by refreshing the owning module item, and
+		// that is what happens here: the module's stack entry is rebuilt from the graph, so later calls
+		// in the epoch read the inputs the switch now reveals.
 		//
-		// So the previous in-place path, and the -RebuildOnSwitch flag that A/B'd it, are both gone.
-		// One rebuild per switch write is the price of not needing the engine patch at all.
+		// The alternative is dropping the whole context, and that was what this did for as long as
+		// switches went by pin: one view model per switch write, 383 of them on NS_Magic_Explosion, each
+		// rebuilding every emitter's stacks. Anything that cannot be resolved -- no shared context, a
+		// stack the lookup does not address (event handlers, simulation stages), an engine without
+		// the external edit API -- still drops it, and -RebuildOnSwitch makes that unconditional.
+		UNiagaraSystem* System = ModuleAddress.System;
+#if DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT
+		if (!GRebuildContextOnSwitch && System != nullptr)
+		{
+			const TSharedPtr<FNiagaraExternalEditContext>* Shared = GSharedContexts.Find(System);
+			FNiagaraExternalEditContext* Context = Shared != nullptr ? Shared->Get() : nullptr;
+			const TSharedPtr<FNiagaraSystemViewModel> ViewModel = Context != nullptr
+				? Context->*GDreamFXEditContextViewModel : nullptr;
+
+			ENiagaraScriptUsage Usage;
+			UNiagaraStackScriptItemGroup* Group = ViewModel.IsValid()
+				&& StackLookup::ScriptUsageFromName(ModuleAddress.ScriptName, Usage)
+				? StackLookup::FindScriptGroup(*ViewModel, ModuleAddress.EmitterName, Usage) : nullptr;
+			if (UNiagaraStackModuleItem* Module = Group != nullptr
+				? StackLookup::FindModuleItem(*Group, ModuleAddress.ModuleName) : nullptr)
+			{
+				FOpTimer Timer(TEXT("~module refresh (static switch)"));
+				++GStats.StaticSwitchCalls;
+				++GStats.StaticSwitchRefreshedInPlace;
+				Module->RefreshChildren();
+				return;
+			}
+		}
+#endif
 		EndStructuralEpoch(System);
 	}
 
@@ -1510,10 +1552,10 @@ namespace UE::DreamFX::Editor
 	FString FNiagaraAdapter::ReportStats()
 	{
 		return FString::Printf(
-			TEXT("adapter: %d view model(s) built, %d structural (%d static switch, %d refreshed in place) ")
+			TEXT("adapter: %d view model(s) built, %d structural (%d static switch, %d of them by module refresh, %d refreshed in place) ")
 			TEXT("+ %d value call(s), %d epoch boundary(ies), %d stray compile(s) aborted"),
 			GStats.ContextsBuilt, GStats.StructuralCalls, GStats.StaticSwitchCalls,
-			GStats.RefreshedInPlaceCalls, GStats.ValueCalls, GStats.EpochBoundaries,
+			GStats.StaticSwitchRefreshedInPlace, GStats.RefreshedInPlaceCalls, GStats.ValueCalls, GStats.EpochBoundaries,
 			GStats.StrayCompilesAborted);
 	}
 
