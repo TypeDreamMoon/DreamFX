@@ -4,13 +4,17 @@ Saving source in the editor uses incremental builds by default. This page preser
 website address `plugin/tools/incremental-builds` and its section links. The complete published
 reference is [Incremental builds](incremental-builds.md).
 
-## Published build scope [#incremental-builds]
+<a id="incremental-builds"></a>
+
+## Published build scope
 
 A save compares the new build plan with the digest stored by the previous successful build and
 writes only the difference. If the stored state cannot be trusted, it falls back to a full rebuild.
 Explicit editor rebuild commands and command-line builds without `-Incremental` use full builds.
 
-## Build sequence [#how-it-works]
+<a id="how-it-works"></a>
+
+## Build sequence
 
 The generator resolves the source and its dependencies, compares the resulting plan with the
 stored digest, applies the required writes, verifies Niagara compilation, stamps provenance and
@@ -25,7 +29,9 @@ consumers. Save-triggered system rebuilds use incremental generation by default.
 Batches above **Bulk Rebuild Threshold** (default **8**) wait for confirmation; see the
 [bulk-batch gate](editor-integration.md#the-bulk-batch).
 
-## Available controls [#switching-it-on-and-off]
+<a id="switching-it-on-and-off"></a>
+
+## Available controls
 
 **Project Settings → Plugins → DreamFX → Workspace → Incremental Build on Save**
 (`bIncrementalBuildOnSave`, default on) controls save-triggered incremental builds. Command-line
@@ -51,33 +57,43 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 verify DFX/Effects/NS_Hello.dfs
 Close the editor before package-writing headless commands. See
 [provenance and verification](../generation/provenance.md) for source-location rules.
 
-## Source changes and build cost [#what-each-kind-of-edit-costs]
+<a id="what-each-kind-of-edit-costs"></a>
+
+## Source changes and build cost
 
 A value edit can write only the changed input. Structural changes can rebuild a stack, emitter or
 the whole system; the engine's write path also affects which partial edits are supported. See the
 [per-edit table](incremental-builds.md#what-each-kind-of-edit-costs) for the published measurements
 and scope.
 
-### Niagara compilation [#compile]
+<a id="compile"></a>
+
+### Niagara compilation
 
 Incremental builds request an ordinary, non-forced Niagara compile; full rebuilds force compilation.
 Both verify the resulting executable data and force a recompile if it is stale. See
 [headless compilation](headless-compilation.md).
 
-### Module schema probes [#module-probes-are-made-once]
+<a id="module-probes-are-made-once"></a>
+
+### Module schema probes
 
 Planning reuses one module library per process, so required probes run once per editor session or
 commandlet run. The first build can be slower. Use `dfx.ps1 schema <Module>` to inspect real inputs;
 see [module probes](incremental-builds.md#module-probes-are-made-once).
 
-## Full rebuild behavior [#when-it-falls-back-to-a-full-rebuild]
+<a id="when-it-falls-back-to-a-full-rebuild"></a>
+
+## Full rebuild behavior
 
 New assets, missing or incompatible digests, externally changed asset facts and unsupported
 structural changes trigger a full rebuild. A failed incremental write also falls back during the
 same build. The Output Log records the reason; see the complete
 [fallback table](incremental-builds.md#when-it-falls-back-to-a-full-rebuild).
 
-## Interpreting build output [#reading-the-log]
+<a id="reading-the-log"></a>
+
+## Interpreting build output
 
 The watcher and commandlet report incremental write counts or `full rebuild (<reason>)` per file.
 `up to date` denotes a provenance skip. See the [log examples](incremental-builds.md#reading-the-log).
@@ -94,21 +110,27 @@ eligible tuned asset values into source before rebuilding.
 CI gates should use the full-build path: lint, build, verify and corpus. Keep `-Incremental` out of
 gates. See the [command line](headless-compilation.md) and [CI sequence](ci.md).
 
-### What the checks establish [#the-equivalence-guarantee]
+<a id="the-equivalence-guarantee"></a>
+
+### What the checks establish
 
 Incremental generation must produce the same asset as a full rebuild of the same text. The published
 [incremental equivalence tests](incremental-builds.md#the-equivalence-guarantee) compare asset facts,
 node names, inputs and decompiled text. Runtime visual equivalence is a separate check; see
 [round trip and equivalence](../generation/roundtrip.md).
 
-## Diagnosing a rebuild [#troubleshooting]
+<a id="troubleshooting"></a>
+
+## Diagnosing a rebuild
 
 Read the `full rebuild (<reason>)` line for unexpected fallback. An asset edited outside DreamFX
 requires a full rebuild before its next trusted incremental build. Use **Rebuild from Source** to
 obtain the full-build result if an asset looks wrong; keep both results if they disagree. See
 [troubleshooting](incremental-builds.md#troubleshooting).
 
-## Related references [#see-also]
+<a id="see-also"></a>
+
+## Related references
 
 - [Incremental builds](incremental-builds.md).
 - [Editor integration](editor-integration.md).
