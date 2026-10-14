@@ -714,6 +714,13 @@ namespace UE::DreamFX::Editor
 		// adapter call leaves, and a build probes once per distinct configuration.
 		FNiagaraAdapter::CollectIfHeavy();
 
+		// One edit context for the whole probe, from the add to the removal. Outside a scope every
+		// adapter call built a probe-system view model of its own -- the add, the version, each
+		// switch, the removal -- 237 of them before NS_Magic_Explosion could be planned. Each switch
+		// write refreshes the module it landed on (below), which is what lets the reads that follow
+		// share the context; a version change still ends the epoch, as it does in a build.
+		FNiagaraAdapter::FWriteScope ProbeScope(ProbeSystem);
+
 		const FName ScriptName = FNiagaraAdapter::ScriptNameForStack(Stack);
 		FStackAddress Address(ProbeSystem);
 		if (!IsSystemScopeStack(Stack))
@@ -770,7 +777,12 @@ namespace UE::DreamFX::Editor
 			// 55/0) -- while the same systems built green single-file, so the damage needs a
 			// long-lived probe process and did not reproduce under isolation. The probe keeps the
 			// rail whose reveal behavior every schema in the tree was measured under.
-			if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Switch.Key), Switch.Value, Errors))
+			const bool bSwitchWritten = FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Switch.Key), Switch.Value, Errors);
+
+			// The inputs it reveals or hides are re-derived before anything reads the module, as the
+			// generator does after its own switch writes.
+			FNiagaraAdapter::OnStaticSwitchWritten(ModuleAddress);
+			if (!bSwitchWritten)
 			{
 				UE_LOG(LogDreamFX, Warning,
 					TEXT("Could not set static switch '%s' while probing module '%s' in the %s stack: %s. The inputs it reveals will not be visible to the type check."),
@@ -785,10 +797,8 @@ namespace UE::DreamFX::Editor
 		{
 			// Everything from here to the closing brace only reads, and the per-input call below made
 			// this the most expensive loop in a build: one whole probe-system view model per input, on
-			// every module of every source. Sharing one across the burst is what FReadScope is for, and
-			// the switch writes above are deliberately outside it -- they change what these reads
-			// report, which is the one thing a shared view model cannot survive.
-			FNiagaraAdapter::FReadScope ReadScope(ProbeSystem);
+			// every module of every source. The probe's write scope shares one across the burst; the
+			// switch writes above refreshed the module, so it describes what they revealed.
 
 			Errors.Reset();
 			bReadTopology = FNiagaraAdapter::GetModuleInfo(ModuleAddress, Info, Errors);
@@ -875,6 +885,9 @@ namespace UE::DreamFX::Editor
 		// zero usage id, which the traversal cache reads as an empty input list.
 		FNiagaraAdapter::FTraversalCacheOffScope TraversalCacheOff;
 
+		// One edit context for the whole probe, as in the schema probe above.
+		FNiagaraAdapter::FWriteScope ProbeScope(ProbeSystem);
+
 		FStackAddress Address(ProbeSystem);
 		if (!IsSystemScopeStack(Stack))
 		{
@@ -913,7 +926,9 @@ namespace UE::DreamFX::Editor
 		for (const TPair<FName, FInputValue>& Switch : SwitchValues)
 		{
 			Errors.Reset();
-			if (!FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Switch.Key), Switch.Value, Errors))
+			const bool bSwitchWritten = FNiagaraAdapter::SetInput(ModuleAddress.WithInput(Switch.Key), Switch.Value, Errors);
+			FNiagaraAdapter::OnStaticSwitchWritten(ModuleAddress);
+			if (!bSwitchWritten)
 			{
 				UE_LOG(LogDreamFX, Verbose,
 					TEXT("Could not set static switch '%s' while probing the defaults of '%s': %s"),
