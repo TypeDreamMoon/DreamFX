@@ -2580,7 +2580,7 @@ namespace UE::DreamFX::Editor
 			{
 				if (bWroteSwitch || Input.bIsStaticSwitch)
 				{
-					FNiagaraAdapter::OnStaticSwitchWritten(InputAddress.System);
+					FNiagaraAdapter::OnStaticSwitchWritten(InputAddress);
 				}
 			};
 

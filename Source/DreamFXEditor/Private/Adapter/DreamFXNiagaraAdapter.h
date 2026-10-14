@@ -489,12 +489,11 @@ namespace UE::DreamFX::Editor
 		static void EndStructuralEpoch(UNiagaraSystem* System);
 
 		/**
-		 * A static switch landed. The engine's external write path refreshes the owning module item
-		 * synchronously (MoonEngine), so by default the shared context survives and only the counters
-		 * move; with SetRebuildContextOnSwitch the pre-refresh behaviour -- drop the context -- is
-		 * restored for A/B and as the escape hatch.
+		 * A static switch landed on the module at ModuleAddress. Its stack entry in the shared context
+		 * is refreshed so the context survives; where that entry cannot be resolved the context is
+		 * dropped, and with SetRebuildContextOnSwitch it always is -- the A/B and the escape hatch.
 		 */
-		static void OnStaticSwitchWritten(UNiagaraSystem* System);
+		static void OnStaticSwitchWritten(const FStackAddress& ModuleAddress);
 
 		/**
 		 * Turns the write scope off, so every write builds its own context as it did before P1.
@@ -529,6 +528,13 @@ namespace UE::DreamFX::Editor
 		 */
 		static void SetBatchAddRefresh(bool bEnabled);
 		static bool IsBatchAddRefreshEnabled();
+
+		/**
+		 * Off, emptying a stack on the stock engine removes its modules one at a time again, each with
+		 * the engine's group refresh, instead of cutting the stack graph once. One-binary A/B and the
+		 * escape hatch. `dfx.ps1 build -ClearPerModule` sets it off.
+		 */
+		static void SetClearStackByGraph(bool bEnabled);
 
 		/** Zeroes the counters reported by ReportStats. */
 		static void ResetStats();

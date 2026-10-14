@@ -25,6 +25,7 @@
 #include "NiagaraExternalSystemEditorUtilities.h"
 #include "NiagaraGraph.h"
 #include "NiagaraNodeFunctionCall.h"
+#include "NiagaraNodeInput.h"
 #include "NiagaraNodeOutput.h"
 #include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
@@ -44,6 +45,7 @@
 #include "Misc/EngineVersionComparison.h"
 #include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
+#include "ScopedTransaction.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/Package.h"
@@ -52,6 +54,18 @@
 #include "UObject/UObjectArray.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
+
+#if DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT
+#include "Misc/DefinePrivateMemberPtr.h"
+
+// The view model an external edit context works through. FNiagaraExternalEditContext::GetSystemViewModel
+// is not exported, and refreshing one module after a static switch write needs exactly this model --
+// not "a" view model of the system: FNiagaraEditorModule::GetExistingViewModelForSystem answers with the
+// first one registered, which is the Niagara editor's own whenever the author has the system open.
+// The engine's own helper for this, so a renamed or retyped member fails the build rather than a run.
+UE_DEFINE_PRIVATE_MEMBER_PTR(TSharedPtr<FNiagaraSystemViewModel>, GDreamFXEditContextViewModel,
+	FNiagaraExternalEditContext, SystemViewModel);
+#endif
 
 namespace UE::DreamFX::Editor
 {
@@ -100,6 +114,9 @@ namespace UE::DreamFX::Editor
 		/** False restores the per-add engine stack refresh instead of one batch refresh per stack. */
 		bool GBatchAddRefresh = true;
 
+		/** False restores the per-module stack clear on the stock engine instead of one graph cut. */
+		bool GClearStackByGraph = true;
+
 		/**
 		 * Wall time and call count per operation, for `-LogCmds="LogDreamFX Verbose"`.
 		 *
@@ -111,6 +128,9 @@ namespace UE::DreamFX::Editor
 		TMap<FString, double> GOpSeconds;
 		TMap<FString, int32> GOpCounts;
 
+		/** The operation most recently started, for saying what a stray compile followed. */
+		FString GLastOpLabel = TEXT("(none)");
+
 		/** Charges the enclosing scope to one operation label. */
 		struct FOpTimer
 		{
@@ -119,7 +139,9 @@ namespace UE::DreamFX::Editor
 #if CPUPROFILERTRACE_ENABLED
 				, TraceScope(InLabel, true)
 #endif
-			{}
+			{
+				GLastOpLabel = InLabel;
+			}
 
 			~FOpTimer()
 			{
@@ -151,8 +173,72 @@ namespace UE::DreamFX::Editor
 
 			/** Of the structural calls, the ones that kept the context because the engine refreshed. */
 			int32 RefreshedInPlaceCalls = 0;
+
+			/** Of the static switch writes, the ones that refreshed their module instead of the context. */
+			int32 StaticSwitchRefreshedInPlace = 0;
+
+			/** Compiles an engine path launched inside a suppression scope anyway, and that were aborted. */
+			int32 StrayCompilesAborted = 0;
 		};
 		FAdapterStats GStats;
+
+		/** Systems inside an FCompileSuppressionScope, on an engine without the fast-edit API. */
+		TSet<UNiagaraSystem*> GCompileDebtSystems;
+
+		/**
+		 * Keeps a pending compile request on the system, so the engine's guarded launch sites stay shut.
+		 *
+		 * The stock engine has no way to refuse RequestCompile, but most of its launches during an edit
+		 * are guarded: FNiagaraSystemViewModel::RefreshAll -- run by every view model construction and
+		 * by every PostEditChangeProperty the external edit API makes -- compiles only when
+		 * HasOutstandingCompilationRequests() is false, and that is true while a request is pending.
+		 * SetCompileForEdit is the one exported way to set that status without launching anything: a
+		 * change of the flag marks the system RequestPending and does nothing else. Setting it to the
+		 * other value and straight back leaves the flag as it was -- the Niagara editor's own view
+		 * model checks that it matches -- and the request pending. The final compile pays it once,
+		 * which is what MoonEngine's DeferRequestCompile does.
+		 *
+		 * It is not a lock. An unguarded caller (an emitter rename, enabling an emitter) still calls
+		 * RequestCompile, which clears the status and launches a compile of the half-built system. So
+		 * this runs again at every point the adapter can observe -- before a view model is built and
+		 * after every structural call -- aborts what got through, and pends the request again.
+		 *
+		 * Why it matters beyond time: each launch prepares the scripts' rapid-iteration parameters from
+		 * the graph as it stands at that moment, and a hidden input's constant keeps the value the first
+		 * launch after it appeared gave it. With a launch after every edit, that value depends on the
+		 * order of the edits, so rebuilding part of a system and rebuilding all of it land on different
+		 * constants. With one launch at the end there is no order to depend on.
+		 *
+		 * @param bAbortStray  count and abort a compile found in flight. False when a scope opens: a
+		 *                     compile already running then was not launched by this build.
+		 */
+		void HoldCompileDebt(UNiagaraSystem* System, bool bAbortStray = true)
+		{
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+			if (System == nullptr || !GCompileDebtSystems.Contains(System))
+			{
+				return;
+			}
+			if (bAbortStray && System->HasActiveCompilations())
+			{
+				// RequestCompile itself aborts whatever is queued before it launches, so an abort here is
+				// the engine's own way of discarding a compile that a later one supersedes.
+				++GStats.StrayCompilesAborted;
+				UE_LOG(LogDreamFX, Verbose, TEXT("stray compile aborted on '%s' (last operation: %s)"),
+					*System->GetName(), *GLastOpLabel);
+				System->KillAllActiveCompilations();
+			}
+			if (!System->NeedsRequestCompile() && !System->HasActiveCompilations())
+			{
+				const bool bCompileForEdit = System->GetCompileForEdit();
+				System->SetCompileForEdit(!bCompileForEdit);
+				System->SetCompileForEdit(bCompileForEdit);
+			}
+#else
+			(void)System;
+			(void)bAbortStray;
+#endif
+		}
 
 		/** The shared context if this system has one open, otherwise a private one for this call. */
 		class FEditContext
@@ -160,6 +246,9 @@ namespace UE::DreamFX::Editor
 		public:
 			explicit FEditContext(UNiagaraSystem* System)
 			{
+				// Building a view model runs RefreshAll, the busiest compile launch site there is.
+				HoldCompileDebt(System);
+
 				if (TSharedPtr<FNiagaraExternalEditContext>* Shared = GSharedContexts.Find(System))
 				{
 					if (Shared->IsValid())
@@ -259,6 +348,10 @@ namespace UE::DreamFX::Editor
 		{
 			++GStats.StructuralCalls;
 
+			// A structural call is where the unguarded launch sites live (an emitter rename, enabling
+			// an emitter); catch what they launched before anything else runs against it.
+			HoldCompileDebt(System);
+
 			if (Kind == EStructuralKind::Unrefreshed || GRebuildContextOnStructural)
 			{
 				DropSharedContext(System);
@@ -288,6 +381,176 @@ namespace UE::DreamFX::Editor
 			UNiagaraSystem* System = nullptr;
 			EStructuralKind Kind = EStructuralKind::Unrefreshed;
 		};
+
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+		/**
+		 * Empties one stack graph: every node between its input node and its output node is removed and
+		 * the two are linked directly, which is the graph an emptied stack has.
+		 *
+		 * False, with nothing changed, when the stack does not have the shape the walk expects -- no
+		 * parameter-map chain from the output back to an input node -- so the caller can take the
+		 * per-module path instead.
+		 */
+		bool ClearStackGraph(UNiagaraNodeOutput& OutputNode)
+		{
+			// UNiagaraNodeParameterMapSet's header is private to the editor module, so it is asked by
+			// class name; a subclass counts.
+			auto IsParameterMapSet = [](const UEdGraphNode* Node)
+			{
+				static const FName MapSetName(TEXT("NiagaraNodeParameterMapSet"));
+				for (const UClass* Class = Node != nullptr ? Node->GetClass() : nullptr; Class != nullptr; Class = Class->GetSuperClass())
+				{
+					if (Class->GetFName() == MapSetName)
+					{
+						return true;
+					}
+				}
+				return false;
+			};
+
+			const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
+			UNiagaraGraph* Graph = OutputNode.GetNiagaraGraph();
+			if (Schema == nullptr || Graph == nullptr)
+			{
+				return false;
+			}
+			auto MapPin = [Schema](UEdGraphNode& Node, EEdGraphPinDirection Direction) -> UEdGraphPin*
+			{
+				for (UEdGraphPin* Pin : Node.Pins)
+				{
+					if (Pin != nullptr && Pin->Direction == Direction
+						&& Schema->PinToTypeDefinition(Pin) == FNiagaraTypeDefinition::GetParameterMapDef())
+					{
+						return Pin;
+					}
+				}
+				return nullptr;
+			};
+
+			UEdGraphPin* OutputIn = MapPin(OutputNode, EGPD_Input);
+			if (OutputIn == nullptr || OutputIn->LinkedTo.Num() != 1)
+			{
+				return false;
+			}
+
+			// The stack's input node, by the engine's rule: follow single parameter-map links up from the
+			// output until a UNiagaraNodeInput.
+			//
+			// Every node on that chain has to belong to a module group -- the module call, or a map set
+			// carrying its overrides -- or the cut is refused. A system stack's chain also runs through
+			// the emitter nodes that splice each emitter's scripts into the system's, and those are not
+			// modules: RemoveModuleFromStack never touches them, and cutting them out leaves a system
+			// script that no longer runs its emitters.
+			UEdGraphPin* InputOut = nullptr;
+			UEdGraphNode* Walk = &OutputNode;
+			for (int32 Guard = 0; Guard < 100000 && InputOut == nullptr; ++Guard)
+			{
+				UEdGraphPin* In = MapPin(*Walk, EGPD_Input);
+				if (In == nullptr || In->LinkedTo.Num() != 1 || In->LinkedTo[0] == nullptr)
+				{
+					return false;
+				}
+				UEdGraphNode* Upstream = In->LinkedTo[0]->GetOwningNode();
+				if (Cast<UNiagaraNodeInput>(Upstream) != nullptr)
+				{
+					InputOut = In->LinkedTo[0];
+				}
+				else if (Cast<UNiagaraNodeFunctionCall>(Upstream) == nullptr && !IsParameterMapSet(Upstream))
+				{
+					return false;
+				}
+				Walk = Upstream;
+			}
+			if (InputOut == nullptr)
+			{
+				return false;
+			}
+			if (OutputIn->LinkedTo[0] == InputOut)
+			{
+				return true; // already empty
+			}
+
+			// Everything upstream of the output that is not the stack's input node.
+			const UEdGraphNode* InputNode = InputOut->GetOwningNode();
+			TArray<UEdGraphNode*> ToRemove;
+			TSet<UEdGraphNode*> Seen = { &OutputNode, const_cast<UEdGraphNode*>(InputNode) };
+			TArray<UEdGraphNode*> Pending = { OutputIn->LinkedTo[0]->GetOwningNode() };
+			while (Pending.Num() > 0)
+			{
+				UEdGraphNode* Node = Pending.Pop(EAllowShrinking::No);
+				if (Node == nullptr || Seen.Contains(Node))
+				{
+					continue;
+				}
+				Seen.Add(Node);
+				ToRemove.Add(Node);
+				for (UEdGraphPin* Pin : Node->Pins)
+				{
+					if (Pin != nullptr && Pin->Direction == EGPD_Input)
+					{
+						for (UEdGraphPin* Linked : Pin->LinkedTo)
+						{
+							Pending.Add(Linked != nullptr ? Linked->GetOwningNode() : nullptr);
+						}
+					}
+				}
+			}
+
+			Graph->Modify();
+			for (UEdGraphNode* Node : ToRemove)
+			{
+				Node->Modify();
+				Graph->RemoveNode(Node);
+			}
+			InputOut->MakeLinkTo(OutputIn);
+			return true;
+		}
+#endif
+
+		/**
+		 * The script group an address names, in the view model the given context works through.
+		 *
+		 * Null wherever that cannot be resolved -- an engine without the external edit API, a stack the
+		 * lookup does not address (event handlers, simulation stages) -- and every caller treats null as
+		 * "take the engine's own path", never as an error.
+		 */
+		UNiagaraStackScriptItemGroup* ResolveContextScriptGroup(FNiagaraExternalEditContext* Context,
+			const FStackAddress& Address)
+		{
+#if DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT
+			const TSharedPtr<FNiagaraSystemViewModel> ViewModel = Context != nullptr
+				? Context->*GDreamFXEditContextViewModel : nullptr;
+			ENiagaraScriptUsage Usage;
+			if (!ViewModel.IsValid() || !StackLookup::ScriptUsageFromName(Address.ScriptName, Usage))
+			{
+				return nullptr;
+			}
+
+			// Only a usage one group answers to. Simulation stages and event handlers share a usage and
+			// differ by usage id, which a script name does not carry -- the first match would be some
+			// other stage's stack.
+			TArray<UNiagaraStackScriptItemGroup*> Groups;
+			StackLookup::CollectDescendants<UNiagaraStackScriptItemGroup>(
+				StackLookup::GetStackRoot(*ViewModel, Address.EmitterName), Groups, /*bStopAtT=*/true);
+			UNiagaraStackScriptItemGroup* Found = nullptr;
+			for (UNiagaraStackScriptItemGroup* Group : Groups)
+			{
+				if (Group != nullptr && Group->GetScriptUsage() == Usage)
+				{
+					if (Found != nullptr)
+					{
+						return nullptr;
+					}
+					Found = Group;
+				}
+			}
+			return Found;
+#else
+			(void)Context;
+			(void)Address;
+			return nullptr;
+#endif
+		}
 
 		/**
 		 * Rewrites the `{"refPath": "..."}` spelling of an object reference to the bare path string,
@@ -1331,16 +1594,35 @@ namespace UE::DreamFX::Editor
 		DropSharedContext(System);
 	}
 
-	void FNiagaraAdapter::OnStaticSwitchWritten(UNiagaraSystem* System)
+	void FNiagaraAdapter::OnStaticSwitchWritten(const FStackAddress& ModuleAddress)
 	{
-		// Unconditional since switches moved to the pin route. The engine's external write path used
-		// to refresh the owning module item synchronously, which let the epoch survive a switch; a pin
-		// default written straight onto the node has no such courtesy -- nothing tells the live edit
-		// context that a whole set of sibling inputs just came into existence. Every later call would
-		// be reading a view model built before the switch.
+		// A pin default written straight onto the module node tells the live edit context nothing --
+		// not that a whole set of sibling inputs just came into existence, nor that others went. The
+		// engine's own external write path answered that by refreshing the owning module item, and
+		// that is what happens here: the module's stack entry is rebuilt from the graph, so later calls
+		// in the epoch read the inputs the switch now reveals.
 		//
-		// So the previous in-place path, and the -RebuildOnSwitch flag that A/B'd it, are both gone.
-		// One rebuild per switch write is the price of not needing the engine patch at all.
+		// The alternative is dropping the whole context, and that was what this did for as long as
+		// switches went by pin: one view model per switch write, 383 of them on NS_Magic_Explosion, each
+		// rebuilding every emitter's stacks. Anything that cannot be resolved -- no shared context, a
+		// stack the lookup does not address (event handlers, simulation stages), an engine without
+		// the external edit API -- still drops it, and -RebuildOnSwitch makes that unconditional.
+		UNiagaraSystem* System = ModuleAddress.System;
+		if (!GRebuildContextOnSwitch && System != nullptr)
+		{
+			const TSharedPtr<FNiagaraExternalEditContext>* Shared = GSharedContexts.Find(System);
+			UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(
+				Shared != nullptr ? Shared->Get() : nullptr, ModuleAddress);
+			if (UNiagaraStackModuleItem* Module = Group != nullptr
+				? StackLookup::FindModuleItem(*Group, ModuleAddress.ModuleName) : nullptr)
+			{
+				FOpTimer Timer(TEXT("~module refresh (static switch)"));
+				++GStats.StaticSwitchCalls;
+				++GStats.StaticSwitchRefreshedInPlace;
+				Module->RefreshChildren();
+				return;
+			}
+		}
 		EndStructuralEpoch(System);
 	}
 
@@ -1362,6 +1644,11 @@ namespace UE::DreamFX::Editor
 	void FNiagaraAdapter::SetBatchAddRefresh(bool bEnabled)
 	{
 		GBatchAddRefresh = bEnabled;
+	}
+
+	void FNiagaraAdapter::SetClearStackByGraph(bool bEnabled)
+	{
+		GClearStackByGraph = bEnabled;
 	}
 
 	bool FNiagaraAdapter::IsBatchAddRefreshEnabled()
@@ -1437,10 +1724,11 @@ namespace UE::DreamFX::Editor
 	FString FNiagaraAdapter::ReportStats()
 	{
 		return FString::Printf(
-			TEXT("adapter: %d view model(s) built, %d structural (%d static switch, %d refreshed in place) ")
-			TEXT("+ %d value call(s), %d epoch boundary(ies)"),
+			TEXT("adapter: %d view model(s) built, %d structural (%d static switch, %d of them by module refresh, %d refreshed in place) ")
+			TEXT("+ %d value call(s), %d epoch boundary(ies), %d stray compile(s) aborted"),
 			GStats.ContextsBuilt, GStats.StructuralCalls, GStats.StaticSwitchCalls,
-			GStats.RefreshedInPlaceCalls, GStats.ValueCalls, GStats.EpochBoundaries);
+			GStats.StaticSwitchRefreshedInPlace, GStats.RefreshedInPlaceCalls, GStats.ValueCalls, GStats.EpochBoundaries,
+			GStats.StrayCompilesAborted);
 	}
 
 	bool FNiagaraAdapter::SaveSystem(UNiagaraSystem* System, TArray<FString>& OutErrors)
@@ -1578,6 +1866,30 @@ namespace UE::DreamFX::Editor
 		// every emitter of every asset. Correct, just slower.
 		//
 		// Back to front, because removing by name shifts nothing but removing by position would.
+		//
+		// Unless the whole stack goes in one cut first. Emptying a stack removes every node between
+		// its input node and its output node -- the module calls and everything feeding their inputs,
+		// the same nodes RemoveModuleFromStack's per-module traversal reaches -- and links the two ends
+		// back together, then refreshes the group once. RemoveModuleFromStack and GetOrderedModuleNodes
+		// are not exported; the walk below is GetEmitterInputNodeForStackNode's.
+		{
+			FEpochGuard Epoch(ScriptAddress.System, EStructuralKind::RefreshedInPlace);
+			FEditContext ContextHolder(ScriptAddress.System);
+			UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(&ContextHolder.Get(), ScriptAddress);
+			UNiagaraNodeOutput* OutputNode = GClearStackByGraph && Group != nullptr ? Group->GetScriptOutputNode() : nullptr;
+			if (OutputNode != nullptr)
+			{
+				if (ClearStackGraph(*OutputNode))
+				{
+					ScriptAddress.System->Modify();
+					Group->RefreshChildren();
+					FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
+					ScriptAddress.System->PostEditChangeProperty(PropertyChangedEvent);
+					return true;
+				}
+			}
+		}
+
 		FScriptStackInfo Info;
 		if (!GetScriptStackInfo(ScriptAddress, Info, OutErrors))
 		{
@@ -2498,8 +2810,30 @@ namespace UE::DreamFX::Editor
 		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context,
 			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly, bDeferStackRefresh);
 #else
-		// Stock engine: neither knob exists. The topology comes back fully populated and the stack
-		// refreshes on every add, so a stack of n modules pays n refreshes instead of one.
+		// Stock engine: the API has no deferred add, so a deferred one is MoonEngine's done here -- the
+		// node goes into the graph and nothing else happens: no group refresh, no PostEditChangeProperty
+		// (whose RefreshAll rebuilds every emitter's stack view models), no topology walk. The batch's
+		// closing RefreshScriptStack pays the refresh and the broadcast once. An insert after a named
+		// module, or a stack the lookup cannot resolve, takes the API's per-add path as before.
+		if (bDeferStackRefresh && StackAddress.ModuleName.IsNone())
+		{
+			UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(&Context, StackAddress);
+			if (UNiagaraNodeOutput* OutputNode = Group != nullptr ? Group->GetScriptOutputNode() : nullptr)
+			{
+				const FScopedTransaction Transaction(NSLOCTEXT("DreamFX", "AddModule", "DreamFX Add Module"));
+				StackAddress.System->Modify();
+				const FVersionedNiagaraScriptData* Latest = ModuleAsset->GetLatestScriptData();
+				UNiagaraNodeFunctionCall* AddedNode = FNiagaraStackGraphUtilities::AddScriptModuleToStack(
+					ModuleAsset, *OutputNode, INDEX_NONE, FString(), Latest != nullptr ? Latest->Version.VersionGuid : FGuid());
+				if (AddedNode == nullptr)
+				{
+					OutErrors.Add(FString::Printf(TEXT("The stack refused module '%s'."), *ModuleAsset->GetName()));
+					return false;
+				}
+				OutModuleName = FName(*AddedNode->GetFunctionName());
+				return true;
+			}
+		}
 		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context);
 #endif
 
@@ -2521,8 +2855,17 @@ namespace UE::DreamFX::Editor
 		FOpTimer OpTimer(TEXT("RefreshScriptStack"));
 
 #if !DREAMFX_HAS_NIAGARA_FAST_EDIT
-		// Stock engine: nothing to settle. This call exists to pay, once, the refresh that a batch of
-		// deferred adds skipped -- and without bDeferStackRefresh every add already paid its own.
+		// Stock engine: what MoonEngine's RefreshScriptStack does, on exported members -- the group's
+		// children rebuilt from the graph, then the one PostEditChangeProperty the deferred adds
+		// skipped. If the stack does not resolve, its adds took the API's path and refreshed themselves.
+		FEpochGuard Epoch(StackAddress.System, EStructuralKind::RefreshedInPlace);
+		FEditContext ContextHolder(StackAddress.System);
+		if (UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(&ContextHolder.Get(), StackAddress))
+		{
+			Group->RefreshChildren();
+			FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
+			StackAddress.System->PostEditChangeProperty(PropertyChangedEvent);
+		}
 		return true;
 #else
 		// The refresh IS the in-place refresh a batch of deferred adds owes: after it the shared
@@ -3153,6 +3496,7 @@ namespace UE::DreamFX::Editor
 		++GStats.ContextsBuilt;
 		TSharedPtr<FNiagaraSystemViewModel> ViewModel;
 		{
+			HoldCompileDebt(System);
 			FOpTimer Timer(TEXT("~context build (view model)"));
 			ViewModel = StackLookup::CreateSystemViewModel(*System);
 		}
@@ -3736,11 +4080,17 @@ namespace UE::DreamFX::Editor
 			System->DeferRequestCompile();
 		}
 #else
-		// Stock engine: the scope becomes a no-op and every edit relaunches the system's compile.
-		// RequestCompile aborts whatever is queued and starts again, so all but the last are thrown
-		// away -- 260 of them, 8.3 s, on the worst system in this tree. Nothing is incorrect about it;
-		// the work is simply done and discarded.
-		(void)System;
+		// Stock engine: no switch to refuse RequestCompile, so the scope keeps a request pending
+		// instead, which shuts the guarded launch sites, and aborts what the unguarded ones launch
+		// (HoldCompileDebt). Without it every edit relaunched the system's compile -- 260 of them,
+		// 8.3 s, on the worst system in this tree -- and the order of those launches decided the
+		// constants of hidden inputs.
+		if (System != nullptr && !GCompileDebtSystems.Contains(System))
+		{
+			bOwns = true;
+			GCompileDebtSystems.Add(System);
+			HoldCompileDebt(System, /*bAbortStray=*/false);
+		}
 #endif
 	}
 
@@ -3750,6 +4100,14 @@ namespace UE::DreamFX::Editor
 		if (bOwns)
 		{
 			System->SetSuppressCompileRequests(false);
+		}
+#else
+		if (bOwns)
+		{
+			// One last check: whatever the window's final calls launched is aborted, and the request
+			// left pending is the debt the caller's compile pays.
+			HoldCompileDebt(System);
+			GCompileDebtSystems.Remove(System);
 		}
 #endif
 	}
