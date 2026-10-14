@@ -111,6 +111,9 @@ namespace UE::DreamFX::Editor
 		TMap<FString, double> GOpSeconds;
 		TMap<FString, int32> GOpCounts;
 
+		/** The operation most recently started, for saying what a stray compile followed. */
+		FString GLastOpLabel = TEXT("(none)");
+
 		/** Charges the enclosing scope to one operation label. */
 		struct FOpTimer
 		{
@@ -119,7 +122,9 @@ namespace UE::DreamFX::Editor
 #if CPUPROFILERTRACE_ENABLED
 				, TraceScope(InLabel, true)
 #endif
-			{}
+			{
+				GLastOpLabel = InLabel;
+			}
 
 			~FOpTimer()
 			{
@@ -199,6 +204,8 @@ namespace UE::DreamFX::Editor
 				// RequestCompile itself aborts whatever is queued before it launches, so an abort here is
 				// the engine's own way of discarding a compile that a later one supersedes.
 				++GStats.StrayCompilesAborted;
+				UE_LOG(LogDreamFX, Verbose, TEXT("stray compile aborted on '%s' (last operation: %s)"),
+					*System->GetName(), *GLastOpLabel);
 				System->KillAllActiveCompilations();
 			}
 			if (!System->NeedsRequestCompile() && !System->HasActiveCompilations())
