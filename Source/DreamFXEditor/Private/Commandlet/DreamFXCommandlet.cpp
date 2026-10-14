@@ -1275,6 +1275,9 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 
 	// AddModule batching round: off, every add pays the engine's per-add stack refresh again.
 	FNiagaraAdapter::SetBatchAddRefresh(!FParse::Param(*Params, TEXT("RebuildPerAdd")));
+
+	// Stack-clear round, stock engine only: off, a stack is emptied one module at a time again.
+	FNiagaraAdapter::SetClearStackByGraph(!FParse::Param(*Params, TEXT("ClearPerModule")));
 	FNiagaraAdapter::ResetStats();
 
 	FString SingleFile;

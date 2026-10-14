@@ -529,6 +529,13 @@ namespace UE::DreamFX::Editor
 		static void SetBatchAddRefresh(bool bEnabled);
 		static bool IsBatchAddRefreshEnabled();
 
+		/**
+		 * Off, emptying a stack on the stock engine removes its modules one at a time again, each with
+		 * the engine's group refresh, instead of cutting the stack graph once. One-binary A/B and the
+		 * escape hatch. `dfx.ps1 build -ClearPerModule` sets it off.
+		 */
+		static void SetClearStackByGraph(bool bEnabled);
+
 		/** Zeroes the counters reported by ReportStats. */
 		static void ResetStats();
 

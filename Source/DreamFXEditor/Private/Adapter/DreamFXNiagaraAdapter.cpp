@@ -25,6 +25,7 @@
 #include "NiagaraExternalSystemEditorUtilities.h"
 #include "NiagaraGraph.h"
 #include "NiagaraNodeFunctionCall.h"
+#include "NiagaraNodeInput.h"
 #include "NiagaraNodeOutput.h"
 #include "NiagaraRendererProperties.h"
 #include "NiagaraScript.h"
@@ -112,6 +113,9 @@ namespace UE::DreamFX::Editor
 
 		/** False restores the per-add engine stack refresh instead of one batch refresh per stack. */
 		bool GBatchAddRefresh = true;
+
+		/** False restores the per-module stack clear on the stock engine instead of one graph cut. */
+		bool GClearStackByGraph = true;
 
 		/**
 		 * Wall time and call count per operation, for `-LogCmds="LogDreamFX Verbose"`.
@@ -378,6 +382,131 @@ namespace UE::DreamFX::Editor
 			EStructuralKind Kind = EStructuralKind::Unrefreshed;
 		};
 
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+		/**
+		 * Empties one stack graph: every node between its input node and its output node is removed and
+		 * the two are linked directly, which is the graph an emptied stack has.
+		 *
+		 * False, with nothing changed, when the stack does not have the shape the walk expects -- no
+		 * parameter-map chain from the output back to an input node -- so the caller can take the
+		 * per-module path instead.
+		 */
+		bool ClearStackGraph(UNiagaraNodeOutput& OutputNode)
+		{
+			// UNiagaraNodeParameterMapSet's header is private to the editor module, so it is asked by
+			// class name; a subclass counts.
+			auto IsParameterMapSet = [](const UEdGraphNode* Node)
+			{
+				static const FName MapSetName(TEXT("NiagaraNodeParameterMapSet"));
+				for (const UClass* Class = Node != nullptr ? Node->GetClass() : nullptr; Class != nullptr; Class = Class->GetSuperClass())
+				{
+					if (Class->GetFName() == MapSetName)
+					{
+						return true;
+					}
+				}
+				return false;
+			};
+
+			const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
+			UNiagaraGraph* Graph = OutputNode.GetNiagaraGraph();
+			if (Schema == nullptr || Graph == nullptr)
+			{
+				return false;
+			}
+			auto MapPin = [Schema](UEdGraphNode& Node, EEdGraphPinDirection Direction) -> UEdGraphPin*
+			{
+				for (UEdGraphPin* Pin : Node.Pins)
+				{
+					if (Pin != nullptr && Pin->Direction == Direction
+						&& Schema->PinToTypeDefinition(Pin) == FNiagaraTypeDefinition::GetParameterMapDef())
+					{
+						return Pin;
+					}
+				}
+				return nullptr;
+			};
+
+			UEdGraphPin* OutputIn = MapPin(OutputNode, EGPD_Input);
+			if (OutputIn == nullptr || OutputIn->LinkedTo.Num() != 1)
+			{
+				return false;
+			}
+
+			// The stack's input node, by the engine's rule: follow single parameter-map links up from the
+			// output until a UNiagaraNodeInput.
+			//
+			// Every node on that chain has to belong to a module group -- the module call, or a map set
+			// carrying its overrides -- or the cut is refused. A system stack's chain also runs through
+			// the emitter nodes that splice each emitter's scripts into the system's, and those are not
+			// modules: RemoveModuleFromStack never touches them, and cutting them out leaves a system
+			// script that no longer runs its emitters.
+			UEdGraphPin* InputOut = nullptr;
+			UEdGraphNode* Walk = &OutputNode;
+			for (int32 Guard = 0; Guard < 100000 && InputOut == nullptr; ++Guard)
+			{
+				UEdGraphPin* In = MapPin(*Walk, EGPD_Input);
+				if (In == nullptr || In->LinkedTo.Num() != 1 || In->LinkedTo[0] == nullptr)
+				{
+					return false;
+				}
+				UEdGraphNode* Upstream = In->LinkedTo[0]->GetOwningNode();
+				if (Cast<UNiagaraNodeInput>(Upstream) != nullptr)
+				{
+					InputOut = In->LinkedTo[0];
+				}
+				else if (Cast<UNiagaraNodeFunctionCall>(Upstream) == nullptr && !IsParameterMapSet(Upstream))
+				{
+					return false;
+				}
+				Walk = Upstream;
+			}
+			if (InputOut == nullptr)
+			{
+				return false;
+			}
+			if (OutputIn->LinkedTo[0] == InputOut)
+			{
+				return true; // already empty
+			}
+
+			// Everything upstream of the output that is not the stack's input node.
+			const UEdGraphNode* InputNode = InputOut->GetOwningNode();
+			TArray<UEdGraphNode*> ToRemove;
+			TSet<UEdGraphNode*> Seen = { &OutputNode, const_cast<UEdGraphNode*>(InputNode) };
+			TArray<UEdGraphNode*> Pending = { OutputIn->LinkedTo[0]->GetOwningNode() };
+			while (Pending.Num() > 0)
+			{
+				UEdGraphNode* Node = Pending.Pop(EAllowShrinking::No);
+				if (Node == nullptr || Seen.Contains(Node))
+				{
+					continue;
+				}
+				Seen.Add(Node);
+				ToRemove.Add(Node);
+				for (UEdGraphPin* Pin : Node->Pins)
+				{
+					if (Pin != nullptr && Pin->Direction == EGPD_Input)
+					{
+						for (UEdGraphPin* Linked : Pin->LinkedTo)
+						{
+							Pending.Add(Linked != nullptr ? Linked->GetOwningNode() : nullptr);
+						}
+					}
+				}
+			}
+
+			Graph->Modify();
+			for (UEdGraphNode* Node : ToRemove)
+			{
+				Node->Modify();
+				Graph->RemoveNode(Node);
+			}
+			InputOut->MakeLinkTo(OutputIn);
+			return true;
+		}
+#endif
+
 		/**
 		 * The script group an address names, in the view model the given context works through.
 		 *
@@ -392,8 +521,30 @@ namespace UE::DreamFX::Editor
 			const TSharedPtr<FNiagaraSystemViewModel> ViewModel = Context != nullptr
 				? Context->*GDreamFXEditContextViewModel : nullptr;
 			ENiagaraScriptUsage Usage;
-			return ViewModel.IsValid() && StackLookup::ScriptUsageFromName(Address.ScriptName, Usage)
-				? StackLookup::FindScriptGroup(*ViewModel, Address.EmitterName, Usage) : nullptr;
+			if (!ViewModel.IsValid() || !StackLookup::ScriptUsageFromName(Address.ScriptName, Usage))
+			{
+				return nullptr;
+			}
+
+			// Only a usage one group answers to. Simulation stages and event handlers share a usage and
+			// differ by usage id, which a script name does not carry -- the first match would be some
+			// other stage's stack.
+			TArray<UNiagaraStackScriptItemGroup*> Groups;
+			StackLookup::CollectDescendants<UNiagaraStackScriptItemGroup>(
+				StackLookup::GetStackRoot(*ViewModel, Address.EmitterName), Groups, /*bStopAtT=*/true);
+			UNiagaraStackScriptItemGroup* Found = nullptr;
+			for (UNiagaraStackScriptItemGroup* Group : Groups)
+			{
+				if (Group != nullptr && Group->GetScriptUsage() == Usage)
+				{
+					if (Found != nullptr)
+					{
+						return nullptr;
+					}
+					Found = Group;
+				}
+			}
+			return Found;
 #else
 			(void)Context;
 			(void)Address;
@@ -1495,6 +1646,11 @@ namespace UE::DreamFX::Editor
 		GBatchAddRefresh = bEnabled;
 	}
 
+	void FNiagaraAdapter::SetClearStackByGraph(bool bEnabled)
+	{
+		GClearStackByGraph = bEnabled;
+	}
+
 	bool FNiagaraAdapter::IsBatchAddRefreshEnabled()
 	{
 		return GBatchAddRefresh;
@@ -1710,6 +1866,30 @@ namespace UE::DreamFX::Editor
 		// every emitter of every asset. Correct, just slower.
 		//
 		// Back to front, because removing by name shifts nothing but removing by position would.
+		//
+		// Unless the whole stack goes in one cut first. Emptying a stack removes every node between
+		// its input node and its output node -- the module calls and everything feeding their inputs,
+		// the same nodes RemoveModuleFromStack's per-module traversal reaches -- and links the two ends
+		// back together, then refreshes the group once. RemoveModuleFromStack and GetOrderedModuleNodes
+		// are not exported; the walk below is GetEmitterInputNodeForStackNode's.
+		{
+			FEpochGuard Epoch(ScriptAddress.System, EStructuralKind::RefreshedInPlace);
+			FEditContext ContextHolder(ScriptAddress.System);
+			UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(&ContextHolder.Get(), ScriptAddress);
+			UNiagaraNodeOutput* OutputNode = GClearStackByGraph && Group != nullptr ? Group->GetScriptOutputNode() : nullptr;
+			if (OutputNode != nullptr)
+			{
+				if (ClearStackGraph(*OutputNode))
+				{
+					ScriptAddress.System->Modify();
+					Group->RefreshChildren();
+					FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
+					ScriptAddress.System->PostEditChangeProperty(PropertyChangedEvent);
+					return true;
+				}
+			}
+		}
+
 		FScriptStackInfo Info;
 		if (!GetScriptStackInfo(ScriptAddress, Info, OutErrors))
 		{
