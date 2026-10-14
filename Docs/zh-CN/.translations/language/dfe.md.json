@@ -1,19 +1,11 @@
 {
   "version": 1,
+  "origin": "ai",
   "sourceFile": "Docs/language/dfe.md",
+  "sourceHash": "14e458f3e0f52ab45a6d23c624e80eb5101ca657f0cd6293bcd2b76643d30c22",
+  "sourceRevision": "6677fe4ed04df8f491f7a24fbf6da8afe207dfa0",
+  "source": "# `.dfe` — a reusable emitter\n\nA `.dfe` holds one `Emitter` block, written exactly as it would be inline in a `.dfs`:\n\n```cpp\nEmitter(Name=\"Emitters/E_MoonFlashCard\", Root=\"Plugin.DreamFX\")\n{\n    Settings = { SimTarget = CPU; LocalSpace = true; QualityLevelMask = 31; }\n\n    EmitterUpdate = {\n        EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.12);\n        SpawnBurst_Instantaneous(SpawnCount = 1);\n    }\n\n    ParticleSpawn  = { ... }\n    ParticleUpdate = { ... }\n\n    SpriteRenderer Card { ... }\n}\n```\n\n`QualityLevelMask` is the scalability bitmask, which lives inside the emitter's `FNiagaraPlatformSet`\nrather than at the top level. Settings whose property sits inside a struct are spelled with a dotted\npath internally; the DSL name is the leaf, because that is the part an author sets.\n\nA `.dfe` generates nothing on its own (DFX5097). It exists to be pulled into a system:\n\n```cpp\nEmitter Flash from \"../Emitters/E_MoonFlashCard\"\n{\n    EmitterUpdate = {\n        EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 0.08);\n    }\n}\n```\n\nThe path resolves relative to the referencing file first, then against every DFX root. The extension\nis optional.\n\n## Copy, not inheritance\n\n`from` takes a snapshot (R3). Editing the `.dfe` afterwards changes nothing in systems that already\ncopied it until they are rebuilt, and the generated asset carries no link back.\n\nThat decision is also why a decompiled system is always self-contained: once the copy is made, \"which\nof these were overrides\" is not recoverable, so the export cannot reconstruct the `from`. It is\none-way syntax sugar.\n\n## What the override block replaces\n\nThe merge granularity is the *block*, not the module:\n\n| Part | Merge |\n| --- | --- |\n| `Settings` | per key — names are unambiguous, so an override replaces just that setting |\n| each stack | **whole block replaced** if the host declares it; otherwise the `.dfe`'s is kept |\n| named `Stage` stacks | matched by name; an override replaces that stage in place, and new names append in declaration order |\n| `Defaults` | matched by full parameter name; overrides replace values in place, new names append, and unmentioned defaults remain. An override must keep the base parameter's type (DFX3048) |\n| renderers | **all or nothing** — declaring any renderer replaces every one |\n\nStacks are replaced wholesale because per-module merging needs a module identity the language does not\nhave: two calls to the same module in one stack are indistinguishable, so a merge would have to guess,\nand guessing wrong silently reorders somebody's effect.\n\nRenderers are all-or-nothing for the same reason from the other side: they are addressed by\ndeclaration order, so replacing one of three would silently renumber the other two.\n\nBuild and verify include the contents of referenced `.dfe` files in the source fingerprint. Editing a\nbase invalidates every host that uses it even when the host text has not changed.\n\n## User parameters\n\nA `.dfe` may read `User.*`. The host system has to declare those parameters, and the check happens at\nthe `from` line rather than inside the `.dfe` — that is where the decision to pull it in was made\n(DFX3043).\n\n```\nNS_Host.dfs(7,5): error DFX3043: '../Emitters/E_Flash' reads user parameters this system does not\ndeclare: User.FlashCount. Add them to the Properties block.\n```\n",
   "translationFile": "Docs/zh-CN/language/dfe.md",
-  "sourceHash": null,
-  "importedSourceHash": "14e458f3e0f52ab45a6d23c624e80eb5101ca657f0cd6293bcd2b76643d30c22",
-  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
-  "translationHash": "75a1a186ca50ddaa471940b3f9e6579993d7ccb74622aea852e0ce148a1fd8b2",
-  "origin": "website-import",
-  "importedFrom": [
-    "language/dfe"
-  ],
-  "pageMetadata": {
-    "language/dfe": {
-      "title": ".dfe — 可复用 emitter",
-      "description": "一个 Emitter 文件、from 的合并粒度，以及「拷贝而不是继承」这个决定的两个后果。"
-    }
-  }
+  "translationHash": "6faded4a95a28911d7c5333e853a766c5708f3c211405f934012142faae359a4",
+  "model": "deepseek-flash"
 }

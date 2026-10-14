@@ -1,89 +1,76 @@
 ---
-title: DreamFX 是什么
-description: 它做什么、不做什么，以及几条贯穿始终的设计立场：文本是唯一真相、缺口必须显形、菜单不是第二套实现。
+title: "DreamFX 是什么"
+description: "它做什么、不做什么，以及贯穿始终的几条立场——文本是唯一真相、缺口必须显形、菜单不是第二套实现。"
 ---
 
-DreamFX 把文本编译成标准 Niagara 资产，并把标准 Niagara 资产反编译回文本。范围仅此而已 ——
-它不是一个新的粒子运行时，也不是 Niagara 的替代品。生成出来的东西就是普通的
-`UNiagaraSystem` / `UNiagaraEmitter` / `UNiagaraScript`：任何引擎加载它、任何 `.dfs` 引用它、
-cook 它、跑它，都和手连出来的没有区别。
+DreamFX 把文本编译成标准 Niagara 资产，并把标准 Niagara 资产反编译回文本。这就是全部范围——它不是新的粒子运行时，也不替代 Niagara。它生成的产物是普通的 `UNiagaraSystem` / `UNiagaraEmitter` / `UNiagaraScript`：任何引擎都能加载它，任何 `.dfs` 都能引用它，它能被 cook、能运行，与手工连出来的完全一样。
 
-<a id="为什么要写成文本"></a>
+<a id="why-text-at-all"></a>
 
-## 为什么要写成文本
+## 为什么要用文本
 
-Niagara 的编辑面是图和栈。图很好用，直到你需要：
+Niagara 的编辑面是图和栈。图很好，直到你需要：
 
-- **diff 一次改动** —— 谁把 spawn rate 从 20 改成 60 了？二进制资产回答不了；
-- **批量改 40 个特效** —— 手点 40 遍，还是改 40 个文本文件？
-- **code review** —— 一个 `.uasset` 的 PR 只能看结论，看不到过程；
-- **让代理去做** —— 一个编码代理能写文本、跑构建、读诊断；它点不了 Slate 按钮。
+- **diff 一次改动**——谁把生成率从 20 改成了 60？二进制资产回答不了这个问题；
+- **一次编辑 40 个特效**——点 40 次，还是改 40 个文本文件？
+- **审查代码**——一个包含 `.uasset` 的 PR 只展示结论，看不到任何推理过程；
+- **把工作交给代理**——编码代理能写文本、跑构建、读诊断。它没法点 Slate 按钮。
 
-文本化不是为了更"高级"，是为了让**版本控制、批量操作和自动化**这三件事重新变得可能。
+文本化不是为了更“高级”。它是为了让**版本控制、批量编辑和自动化**重新成为可能。
 
-<a id="几条设计立场"></a>
+<a id="the-stances"></a>
 
-## 几条设计立场
+## 几条立场
 
-<a id="文本是唯一真相资产是构建产物"></a>
+<a id="the-text-is-the-truth-the-asset-is-build-output"></a>
 
 ### 文本是唯一真相，资产是构建产物
 
-生成的资产上盖着溯源戳（源 hash + 生成器版本 + 模块版本 GUID）。手改它，下次重建铲掉；
-改了源码不重建，`verify` 会把它抓出来。资产随时可以删掉重建，这句话必须一直是真的，
-否则整个模型就塌了。
+生成的资产带着溯源戳：源 hash、生成器版本、模块版本 GUID。手工改它，下次重建就会把这个改动抹掉；改了源却不重建，`verify` 会把它抓出来。“资产随时可以删掉重建”这句话必须始终为真，否则整个模型就塌了。
 
-<a id="缺口必须显形绝不静默丢"></a>
+<a id="a-gap-must-be-visible-never-dropped"></a>
 
-### 缺口必须显形，绝不静默丢
+### 缺口必须显形，绝不静默丢弃
 
-反编译一个 DreamFXLang 表达不了的东西时，它**不会**悄悄丢掉：那一条会写进导出文件的头部缺口注释，
-并以一个 `DFX8xxx` 警告的形式报出来。`Adopt` 更严 —— 有任何缺口就直接拒绝接管。
+当反编译遇到 DreamFXLang 无法表达的东西时，它**不会**悄悄丢掉：这一项会作为缺口写入导出文件的头部，并以 `DFX8xxx` 警告的形式报出。`Adopt` 更严格——只要有任何缺口，它就拒绝接管该资产。
 
-一个静默降级的工具会让你在三个月后对着一个不对劲的特效发呆，而且没有任何线索。
+一个静默降级的工具，会让你在三个月后对着一个看起来不对劲的特效发呆，却没有一条线索可查。
 
-<a id="菜单是入口不是第二套实现"></a>
+<a id="a-menu-is-an-entry-point-not-a-second-implementation"></a>
 
 ### 菜单是入口，不是第二套实现
 
-编辑器里每一个按钮都调用 commandlet 调用的同一份代码。*Rebuild DFX* 能用，`dfx build -All`
-就能用，反之亦然。而且每个命令都能从 Python 调 —— 只有人手能点到的命令，是永远得不到回归测试的命令。
+编辑器里的每个按钮都调用 commandlet 调用的同一份代码。如果 *Rebuild DFX* 能用，`dfx build -All` 就能用，反之亦然。每个命令也都能从 Python 调起——一个只有人手点击才能触达的命令，就是一个永远得不到回归测试的命令。
 
-<a id="声称要能被测量"></a>
+<a id="a-claim-has-to-be-measurable"></a>
 
-### 声称要能被测量
+### 声称必须可测量
 
-「反编译是无损的」这种话不算数，除非有个东西能把它证伪。所以有四层验证：文本逐行、镜像编译、
-SimCache 运行时逐帧、以及绕开导出器的资产事实走查。第四层存在的理由很具体：前面几层比的是同一个
-导出器的两份产物，导出器自己丢掉的东西，它们对称地看不见。
+“反编译是无损的”这句话毫无意义，除非有东西能证伪它。因此有四层验证：文本逐行、镜像编译、运行时固定步长的 SimCache 对比，以及反射遍历资产本身进行对比。第四层存在的理由很具体——前面几层比较的是*同一个*导出器的两份输出，所以导出器在两边都犯的同一个损失是对称的，对它们来说不可见。
 
-<a id="不做什么"></a>
+<a id="what-it-does-not-do"></a>
 
-## 不做什么
+## 它不做什么
 
 | | |
 | --- | --- |
-| **Scratch Pad** | 不表达。Scratch Pad 脚本是资产内嵌的图，没有稳定名字 |
-| **模块内部图 lowering** | `.dfm` 的 body 落成一个 custom HLSL 节点，不铺成节点图（那是 DreamShader 已经有的那个约 1.3 万行的问题，重做一遍） |
-| **GPU/CPU 条件分支、Scalability 条件** | 未覆盖 |
-| **真正的 emitter 继承** | `from` 是**拷贝**。编辑 `.dfe` 不会反向影响已经拷过它的系统，直到它们重建 |
-| **通用表达式编译器** | 内联表达式只有算术和一张短白名单。要更多就写 `hlsl { }` 或 `.dfm` |
+| **Scratch Pad** | 无法表达。Scratch Pad 脚本是嵌入资产中的图，没有稳定的名字 |
+| **把模块体降为节点图** | 一个 `.dfm` 体变成一个自定义 HLSL 节点。把它降下来就是 DreamShader 已有的那约 1.3 万行问题，原样重现 |
+| **GPU/CPU 分支条件、Scalability 条件** | 未覆盖 |
+| **通过 `from` 的隐式原生继承** | `from` 在重建时拷贝并合并 `.dfe` 源。要用原生 Niagara 父子关系，请使用 [`inherits`](../language/native-emitter-inheritance.md) |
+| **通用表达式编译器** | 内联表达式是算术加上一份短白名单。再多的内容属于 `hlsl { }` 或 `.dfm` |
 
-完整清单与 1.0.0 的已知问题在[能力边界](../diagnostics/limitations.md)。
+完整清单，加上 1.0.0 的已知问题，都在[限制](../diagnostics/limitations.md)中。
 
-<a id="和-dreamshader-的关系"></a>
+<a id="its-relationship-to-dreamshader"></a>
 
-## 和 DreamShader 的关系
+## 它与 DreamShader 的关系
 
-[DreamShaderLang](https://lang.64hz.cn) 是同一个作者的姊妹项目，对材质做同一件事：
-`.dsm` / `.dsf` / `.dsh` 生成 `UMaterial` 与 `UMaterialFunction`。
+[DreamShaderLang](https://lang.64hz.cn) 是同一作者的姊妹项目，为材质做同样的事：`.dsm` / `.dsf` / `.dsh` 生成 `UMaterial` 和 `UMaterialFunction` 资产。
 
-两者共享设计立场（文本是源、诊断带位置、编辑器集成走同一条管线），但**不共享代码**，
-语法也不通用。一个明显的分岔：DreamShader 有一个完整的表达式编译器，DreamFX 有意不做 ——
-Niagara 的模块生态已经把"计算"这件事解决了，DreamFX 的工作是把模块**接起来**，
-而不是再发明一次算子。
+两者共享立场（文本是源、诊断携带位置、编辑器集成运行同一管线），但**不共享代码**，语法也不可互换。一个明显的分岔：DreamShader 有完整的表达式编译器，而 DreamFX 有意不做——Niagara 的模块生态已经解决了“计算”这件事，所以 DreamFX 的工作是把模块**接起来**，而不是再造运算符。
 
-<a id="名字与版本"></a>
+<a id="names-and-versions"></a>
 
 ## 名字与版本
 
@@ -92,7 +79,7 @@ Niagara 的模块生态已经把"计算"这件事解决了，DreamFX 的工作�
 | 插件 | DreamFX `1.0.0` |
 | 语言 | DreamFXLang |
 | 模块 | `DreamFX`（Runtime）、`DreamFXEditor`（Editor） |
-| commandlet | `-run=DreamFX` |
-| 驱动脚本 | `.skill/dfx.ps1`、`.skill/ci.ps1` |
+| Commandlet | `-run=DreamFX` |
+| 驱动 | `.skill/dfx.ps1`、`.skill/ci.ps1` |
 | 日志分类 | `LogDreamFX` |
 | 作者 | TypeDreamMoon · MIT |

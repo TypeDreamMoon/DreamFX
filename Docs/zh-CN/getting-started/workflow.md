@@ -1,57 +1,60 @@
 ---
-title: 日常循环
-description: 保存即重建、实时预览、批量重建闸门、必须遵守的两条硬规矩，以及提交前的四步 CI。
+title: "日常循环"
+description: "保存即重建、实时预览、批量重建闸门、两条硬规矩，以及提交前的四步 CI。"
 ---
 
-<a id="保存即重建"></a>
+<a id="save-to-rebuild"></a>
 
 ## 保存即重建
 
-编辑器监视每一个 `DFX/` 根。存盘 → 那个源码重建 → 生成的资产刷新。把生成的资产在 Niagara 编辑器里
-开着，它就是实时预览，配置成本为零。
+编辑器监视每一个 `DFX/` 根。保存源码，它就会重建，生成的资产随之刷新。
+把这个资产留在 Niagara 编辑器中打开，它就是你的实时预览，无需任何配置成本。
 
-失败的构建会弹一个带 **Open in VSCode** 链接的 toast，直接跳到出错的那一行那一列。生成资产的
-「这是自动生成的」警告条上也有一个指向源文件的链接。
+构建失败时弹出的 toast 带有 **Open in VSCode** 链接，可直接跳转到出错的行和列。
+生成资产上的“此资产为生成内容”警告也带有指向其源文件的链接。
 
-**警告：**
+> **警告：**
+>
+> ### 重建前先销毁实例
+>
+> 这一条不是可选项：**重建一个系统之前，先销毁它的实例。** 在热替换期间，
+> 一个存活的 `NiagaraActor` 可能看到构建到一半的渲染器布局，并在渲染工作线程上触发断言，
+> 这会把编辑器一起带走。
+>
+> 这是引擎的竞态问题，不是 DreamFX 能防住的。
 
-<a id="重建之前先把实例弄掉"></a>
+<a id="the-bulk-batch-is-gated"></a>
 
-### 重建之前先把实例弄掉
+## 批量批次有闸门
 
-这条不是可选项：**重建一个系统之前，先让它的实例消失。** 热替换的瞬间，活着的 `NiagaraActor`
-可能看到一个建到一半的 renderer 布局，然后在渲染 worker 上断言 —— 编辑器跟着一起走。
+重新导出内容包、切换分支，或运行脚本化改写，都会一次改动许多源文件，
+而每次重建都会为每个系统排入一次 Niagara 编译。在本项目上实测：24 个系统
+一起重建，向编译队列排入 237 个作业，编辑器直接崩溃。
 
-这是引擎侧的竞态，DreamFX 挡不住。
+因此，包含超过 **Bulk Rebuild Threshold** 个文件（*Project Settings ▸ Plugins ▸
+DreamFX*，默认 8）的批次会被**询问**而不是直接构建：
 
-<a id="批量重建有闸门"></a>
+> DreamFX：一次有 *N* 个源文件发生变更。现在全部重建会排入数百个 Niagara
+> 编译。 — **立即重建**
 
-## 批量重建有闸门
+这些文件会被保留，而不是丢弃：丢弃它们会让资产停留在过期状态且无人察觉，
+这正是这道闸门要防止的失败，只是更安静。如果 toast 过期了，*Tools
+▸ DreamFX ▸ Rebuild DFX* 起到相同作用。
 
-重新导出一个内容包、切个分支、跑个脚本改写，一次会动很多源码，而每个系统的重建都会往编译队列里
-塞一批 Niagara 编译作业。在这个项目上量过：24 个系统一起重建 = 237 个作业，编辑器直接躺下。
+普通保存永远不会被闸门拦截——单个文件，或任何不超过阈值的批次，都会
+立即重建，因为这条路径就是迭代循环。显式的 *Rebuild DFX* 也不会被拦截：
+那是明确要求的。
 
-所以超过 **Bulk Rebuild Threshold**（*Project Settings ▸ Plugins ▸ DreamFX*，默认 8）个文件的批次
-不会自动建，而是**问你**：
+> **提示：**
+>
+> 这道闸门最初是依据另一套理论写的——认为危险来自监视器在编辑器关闭期间
+> 重放所有变更——而实测否定了它。
+> `RegisterDirectoryChangedCallback_Handle` 在注册时就开始监视，且不报告任何积压：
+> 编辑器关闭时改动十二个文件，重新打开后**什么都没有发生**。真正造成伤害的批次
+> 是在编辑器打开时到达的。修复前用十二个文件实测：54 次
+> Niagara 系统编译和八次编译池饱和。修复后：只弹 toast，在你要求之前什么都不构建。
 
-> DreamFX: *N* source files changed at once. Rebuilding them all now would queue hundreds of Niagara
-> compiles. — **Rebuild them now**
-
-文件是**留着**的，不是丢掉的 —— 丢掉会留下一堆过期资产而没人知道，那正是这道闸门要防的事，
-只是更安静。toast 过期了也没关系，*Tools ▸ DreamFX ▸ Rebuild DFX* 做同一件事。
-
-普通的一次保存永远不过闸（一个文件，或不超过阈值的批次都立刻建），显式点的 *Rebuild DFX* 也不过闸 ——
-那是你要求的。
-
-**提示：**
-
-这道闸门最早是照另一个理论写的：以为危险来自「编辑器关着时改的东西在开机时被 watcher 重放」。
-  测量否掉了它 —— `RegisterDirectoryChangedCallback_Handle` 从注册时刻开始监视，不报积压：
-  关着编辑器改 12 个文件，重开后**什么都没有发生**。真正伤人的批次是编辑器**开着**时到达的那种。
-  修之前用 12 个文件量到：54 次 Niagara 系统编译、8 次编译池饱和；修之后：一个 toast，
-  在你点之前什么都不建。
-
-<a id="提交之前"></a>
+<a id="before-you-commit"></a>
 
 ## 提交之前
 
@@ -59,61 +62,66 @@ description: 保存即重建、实时预览、批量重建闸门、必须遵守�
 pwsh -File Plugins/DreamFX/.skill/ci.ps1
 ```
 
-四步，每一步抓的东西别的步骤抓不到：
+四步，每一步都能抓到其他步骤抓不到的东西：
 
-| 步骤 | 抓什么 |
+| 步骤 | 能抓到什么 |
 | --- | --- |
-| `lint` | GPU emitter 没有 bounds、按速率生成没有上限、用了随机没设种子 |
-| `build` | 任何让文本变不成资产的东西 |
-| `verify` | **源码改了、没重建、连着提交了** —— 只跑 build 永远看不见，因为 build 会把它修好 |
-| `corpus` | 行为变了而不是坏了：诊断挪位、拓扑漂移、反编译失去幂等 |
+| `lint` | 没有边界的 GPU 发射器、没有上限的生成速率、没有种子的随机性 |
+| `build` | 任何阻止文本变成资产的问题 |
+| `verify` | **源码被编辑并提交却没有重建**——只跑 build 会通过，因为 build 会把它修好 |
+| `corpus` | *行为*发生变化而非破坏：诊断移动、拓扑漂移、反编译失去幂等性 |
 
-`verify` 是最值得理解的一步。它拿每个资产的溯源戳去比它的源码：对不上，意味着提交进去的资产和
-提交进去的文本互相矛盾 —— 这件事换任何别的手段都看不见。
+`verify` 是最值得理解的一个。它把每个资产的溯源戳与其
+源文件进行比对；不匹配意味着提交的资产与提交的文本不一致，这在
+其他任何方式下都是不可见的。
 
-**警告：**
+> **警告：**
+>
+> **先关闭编辑器。** `build` 和 `corpus` 会写入 `.uasset` 文件，而打开同一项目的编辑器
+> 也会写入这些文件——谁后保存谁就赢，而且没有任何提示。该运行时若检测到编辑器进程会发出警告，
+> 但它无法判断那个编辑器打开的是哪个项目，所以这个警告只是建议，不是闸门。
 
-**先关编辑器。** `build` 和 `corpus` 写 `.uasset`，编辑器开着也在写同一批。谁后存谁赢，
-  而且谁都不吭声。CI 看见有编辑器进程会警告，但它不知道那个编辑器开的是哪个项目，所以是建议不是门。
+<a id="the-shape-of-a-day"></a>
 
-<a id="一天里的形状"></a>
+## 一天的形状
 
-## 一天里的形状
 
-<a id="写"></a>
+<a id="write"></a>
 
-### 写
+### 编写
+在 VSCode 中编辑 `.dfs`（*Tools ▸ DreamFX ▸ Open DreamFX Workspace* 会为你设置好工作区）。
+补全和悬停提示来自 `DFX/.dfx-index.json`；在引擎升级后
+或启用新的内容插件时，重新运行 `dfx.ps1 index`。
 
-在 VSCode 里编辑 `.dfs`（*Tools ▸ DreamFX ▸ Open DreamFX Workspace* 一键开好 workspace）。
-补全和 hover 来自 `DFX/.dfx-index.json`，换了引擎或启用了新内容插件之后跑一次 `dfx.ps1 index` 刷新。
+<a id="save"></a>
 
-<a id="存"></a>
+### 保存
+保存即重建。Niagara 预览会刷新。若失败，toast 上的 **Open in VSCode** 链接
+会定位到对应行。
 
-### 存
-存盘即重建。Niagara 预览窗口刷新。出错的话点 toast 上的 **Open in VSCode** 跳到那一行。
+<a id="check"></a>
 
-<a id="查"></a>
+### 检查
+当输入名称不确定时，运行 `dfx.ps1 schema <Module> -Stack <Stack>`——它运行
+与构建相同的探测，因此由静态开关揭示的输入也会显示出来。
 
-### 查
-拿不准模块的输入名，跑 `dfx.ps1 schema <Module> -Stack <Stack>` —— 它跑的是和构建同一条探测，
-静态开关揭示出来的输入也在里面。
-
-<a id="提交"></a>
+<a id="commit"></a>
 
 ### 提交
-关编辑器，跑 `ci.ps1`，绿了再提交。
+关闭编辑器，运行 `ci.ps1`，绿了就提交。
 
-<a id="想知道自己的内容能被覆盖多少"></a>
 
-## 想知道自己的内容能被覆盖多少
+<a id="asking-the-coverage-question-of-your-own-content"></a>
 
-这个问题不该靠别人的数字回答，自己量：
+## 针对你自己的内容提出覆盖率问题
+
+这个问题不该用别人的数字来回答。自己测量：
 
 ```bash
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 coverage
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile-all -Path=/Game/VFX
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 mirror-diff       # L1 文本 + L2 编译
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 asset-diff        # 资产事实，不经导出器
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 mirror-diff       # L1 text + L2 compile
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 asset-diff        # facts, independent of the exporter
 ```
 
-见[往返与等价](../generation/roundtrip.md)。
+参见[往返与等价](../generation/roundtrip.md)。

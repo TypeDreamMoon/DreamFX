@@ -1,19 +1,11 @@
 {
   "version": 1,
+  "origin": "ai",
   "sourceFile": "Docs/tools/headless-compilation.md",
+  "sourceHash": "0b0868e9b4650738f13b7ab091c8228b703740fb976c229dfd0b51cce0da9690",
+  "sourceRevision": "6677fe4ed04df8f491f7a24fbf6da8afe207dfa0",
+  "source": "# Headless Niagara compilation\n\nA system build, including `dfx.ps1 build <system.dfs> -Force`, requests Niagara compilation and waits\nfor the resulting executable data before stamping or saving the asset. CPU scripts must contain VM\nbytecode and a valid compile ID matching the current source. Active or queued compilation, stale\nresults, missing bytecode, and errors from a second compile after renderer-binding refresh all fail\nthe build. A previously successful compile status does not satisfy those checks.\n\nNiagara inlines referenced modules into system executables. After changing and rebuilding a `.dfm`,\nrebuild every consuming `.dfs` (or rebuild the source tree). System stamps include the selected\nmodules' compile inputs, including modules reached through native parent emitters, so a module\ncontent change invalidates an ordinary build even without `-Force`. Updating only the module asset\ndoes not update a saved system's executable.\n\nThe engine's `Compiling System ...` log appears when shader workers actually compiled jobs. A derived\ndata cache hit can install current VM data without that log; the absence of the line is not a failure\ncriterion. `-NoShaderCompile` and `-PrecompiledShadersOnly` prevent Niagara compilation and must not be\nused for package-writing DreamFX builds.\n\nHeadless Null RHI checks CPU VM compilation and GPU translation data. They do not prove that a GPU\neffect renders correctly; run the generated GPU system in an editor with a graphics RHI for that check.\n\n`DreamFX.Regression.Compile.ModuleChangeUpdatesVm` changes an actual referenced module's HLSL,\nrebuilds the same system without `-Force`, and checks the new compiled constant, bytecode/literal\ndata, and source ID for direct calls and native inherited stacks. It checks that an unchanged module\nstill allows a cache hit, then removes bytecode while preserving the successful status to verify that the completion gate\nrejects an incomplete executable. The test creates unsaved assets under a unique `/Game` path.\n\n## Incremental builds\n\nA command-line build is a full rebuild by default: CI and the verify gate want the full rebuild's\nanswer, not one that depends on what the asset held before. `-Incremental` opts in to the\n[incremental build](incremental-builds.md) the editor uses on save:\n\n```powershell\npwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Samples/NS_Spark.dfs -Incremental\nUnrealEditor-Cmd.exe <Project>.uproject -run=DreamFX -File=<file> -Incremental\n```\n\nThe build compares the new plan with the digest the last build stored in the asset and writes only the\ndifference, falling back to the full rebuild when it cannot trust the digest. Each file logs one line:\n\n```text\nincremental: 0 emitter(s) and 1 stack(s) rebuilt, 3 input(s) written, 1 reset, nothing to recompile\nfull rebuild (the asset changed since its last build)\n```\n\nAn incremental build requests an ordinary, non-forced Niagara compile, which recompiles only the\nscripts whose graphs the writes reached — value writes that only land on rapid-iteration parameters\nusually reach none. A full rebuild still forces the compile. Either way the build verifies the compiled\nstate afterwards, with the checks above, and forces a recompile if anything is stale.\n\nA one-value edit on a 1230-line system writes in ~0.2 s; the commandlet run takes ~3 s, most of it\nprocess startup and a cold module probe that a running editor caches. Planning reuses one module\nlibrary per process, so those probes are made once per run rather than once per build.\n\nDo not use `-Incremental` in a gate. `verify` and `ci.ps1` do not need it, and a gate that builds\nshould build in full.\n",
   "translationFile": "Docs/zh-CN/tools/headless-compilation.md",
-  "sourceHash": null,
-  "importedSourceHash": "92cde1684eceae51e0fb222d77f3c7666c9170a452a7e3b6df1829d1524cdd29",
-  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
-  "translationHash": "9cd153977b914ff8f75983fc831eaa07f66bc728b0079a49b2e5063a03100277",
-  "origin": "website-import",
-  "importedFrom": [
-    "tools/cli"
-  ],
-  "pageMetadata": {
-    "tools/cli": {
-      "title": "dfx.ps1 命令行",
-      "description": "headless 驱动的每一个子命令与参数：build、verify、lint、decompile、mirror-diff、asset-diff、coverage、schema、index、corpus。"
-    }
-  }
+  "translationHash": "c8601b5824f0611e14f2d81b0e0383f7c6b02f2fbcce754a1a114aa6b9f4b590",
+  "model": "deepseek-flash"
 }

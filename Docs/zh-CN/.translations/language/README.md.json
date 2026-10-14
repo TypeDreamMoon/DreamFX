@@ -1,19 +1,11 @@
 {
   "version": 1,
+  "origin": "ai",
   "sourceFile": "Docs/language/README.md",
+  "sourceHash": "a757be5741ea751e109e7a46f33999b9c5d949860079686198ca4244a4b35412",
+  "sourceRevision": "6677fe4ed04df8f491f7a24fbf6da8afe207dfa0",
+  "source": "# DreamFXLang reference\n\nThe language, split by what you are writing. Where a rule exists because the engine forced it —\nwhy the stack is a statement list, why the expression whitelist is short, why `#Region` is only a\ncomment — the page says so where the rule is stated.\n\n| Page | Covers |\n| --- | --- |\n| [dfs.md](dfs.md) | `.dfs` — a system: user parameters, system stacks, emitters, renderers |\n| [dfe.md](dfe.md) | `.dfe` — a reusable emitter, and what `from` does to it |\n| [system-inheritance.md](system-inheritance.md) | `.dfs` source parents, overrides, dependency rebuilding, and cycle errors |\n| [native-emitter-inheritance.md](native-emitter-inheritance.md) | Native Niagara emitter parents with `inherits` |\n| [dfm.md](dfm.md) | `.dfm` — a module or dynamic input, and which engines can generate one |\n| [values.md](values.md) | Every value position, the type rules, and the eight `L*` rules by name |\n\n## Shape of every file\n\nOne top-level object, declared with the same header everywhere:\n\n```cpp\n<Kind>(Name=\"<path under the root>\", Root=\"<root token>\")\n{\n    ...\n}\n```\n\n`Kind` is `System`, `Emitter`, `Module` or `DynamicInput`, and has to agree with the file extension\n(DFX2021). `Root` is `Game`, empty (the same thing), or `Plugin.<PluginName>`; `Name` is the asset\npath relative to that root's content directory.\n\nSystems additionally accept `Parent=\"../Base.dfs\"` for [source inheritance](system-inheritance.md).\nAn emitter declaration can use `inherits \"/Game/FX/NE_Base\"` for a\n[native Niagara parent](native-emitter-inheritance.md). Emitter `from` keeps its source-copy semantics;\nedits to the `.dfe` rebuild dependent systems through the source watcher.\n\nBlocks are `Name = { ... }`, statements end in `;`, and `//` and `/* */` are comments.\nAttributes hang off a declaration in brackets: `[ Group=\"Burst\"; SortPriority=10 ]`.\nInside `Properties` / `Inputs`, `Group(\"Name\") { ... }` scopes stamp those two attributes onto\nevery parameter they contain — see [dfs.md](dfs.md).\n\n## What is deliberately not here\n\n- **`MaterialParam`.** Reserved (L8), not implemented (DFX5093).\n- **Anything that would need a general expression compiler.** See L6 in [values.md](values.md).\n",
   "translationFile": "Docs/zh-CN/language/README.md",
-  "sourceHash": null,
-  "importedSourceHash": "a757be5741ea751e109e7a46f33999b9c5d949860079686198ca4244a4b35412",
-  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
-  "translationHash": "caaf3617eeeb2c636e376a9aa80fdd836b620c3f867a564240a7214e20271e28",
-  "origin": "website-import",
-  "importedFrom": [
-    "language/overview"
-  ],
-  "pageMetadata": {
-    "language/overview": {
-      "title": "文件模型",
-      "description": "每个 DreamFXLang 文件的形状：头、块、语句、注释、属性，以及八条 L 规则的索引。"
-    }
-  }
+  "translationHash": "cc18fe52100981ad2a335258fa1e33a3063f609de278e65ffd4ea59377599f38",
+  "model": "deepseek-flash"
 }

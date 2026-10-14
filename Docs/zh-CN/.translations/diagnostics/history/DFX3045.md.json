@@ -1,19 +1,11 @@
 {
   "version": 1,
+  "origin": "ai",
   "sourceFile": "Docs/diagnostics/history/DFX3045.md",
+  "sourceHash": "90bf867048046cb47399228ec447fc373f88c93875fefbf86af2500c80abd1f0",
+  "sourceRevision": "6677fe4ed04df8f491f7a24fbf6da8afe207dfa0",
+  "source": "## DFX3045\n\n**Historical diagnostic.** This code is no longer emitted by the current source tree. The section\nis retained so older diagnostic links remain usable; it is not part of the generated active-code list.\n\nThe earlier error was:\n\n```text\n'%s' is not a type a particle attribute can have.\n```\n\nIt described a particle-attribute declaration in a `.dfm` body using a type that was not a Niagara\nvalue type. The historical fix was to use a supported DSL value type such as `float`, `int`,\n`bool`, `Vector2`, `Vector`, `Vector4`, `Color`, `Position` or `Quat`. For current authoring rules,\nsee [modules and dynamic inputs](../../language/dfm.md) and [values and types](../../language/values.md).\n",
   "translationFile": "Docs/zh-CN/diagnostics/history/DFX3045.md",
-  "sourceHash": null,
-  "importedSourceHash": "90bf867048046cb47399228ec447fc373f88c93875fefbf86af2500c80abd1f0",
-  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
-  "translationHash": "e86ba4a08956f0ecbbcc0bed967b6b5f67027a52fc1c1465eb26409164e7f83b",
-  "origin": "website-import",
-  "importedFrom": [
-    "diagnostics/dfx3xxx"
-  ],
-  "pageMetadata": {
-    "diagnostics/dfx3xxx": {
-      "title": "DFX3xxx — 声明与文档结构",
-      "description": "DFX3xxx 段的全部诊断码，每条带严重级别、逐字消息、成因与修法。"
-    }
-  }
+  "translationHash": "9e80c332208e01a4e09b9b3bddc19d4fde06b7f4b9bca98277ebe864e70a1f64",
+  "model": "deepseek-flash"
 }
