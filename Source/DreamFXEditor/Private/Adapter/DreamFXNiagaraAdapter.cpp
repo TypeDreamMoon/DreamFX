@@ -44,6 +44,7 @@
 #include "Misc/EngineVersionComparison.h"
 #include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
+#include "ScopedTransaction.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/Package.h"
@@ -376,6 +377,29 @@ namespace UE::DreamFX::Editor
 			UNiagaraSystem* System = nullptr;
 			EStructuralKind Kind = EStructuralKind::Unrefreshed;
 		};
+
+		/**
+		 * The script group an address names, in the view model the given context works through.
+		 *
+		 * Null wherever that cannot be resolved -- an engine without the external edit API, a stack the
+		 * lookup does not address (event handlers, simulation stages) -- and every caller treats null as
+		 * "take the engine's own path", never as an error.
+		 */
+		UNiagaraStackScriptItemGroup* ResolveContextScriptGroup(FNiagaraExternalEditContext* Context,
+			const FStackAddress& Address)
+		{
+#if DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT
+			const TSharedPtr<FNiagaraSystemViewModel> ViewModel = Context != nullptr
+				? Context->*GDreamFXEditContextViewModel : nullptr;
+			ENiagaraScriptUsage Usage;
+			return ViewModel.IsValid() && StackLookup::ScriptUsageFromName(Address.ScriptName, Usage)
+				? StackLookup::FindScriptGroup(*ViewModel, Address.EmitterName, Usage) : nullptr;
+#else
+			(void)Context;
+			(void)Address;
+			return nullptr;
+#endif
+		}
 
 		/**
 		 * Rewrites the `{"refPath": "..."}` spelling of an object reference to the bare path string,
@@ -1433,18 +1457,11 @@ namespace UE::DreamFX::Editor
 		// stack the lookup does not address (event handlers, simulation stages), an engine without
 		// the external edit API -- still drops it, and -RebuildOnSwitch makes that unconditional.
 		UNiagaraSystem* System = ModuleAddress.System;
-#if DREAMFX_HAS_NIAGARA_EXTERNAL_EDIT
 		if (!GRebuildContextOnSwitch && System != nullptr)
 		{
 			const TSharedPtr<FNiagaraExternalEditContext>* Shared = GSharedContexts.Find(System);
-			FNiagaraExternalEditContext* Context = Shared != nullptr ? Shared->Get() : nullptr;
-			const TSharedPtr<FNiagaraSystemViewModel> ViewModel = Context != nullptr
-				? Context->*GDreamFXEditContextViewModel : nullptr;
-
-			ENiagaraScriptUsage Usage;
-			UNiagaraStackScriptItemGroup* Group = ViewModel.IsValid()
-				&& StackLookup::ScriptUsageFromName(ModuleAddress.ScriptName, Usage)
-				? StackLookup::FindScriptGroup(*ViewModel, ModuleAddress.EmitterName, Usage) : nullptr;
+			UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(
+				Shared != nullptr ? Shared->Get() : nullptr, ModuleAddress);
 			if (UNiagaraStackModuleItem* Module = Group != nullptr
 				? StackLookup::FindModuleItem(*Group, ModuleAddress.ModuleName) : nullptr)
 			{
@@ -1455,7 +1472,6 @@ namespace UE::DreamFX::Editor
 				return;
 			}
 		}
-#endif
 		EndStructuralEpoch(System);
 	}
 
@@ -2614,8 +2630,30 @@ namespace UE::DreamFX::Editor
 		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context,
 			UNiagaraExternalEditUtilities::EModuleTopologyDetail::HeaderOnly, bDeferStackRefresh);
 #else
-		// Stock engine: neither knob exists. The topology comes back fully populated and the stack
-		// refreshes on every add, so a stack of n modules pays n refreshes instead of one.
+		// Stock engine: the API has no deferred add, so a deferred one is MoonEngine's done here -- the
+		// node goes into the graph and nothing else happens: no group refresh, no PostEditChangeProperty
+		// (whose RefreshAll rebuilds every emitter's stack view models), no topology walk. The batch's
+		// closing RefreshScriptStack pays the refresh and the broadcast once. An insert after a named
+		// module, or a stack the lookup cannot resolve, takes the API's per-add path as before.
+		if (bDeferStackRefresh && StackAddress.ModuleName.IsNone())
+		{
+			UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(&Context, StackAddress);
+			if (UNiagaraNodeOutput* OutputNode = Group != nullptr ? Group->GetScriptOutputNode() : nullptr)
+			{
+				const FScopedTransaction Transaction(NSLOCTEXT("DreamFX", "AddModule", "DreamFX Add Module"));
+				StackAddress.System->Modify();
+				const FVersionedNiagaraScriptData* Latest = ModuleAsset->GetLatestScriptData();
+				UNiagaraNodeFunctionCall* AddedNode = FNiagaraStackGraphUtilities::AddScriptModuleToStack(
+					ModuleAsset, *OutputNode, INDEX_NONE, FString(), Latest != nullptr ? Latest->Version.VersionGuid : FGuid());
+				if (AddedNode == nullptr)
+				{
+					OutErrors.Add(FString::Printf(TEXT("The stack refused module '%s'."), *ModuleAsset->GetName()));
+					return false;
+				}
+				OutModuleName = FName(*AddedNode->GetFunctionName());
+				return true;
+			}
+		}
 		UNiagaraExternalEditUtilities::AddModule(ToReference(StackAddress), ModuleAsset, Topology, Context);
 #endif
 
@@ -2637,8 +2675,17 @@ namespace UE::DreamFX::Editor
 		FOpTimer OpTimer(TEXT("RefreshScriptStack"));
 
 #if !DREAMFX_HAS_NIAGARA_FAST_EDIT
-		// Stock engine: nothing to settle. This call exists to pay, once, the refresh that a batch of
-		// deferred adds skipped -- and without bDeferStackRefresh every add already paid its own.
+		// Stock engine: what MoonEngine's RefreshScriptStack does, on exported members -- the group's
+		// children rebuilt from the graph, then the one PostEditChangeProperty the deferred adds
+		// skipped. If the stack does not resolve, its adds took the API's path and refreshed themselves.
+		FEpochGuard Epoch(StackAddress.System, EStructuralKind::RefreshedInPlace);
+		FEditContext ContextHolder(StackAddress.System);
+		if (UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(&ContextHolder.Get(), StackAddress))
+		{
+			Group->RefreshChildren();
+			FPropertyChangedEvent PropertyChangedEvent(nullptr, EPropertyChangeType::ValueSet);
+			StackAddress.System->PostEditChangeProperty(PropertyChangedEvent);
+		}
 		return true;
 #else
 		// The refresh IS the in-place refresh a batch of deferred adds owes: after it the shared
