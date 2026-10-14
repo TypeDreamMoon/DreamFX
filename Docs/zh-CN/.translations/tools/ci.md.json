@@ -1,19 +1,11 @@
 {
   "version": 1,
+  "origin": "ai",
   "sourceFile": "Docs/tools/ci.md",
+  "sourceHash": "b973f3c8a538e79f8d5bccbfed0e4e3d565cbbc3f381315f2393eebbd2eb27f9",
+  "sourceRevision": "6677fe4ed04df8f491f7a24fbf6da8afe207dfa0",
+  "source": "---\ntitle: ci.ps1 and gates\ndescription: What each of the four CI steps catches, which switches to use where, the docs drift check, and a minimal pipeline.\n---\n\n```bash\npwsh -File Plugins/DreamFX/.skill/ci.ps1\n```\n\nOne command, four steps, ordered so the fastest failure comes first:\n\n\n### `lint -All`\nSource only, no asset access, so it fails fastest. Catches: a GPU emitter with no bounds, an uncapped\nspawn rate, randomness with no seed, a renderer with no material.\n\n### `build -All -Force`\nEvery `.dfs` and `.dfm` generates, and its Niagara compile is clean. `-Force` is the point — a gate\nmust not skip anything because \"the hash did not move\".\n\n### `verify -All`\nEvery generated asset's stamp matches its source. **This is the step that catches the case nobody\nnotices**: someone edited a `.dfs`, did not rebuild, and committed both. Build alone would pass,\nbecause build fixes it.\n\n### `corpus`\nThe `Tests/Corpus` suites: diagnostics by code and position, golden topologies, decompile\nidempotence. **It catches a behaviour changing rather than breaking.**\n\n\nExit code 0 means all four passed; anything else is the first failing step's code.\n\n> **Note:**\n>\n> Why step 4 is worth its cost: almost everything DreamFX knows about Niagara was established by\n> **experiment**, not guaranteed by a type. The corpus is what makes a quiet change in any of it fail.\n\n## Switches\n\n| Switch | When |\n| --- | --- |\n| `-SkipBuild` | a check-only gate that must not write to the working tree. `verify` then reports any source that has not been built |\n| `-SkipCorpus` | a quick local check. **Never** for the gate — the corpus boots the editor and costs more than the other three steps put together, so skipping it means skipping behavioural regression |\n| `-CleanNew` | delete assets the build newly created, for a gate that leaves no trace. `verify` is skipped in that case: the assets it would check were just deleted on purpose |\n| `-Project` / `-Engine` | name the project and engine root explicitly |\n\n> **Warning:**\n>\n> **Run it with the editor closed.** Steps 2 and 4 write `.uasset` files, and an editor open on the\n> same project writes them too — whichever saves second wins, and neither says so.\n\n## The docs must not drift\n\n```bash\npwsh -File Plugins/DreamFX/.skill/gen-diagnostics.ps1 -Check\n```\n\nHalf of the diagnostics documentation is **machine-written**: the sources are scanned for\n`Diagnostics.Error/Warning/Info(TEXT(\"DFXnnnn\"), ...)` and one page per thousand-range is written,\nwith a section per code holding its severity, message template and the place that raises it. The\nhuman half — cause and fix — is carried across untouched.\n\n`-Check` turns it into a gate: exit 1 if the pages are out of date. That is how CI notices a new code\nnobody documented.\n\n> **Note:**\n>\n> The reason for splitting it this way is direct: **the half that rots (which codes exist, what they\n> say) is regenerated, and the half that does not (why it happens) is written once.**\n\n## A minimal pipeline\n\n```yaml\n# Sketch: any CI is these four steps plus the docs gate\nsteps:\n  - run: pwsh -File Plugins/DreamFX/.skill/gen-diagnostics.ps1 -Check\n  - run: pwsh -File Plugins/DreamFX/.skill/ci.ps1\n```\n\nWhat it needs first: a Windows machine, a resolvable engine (`UE_ENGINE_ROOT` or a registered\n`EngineAssociation`), the same content plugins the authoring project enables, and **no editor open on\nthe project**.\n\n## Deeper checks\n\nBeyond the four steps, a few things are worth running on a release round rather than every commit:\n\n```bash\ndfx.ps1 verify -All -StrictVersions   # module version drift becomes an error\ndfx.ps1 mirror-diff                    # L1 text + L2 compile\ndfx.ps1 asset-diff                     # asset facts, routing around the exporter\ndfx.ps1 coverage                       # coverage, bucketed by feature\n```\n\nSee [round trip and equivalence](../generation/roundtrip.md).\n",
   "translationFile": "Docs/zh-CN/tools/ci.md",
-  "sourceHash": null,
-  "importedSourceHash": "b973f3c8a538e79f8d5bccbfed0e4e3d565cbbc3f381315f2393eebbd2eb27f9",
-  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
-  "translationHash": "8a4d6052ecce7ad2690cacc9909f88a3a3375a301cae3aee582f4d10344d707c",
-  "origin": "website-import",
-  "importedFrom": [
-    "tools/ci"
-  ],
-  "pageMetadata": {
-    "tools/ci": {
-      "title": "ci.ps1 与门禁",
-      "description": "四步 CI 各自抓什么、参数怎么选、文档漂移检查，以及一条能放进流水线的最小配置。"
-    }
-  }
+  "translationHash": "a1a0da43273cb2f55a2eec489090371f93006784f750849dd26295a57f18c587",
+  "model": "deepseek-flash"
 }

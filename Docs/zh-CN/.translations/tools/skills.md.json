@@ -1,19 +1,11 @@
 {
   "version": 1,
+  "origin": "ai",
   "sourceFile": "Docs/tools/skills.md",
+  "sourceHash": "3b4692527f649611afd7ec009321c1a6bc9d6429f19fdb4acc51bd6016d51acb",
+  "sourceRevision": "6677fe4ed04df8f491f7a24fbf6da8afe207dfa0",
+  "source": "---\ntitle: Agent skills\ndescription: The four skills that ship with the plugin, and the \"read the schema first\" loop an agent has to follow when writing DreamFXLang.\n---\n\nThe plugin ships four agent skills under\n[`.skill/`](https://github.com/TypeDreamMoon/DreamFX/tree/main/.skill). They are instructions for a\ncoding agent (Claude Code and the like): how to author, build, debug and migrate effects, all\nheadlessly.\n\n| Skill | What it does |\n| --- | --- |\n| `dream-fx-create` | Writes a new `.dfs` / `.dfe` / `.dfm` from a plain-language description, then **builds it to prove it compiles** |\n| `dream-fx-verify` | Builds or checks headlessly: one file, or the whole DFX tree. The harness the other three call |\n| `dream-fx-diagnose` | Takes a `DFXnnnn`, looks up the cause, explains it, fixes the source |\n| `dream-fx-decompile` | Exports an existing Niagara system to source, or answers \"how much of this project's VFX is expressible\" |\n\n## The step everyone skips\n\n`dream-fx-create` is a five-step loop, and step 2 is the one that matters:\n\n\n### Find the modules\n`dfx.ps1 list` prints every module the search paths expose.\n\n### Read their real signatures\n`dfx.ps1 schema <Module>` — **once per module you intend to call.**\n\nThis is the step people skip and then spend twenty minutes on. Module input names are read off real\nassets: names with spaces, inputs revealed by a static switch, inputs that only exist in one stack.\nNobody — including a model — can guess them reliably.\n\n### Write the file\nUnder a `DFX/` root.\n\n### Build it\n`dfx.ps1 build <file> -Force`.\n\n### Fix and repeat\nDiagnostics carry line and column; look the code up in [diagnostics](../diagnostics/overview.md).\n\n\n> **Note:**\n>\n> **The proving is not optional.** \"It looks right\" means nothing here — only a green build says the\n> module names, the input names, the types and the switch ordering are all correct. That is why one\n> of the four skills is nothing but a build gate.\n\n## Wiring them into your own agent\n\nThe skills are plain text plus `dfx.ps1`, with no other dependency. To use them in your project:\n\n1. let the agent run `pwsh`;\n2. make the engine resolvable (`UE_ENGINE_ROOT` or a registered `EngineAssociation`);\n3. **package-writing commands need the editor closed** — make sure the agent knows;\n4. drop the four `SKILL.md` files from `.skill/` into your agent's skills directory.\n\n## Why this language suits agents\n\nNot because of the era — because of three concrete things:\n\n- **The text is the only authoring surface.** An agent can write text; it cannot click a Slate\n  button.\n- **Diagnostics carry a stable code and a position.** `DFX3003` is always the same failure mode, and\n  the line and column point at the token — a feedback channel a program can consume, rather than a\n  paragraph of prose.\n- **The build is headless and has an exit code.** \"Is it right\" has an answer that does not need a\n  pair of eyes.\n\nAll three are just as good for humans. Agents only make the requirement — that the feedback channel\nbe machine-readable — harder to ignore.\n",
   "translationFile": "Docs/zh-CN/tools/skills.md",
-  "sourceHash": null,
-  "importedSourceHash": "3b4692527f649611afd7ec009321c1a6bc9d6429f19fdb4acc51bd6016d51acb",
-  "sourceRevision": "92cdd2c7a3e7ab9677d502af97b43ebd59f2f8fa",
-  "translationHash": "a332f47dc57fd34d019fc94531e522290a14e08ea5a43668fcf5f679d80be443",
-  "origin": "website-import",
-  "importedFrom": [
-    "tools/skills"
-  ],
-  "pageMetadata": {
-    "tools/skills": {
-      "title": "AI 技能",
-      "description": "插件自带的四个 agent 技能，以及一个编码代理写 DreamFXLang 时那条\"必须先读 schema\"的循环。"
-    }
-  }
+  "translationHash": "9d7dc6272b61672cacda78f113dc31cb63968b654add994b8535b3623f0f34f8",
+  "model": "deepseek-flash"
 }
