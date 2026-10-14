@@ -561,6 +561,37 @@ namespace UE::DreamFX::Editor
 #endif
 		}
 
+		/** Where a module stands in the context a write scope is sharing. */
+		enum class EModuleInContext
+		{
+			/** No shared context, or its stack for the module cannot be resolved. */
+			Unresolved,
+			/**
+			 * The stack resolves and has no item for the module: it was added to the graph by a
+			 * deferred add whose batch has not refreshed the stack yet. Nothing in the context has
+			 * seen it, so changing it cannot leave the context describing something stale -- the
+			 * batch's refresh builds its item from the graph as it is then.
+			 */
+			Pending,
+			/** The context has an item for it. */
+			Present,
+		};
+
+		EModuleInContext FindModuleInSharedContext(const FStackAddress& ModuleAddress, UNiagaraStackModuleItem*& OutItem)
+		{
+			OutItem = nullptr;
+			const TSharedPtr<FNiagaraExternalEditContext>* Shared = ModuleAddress.System != nullptr
+				? GSharedContexts.Find(ModuleAddress.System) : nullptr;
+			UNiagaraStackScriptItemGroup* Group = ResolveContextScriptGroup(
+				Shared != nullptr ? Shared->Get() : nullptr, ModuleAddress);
+			if (Group == nullptr)
+			{
+				return EModuleInContext::Unresolved;
+			}
+			OutItem = StackLookup::FindModuleItem(*Group, ModuleAddress.ModuleName);
+			return OutItem != nullptr ? EModuleInContext::Present : EModuleInContext::Pending;
+		}
+
 		/**
 		 * Rewrites the `{"refPath": "..."}` spelling of an object reference to the bare path string,
 		 * throughout a property JSON blob.
@@ -2902,11 +2933,36 @@ namespace UE::DreamFX::Editor
 	bool FNiagaraAdapter::SetModuleEnabled(const FStackAddress& ModuleAddress, bool bEnabled, TArray<FString>& OutErrors)
 	{
 		FOpTimer OpTimer(TEXT("SetModuleEnabled"));
-		FEpochGuard Epoch(ModuleAddress.System);
-		FEditContext ContextHolder(ModuleAddress.System);
-		FNiagaraExternalEditContext& Context = ContextHolder.Get();
-		UNiagaraExternalEditUtilities::SetModuleEnabled(ToReference(ModuleAddress), bEnabled, Context);
-		return Drain(Context, OutErrors);
+
+		// What the engine does is UNiagaraStackModuleItem::SetIsEnabledInternal: the node's enabled
+		// state, the item's own flag, and a request for a deferred full refresh -- which a commandlet
+		// never runs, so the context used to be dropped. The module's own refresh covers what that
+		// request is for; a module the context has not seen yet needs nothing.
+		UNiagaraStackModuleItem* Item = nullptr;
+		const EModuleInContext Where = FindModuleInSharedContext(ModuleAddress, Item);
+
+		bool bOk = false;
+		{
+			FEditContext ContextHolder(ModuleAddress.System);
+			FNiagaraExternalEditContext& Context = ContextHolder.Get();
+			UNiagaraExternalEditUtilities::SetModuleEnabled(ToReference(ModuleAddress), bEnabled, Context);
+			bOk = Drain(Context, OutErrors);
+		}
+
+		if (Where == EModuleInContext::Present)
+		{
+			Item->RefreshChildren();
+			EndEpoch(ModuleAddress.System, EStructuralKind::RefreshedInPlace);
+		}
+		else if (Where == EModuleInContext::Pending)
+		{
+			EndEpoch(ModuleAddress.System, EStructuralKind::RefreshedInPlace);
+		}
+		else
+		{
+			EndEpoch(ModuleAddress.System);
+		}
+		return bOk;
 	}
 
 	bool FNiagaraAdapter::AddSetParametersModule(const FStackAddress& StackAddress,
@@ -6391,8 +6447,15 @@ namespace UE::DreamFX::Editor
 
 		// Structural, and about as structural as it gets: a version change is exactly a change to
 		// which inputs the module has. Placed after the early-outs above so a no-op rebind does not
-		// throw away a perfectly good epoch.
-		FEpochGuard Epoch(ModuleAddress.System);
+		// throw away a perfectly good epoch -- and skipped for a module the shared context has not
+		// seen yet (a deferred add's, versioned before its batch refreshes the stack), which leaves
+		// nothing in the context to go stale.
+		UNiagaraStackModuleItem* SeenItem = nullptr;
+		TOptional<FEpochGuard> Epoch;
+		if (FindModuleInSharedContext(ModuleAddress, SeenItem) != EModuleInContext::Pending)
+		{
+			Epoch.Emplace(ModuleAddress.System);
+		}
 
 		// The graph-side sequence, not the stack-side one: FNiagaraFunctionCallNodeDetails::
 		// SwitchToVersion is the same situation as this -- a version changed on the node rather than
@@ -6594,7 +6657,14 @@ namespace UE::DreamFX::Editor
 			return false;
 		}
 
-		FEpochGuard Epoch(ModuleAddress.System);
+		// As for a version change: a module the shared context has not seen yet leaves nothing to
+		// go stale.
+		UNiagaraStackModuleItem* SeenItem = nullptr;
+		TOptional<FEpochGuard> Epoch;
+		if (FindModuleInSharedContext(ModuleAddress, SeenItem) != EModuleInContext::Pending)
+		{
+			Epoch.Emplace(ModuleAddress.System);
+		}
 
 		// Regeneration renames into a graph that still holds the PREVIOUS build's nodes: stacks
 		// are cleared one at a time, so a stale twin bearing the wanted name can sit in a stack
