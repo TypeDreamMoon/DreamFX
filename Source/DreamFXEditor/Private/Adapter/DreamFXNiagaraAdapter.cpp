@@ -131,20 +131,25 @@ namespace UE::DreamFX::Editor
 		/** The operation most recently started, for saying what a stray compile followed. */
 		FString GLastOpLabel = TEXT("(none)");
 
+		/** The innermost operation still running, for saying which one dropped or built a context. */
+		FString GCurrentOpLabel = TEXT("(none)");
+
 		/** Charges the enclosing scope to one operation label. */
 		struct FOpTimer
 		{
 			explicit FOpTimer(const TCHAR* InLabel)
-				: Label(InLabel), Start(FPlatformTime::Seconds())
+				: Label(InLabel), Start(FPlatformTime::Seconds()), PreviousOpLabel(GCurrentOpLabel)
 #if CPUPROFILERTRACE_ENABLED
 				, TraceScope(InLabel, true)
 #endif
 			{
 				GLastOpLabel = InLabel;
+				GCurrentOpLabel = InLabel;
 			}
 
 			~FOpTimer()
 			{
+				GCurrentOpLabel = PreviousOpLabel;
 				GOpSeconds.FindOrAdd(Label) += FPlatformTime::Seconds() - Start;
 				++GOpCounts.FindOrAdd(Label);
 			}
@@ -154,6 +159,7 @@ namespace UE::DreamFX::Editor
 
 			FString Label;
 			double Start;
+			FString PreviousOpLabel;
 #if CPUPROFILERTRACE_ENABLED
 			// Same label in an Insights capture, so the engine scopes beneath an operation are attributed to it.
 			FCpuProfilerTrace::FDynamicEventScope TraceScope;
@@ -264,6 +270,8 @@ namespace UE::DreamFX::Editor
 				}
 
 				++GStats.ContextsBuilt;
+				UE_LOG(LogDreamFX, Verbose, TEXT("context built in: %s [%s, %s]"), *GCurrentOpLabel,
+					*GetNameSafe(System), GWriteScopedSystems.Contains(System) ? TEXT("shared") : TEXT("own"));
 
 				// Charged separately from whatever operation happens to trigger it: building a context
 				// is the same cost wherever it lands, and attributing it to the caller that unluckily
@@ -304,6 +312,7 @@ namespace UE::DreamFX::Editor
 				&& GSharedContexts.Remove(System) > 0)
 			{
 				++GStats.EpochBoundaries;
+				UE_LOG(LogDreamFX, Verbose, TEXT("context dropped in: %s"), *GCurrentOpLabel);
 			}
 		}
 
