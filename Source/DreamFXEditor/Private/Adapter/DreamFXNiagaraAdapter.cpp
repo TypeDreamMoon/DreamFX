@@ -151,8 +151,67 @@ namespace UE::DreamFX::Editor
 
 			/** Of the structural calls, the ones that kept the context because the engine refreshed. */
 			int32 RefreshedInPlaceCalls = 0;
+
+			/** Compiles an engine path launched inside a suppression scope anyway, and that were aborted. */
+			int32 StrayCompilesAborted = 0;
 		};
 		FAdapterStats GStats;
+
+		/** Systems inside an FCompileSuppressionScope, on an engine without the fast-edit API. */
+		TSet<UNiagaraSystem*> GCompileDebtSystems;
+
+		/**
+		 * Keeps a pending compile request on the system, so the engine's guarded launch sites stay shut.
+		 *
+		 * The stock engine has no way to refuse RequestCompile, but most of its launches during an edit
+		 * are guarded: FNiagaraSystemViewModel::RefreshAll -- run by every view model construction and
+		 * by every PostEditChangeProperty the external edit API makes -- compiles only when
+		 * HasOutstandingCompilationRequests() is false, and that is true while a request is pending.
+		 * SetCompileForEdit is the one exported way to set that status without launching anything: a
+		 * change of the flag marks the system RequestPending and does nothing else. Setting it to the
+		 * other value and straight back leaves the flag as it was -- the Niagara editor's own view
+		 * model checks that it matches -- and the request pending. The final compile pays it once,
+		 * which is what MoonEngine's DeferRequestCompile does.
+		 *
+		 * It is not a lock. An unguarded caller (an emitter rename, enabling an emitter) still calls
+		 * RequestCompile, which clears the status and launches a compile of the half-built system. So
+		 * this runs again at every point the adapter can observe -- before a view model is built and
+		 * after every structural call -- aborts what got through, and pends the request again.
+		 *
+		 * Why it matters beyond time: each launch prepares the scripts' rapid-iteration parameters from
+		 * the graph as it stands at that moment, and a hidden input's constant keeps the value the first
+		 * launch after it appeared gave it. With a launch after every edit, that value depends on the
+		 * order of the edits, so rebuilding part of a system and rebuilding all of it land on different
+		 * constants. With one launch at the end there is no order to depend on.
+		 *
+		 * @param bAbortStray  count and abort a compile found in flight. False when a scope opens: a
+		 *                     compile already running then was not launched by this build.
+		 */
+		void HoldCompileDebt(UNiagaraSystem* System, bool bAbortStray = true)
+		{
+#if !DREAMFX_HAS_NIAGARA_FAST_EDIT
+			if (System == nullptr || !GCompileDebtSystems.Contains(System))
+			{
+				return;
+			}
+			if (bAbortStray && System->HasActiveCompilations())
+			{
+				// RequestCompile itself aborts whatever is queued before it launches, so an abort here is
+				// the engine's own way of discarding a compile that a later one supersedes.
+				++GStats.StrayCompilesAborted;
+				System->KillAllActiveCompilations();
+			}
+			if (!System->NeedsRequestCompile() && !System->HasActiveCompilations())
+			{
+				const bool bCompileForEdit = System->GetCompileForEdit();
+				System->SetCompileForEdit(!bCompileForEdit);
+				System->SetCompileForEdit(bCompileForEdit);
+			}
+#else
+			(void)System;
+			(void)bAbortStray;
+#endif
+		}
 
 		/** The shared context if this system has one open, otherwise a private one for this call. */
 		class FEditContext
@@ -160,6 +219,9 @@ namespace UE::DreamFX::Editor
 		public:
 			explicit FEditContext(UNiagaraSystem* System)
 			{
+				// Building a view model runs RefreshAll, the busiest compile launch site there is.
+				HoldCompileDebt(System);
+
 				if (TSharedPtr<FNiagaraExternalEditContext>* Shared = GSharedContexts.Find(System))
 				{
 					if (Shared->IsValid())
@@ -258,6 +320,10 @@ namespace UE::DreamFX::Editor
 		void EndEpoch(UNiagaraSystem* System, EStructuralKind Kind = EStructuralKind::Unrefreshed)
 		{
 			++GStats.StructuralCalls;
+
+			// A structural call is where the unguarded launch sites live (an emitter rename, enabling
+			// an emitter); catch what they launched before anything else runs against it.
+			HoldCompileDebt(System);
 
 			if (Kind == EStructuralKind::Unrefreshed || GRebuildContextOnStructural)
 			{
@@ -1438,9 +1504,10 @@ namespace UE::DreamFX::Editor
 	{
 		return FString::Printf(
 			TEXT("adapter: %d view model(s) built, %d structural (%d static switch, %d refreshed in place) ")
-			TEXT("+ %d value call(s), %d epoch boundary(ies)"),
+			TEXT("+ %d value call(s), %d epoch boundary(ies), %d stray compile(s) aborted"),
 			GStats.ContextsBuilt, GStats.StructuralCalls, GStats.StaticSwitchCalls,
-			GStats.RefreshedInPlaceCalls, GStats.ValueCalls, GStats.EpochBoundaries);
+			GStats.RefreshedInPlaceCalls, GStats.ValueCalls, GStats.EpochBoundaries,
+			GStats.StrayCompilesAborted);
 	}
 
 	bool FNiagaraAdapter::SaveSystem(UNiagaraSystem* System, TArray<FString>& OutErrors)
@@ -3153,6 +3220,7 @@ namespace UE::DreamFX::Editor
 		++GStats.ContextsBuilt;
 		TSharedPtr<FNiagaraSystemViewModel> ViewModel;
 		{
+			HoldCompileDebt(System);
 			FOpTimer Timer(TEXT("~context build (view model)"));
 			ViewModel = StackLookup::CreateSystemViewModel(*System);
 		}
@@ -3736,11 +3804,17 @@ namespace UE::DreamFX::Editor
 			System->DeferRequestCompile();
 		}
 #else
-		// Stock engine: the scope becomes a no-op and every edit relaunches the system's compile.
-		// RequestCompile aborts whatever is queued and starts again, so all but the last are thrown
-		// away -- 260 of them, 8.3 s, on the worst system in this tree. Nothing is incorrect about it;
-		// the work is simply done and discarded.
-		(void)System;
+		// Stock engine: no switch to refuse RequestCompile, so the scope keeps a request pending
+		// instead, which shuts the guarded launch sites, and aborts what the unguarded ones launch
+		// (HoldCompileDebt). Without it every edit relaunched the system's compile -- 260 of them,
+		// 8.3 s, on the worst system in this tree -- and the order of those launches decided the
+		// constants of hidden inputs.
+		if (System != nullptr && !GCompileDebtSystems.Contains(System))
+		{
+			bOwns = true;
+			GCompileDebtSystems.Add(System);
+			HoldCompileDebt(System, /*bAbortStray=*/false);
+		}
 #endif
 	}
 
@@ -3750,6 +3824,14 @@ namespace UE::DreamFX::Editor
 		if (bOwns)
 		{
 			System->SetSuppressCompileRequests(false);
+		}
+#else
+		if (bOwns)
+		{
+			// One last check: whatever the window's final calls launched is aborted, and the request
+			// left pending is the debt the caller's compile pays.
+			HoldCompileDebt(System);
+			GCompileDebtSystems.Remove(System);
 		}
 #endif
 	}
