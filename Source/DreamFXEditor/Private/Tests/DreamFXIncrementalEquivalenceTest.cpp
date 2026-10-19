@@ -35,7 +35,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogDreamFXIncremental, Log, All);
  * incremental builds (a stale constant, a node name that drifted, a stack that kept a module the
  * text dropped two edits ago).
  *
- * Two tests share the runs:
+ * Two tests share the runs, each with one sub-test per fixture (`DreamFX.Incremental.Equivalence.Sparks`):
  *
  *   DreamFX.Incremental.Equivalence  fails on any difference between A and B, and on a build that
  *                                    one track refuses and the other accepts.
@@ -43,8 +43,10 @@ DEFINE_LOG_CATEGORY_STATIC(LogDreamFXIncremental, Log, All);
  *                                    applied incrementally where the mutation table says it should
  *                                    be, naming each one that fell back and why.
  *
- * The runs are made once per process: whichever test comes first builds the assets, and the other
- * reads the same record, so asking for both costs no more than asking for one.
+ * Each fixture's run is made once per process: whichever test comes first builds the assets, and the
+ * other reads the same record, so asking for both costs no more than asking for one. The fixtures are
+ * independent of each other, so a sharded run can spread them over processes; keep a fixture's two
+ * sub-tests in one shard, or that fixture's history is built twice.
  *
  * "The same" means four things:
  *
@@ -608,6 +610,10 @@ namespace UE::DreamFX::Editor::IncrementalEquivalence
 		}
 		Snapshot.bValid = true;
 
+		// Every adapter read below builds a whole system view model unless a read scope shares one.
+		// Nothing here mutates the system, which is the scope's whole soundness condition.
+		const FNiagaraAdapter::FReadScope ReadScope(System);
+
 		UE_LOG(LogDreamFXIncremental, Verbose, TEXT("DFXINCR capture %s: facts"), *Track.Label);
 		DescribeSystemFacts(System, Snapshot.Facts);
 		for (FString& Fact : Snapshot.Facts)
@@ -895,6 +901,7 @@ namespace UE::DreamFX::Editor::IncrementalEquivalence
 			Dump(DumpDir, FString::Printf(TEXT("%s.final"), Fixture.Name), TEXT("A"), SnapshotA);
 			Dump(DumpDir, FString::Printf(TEXT("%s.final"), Fixture.Name), TEXT("B"), SnapshotB);
 			const FString Difference = DiffSnapshots(SnapshotA, SnapshotB);
+			UE_LOG(LogDreamFXIncremental, Verbose, TEXT("DFXINCR %s: exports compared"), Fixture.Name);
 			if (!Difference.IsEmpty())
 			{
 				Summary.EquivalenceProblems.Add(FString::Printf(
@@ -930,6 +937,7 @@ namespace UE::DreamFX::Editor::IncrementalEquivalence
 		 */
 		void DropFromMemory()
 		{
+			UE_LOG(LogDreamFXIncremental, Verbose, TEXT("DFXINCR %s: unloading both assets"), Fixture.Name);
 			TArray<UPackage*> Packages;
 			for (const FTrack* Track : { &A, &B })
 			{
@@ -949,6 +957,7 @@ namespace UE::DreamFX::Editor::IncrementalEquivalence
 					TEXT("DFXINCR %s: the assets stayed in memory after being unloaded (%s), so this step reads them from there"),
 					Fixture.Name, *Error.ToString());
 			}
+			UE_LOG(LogDreamFXIncremental, Verbose, TEXT("DFXINCR %s: unloaded"), Fixture.Name);
 		}
 
 		/**
@@ -1080,6 +1089,7 @@ namespace UE::DreamFX::Editor::IncrementalEquivalence
 
 			// The compiled state has to be current in both: the build says so itself, but it is the
 			// claim an incremental build skips work on, so it is asked again here from the outside.
+			UE_LOG(LogDreamFXIncremental, Verbose, TEXT("DFXINCR %s: verifying the compiled state"), *Label);
 			for (const FTrack* Track : { &A, &B })
 			{
 				TArray<FString> Stale;
@@ -1098,7 +1108,9 @@ namespace UE::DreamFX::Editor::IncrementalEquivalence
 			Dump(DumpDir, Stem, TEXT("A"), SnapshotA);
 			Dump(DumpDir, Stem, TEXT("B"), SnapshotB);
 
+			UE_LOG(LogDreamFXIncremental, Verbose, TEXT("DFXINCR %s: comparing"), *Label);
 			const FString Difference = DiffSnapshots(SnapshotA, SnapshotB);
+			UE_LOG(LogDreamFXIncremental, Verbose, TEXT("DFXINCR %s: compared"), *Label);
 			if (!Difference.IsEmpty())
 			{
 				bDiverged = true;
@@ -1115,44 +1127,70 @@ namespace UE::DreamFX::Editor::IncrementalEquivalence
 
 	static TArray<FFixture> MakeFixtures();
 
-	static FSummary& RunAll()
+	/**
+	 * The fixtures the tests offer, one sub-test each, so a sharded run can put the fixtures in
+	 * different processes. `-DreamFXIncrementalFixture=<name>` keeps one.
+	 */
+	static void GetFixtureNames(TArray<FString>& OutNames)
 	{
-		static FSummary Summary;
-		static bool bRan = false;
-		if (!bRan)
+		FString OnlyFixture;
+		FParse::Value(FCommandLine::Get(), TEXT("DreamFXIncrementalFixture="), OnlyFixture);
+		for (const FFixture& Fixture : MakeFixtures())
 		{
-			bRan = true;
-			// For narrowing a failure down without paying for the whole history. A mutation that
-			// depended on one dropped here no longer applies, and says so.
-			FString OnlyFixture, OnlySteps;
-			FParse::Value(FCommandLine::Get(), TEXT("DreamFXIncrementalFixture="), OnlyFixture);
-			FParse::Value(FCommandLine::Get(), TEXT("DreamFXIncrementalSteps="), OnlySteps);
-			TArray<FString> StepWords;
-			OnlySteps.ParseIntoArray(StepWords, TEXT("|"));
-
-			TArray<FFixture> Fixtures = MakeFixtures();
-			for (FFixture& Fixture : Fixtures)
+			if (OnlyFixture.IsEmpty() || OnlyFixture == Fixture.Name)
 			{
-				if (!OnlyFixture.IsEmpty() && OnlyFixture != Fixture.Name)
-				{
-					continue;
-				}
-				if (!StepWords.IsEmpty())
-				{
-					Fixture.Mutations.RemoveAll([&StepWords](const FMutation& Mutation)
-					{
-						return !StepWords.ContainsByPredicate([&Mutation](const FString& Word)
-						{
-							return FString(Mutation.Name).Contains(Word.Replace(TEXT("+"), TEXT(" ")));
-						});
-					});
-				}
-				FRunner Runner(Fixture, Summary);
-				Runner.Run();
+				OutNames.Add(Fixture.Name);
 			}
-			UE_LOG(LogDreamFXIncremental, Display, TEXT("DFXINCR total build time: incremental requests %.1fs, full rebuilds %.1fs, %d steps"),
-				Summary.SecondsIncremental, Summary.SecondsFull, Summary.Steps.Num());
 		}
+	}
+
+	/**
+	 * Runs one fixture's history, once per process: whichever of the two tests asks first builds the
+	 * assets, and the other reads the same record. A fixture is the unit of sharding, so a shard that
+	 * runs both tests of a fixture pays for its history once.
+	 */
+	static const FSummary& RunFixture(const FString& FixtureName)
+	{
+		static TMap<FString, FSummary> Summaries;
+		if (const FSummary* Done = Summaries.Find(FixtureName))
+		{
+			return *Done;
+		}
+		FSummary& Summary = Summaries.Add(FixtureName);
+
+		// For narrowing a failure down without paying for the whole history. A mutation that
+		// depended on one dropped here no longer applies, and says so.
+		FString OnlySteps;
+		FParse::Value(FCommandLine::Get(), TEXT("DreamFXIncrementalSteps="), OnlySteps);
+		TArray<FString> StepWords;
+		OnlySteps.ParseIntoArray(StepWords, TEXT("|"));
+
+		TArray<FFixture> Fixtures = MakeFixtures();
+		FFixture* Fixture = Fixtures.FindByPredicate([&FixtureName](const FFixture& Candidate)
+		{
+			return FixtureName == Candidate.Name;
+		});
+		if (Fixture == nullptr)
+		{
+			Summary.EquivalenceProblems.Add(FString::Printf(TEXT("there is no fixture named '%s'"), *FixtureName));
+			return Summary;
+		}
+		if (!StepWords.IsEmpty())
+		{
+			Fixture->Mutations.RemoveAll([&StepWords](const FMutation& Mutation)
+			{
+				return !StepWords.ContainsByPredicate([&Mutation](const FString& Word)
+				{
+					return FString(Mutation.Name).Contains(Word.Replace(TEXT("+"), TEXT(" ")));
+				});
+			});
+		}
+		const double Start = FPlatformTime::Seconds();
+		FRunner Runner(*Fixture, Summary);
+		Runner.Run();
+		UE_LOG(LogDreamFXIncremental, Display,
+			TEXT("DFXINCR %s total: %.1fs, of which incremental requests %.1fs, full rebuilds %.1fs, %d steps"),
+			Fixture->Name, FPlatformTime::Seconds() - Start, Summary.SecondsIncremental, Summary.SecondsFull, Summary.Steps.Num());
 		return Summary;
 	}
 
@@ -1753,30 +1791,42 @@ System(Name="DreamFXAutomation/%ASSET%", Root="Game")
 	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamFXIncrementalEquivalenceTest,
+IMPLEMENT_COMPLEX_AUTOMATION_TEST(FDreamFXIncrementalEquivalenceTest,
 	"DreamFX.Incremental.Equivalence",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+void FDreamFXIncrementalEquivalenceTest::GetTests(TArray<FString>& OutBeautifiedNames, TArray<FString>& OutTestCommands) const
+{
+	UE::DreamFX::Editor::IncrementalEquivalence::GetFixtureNames(OutTestCommands);
+	OutBeautifiedNames = OutTestCommands;
+}
 
 bool FDreamFXIncrementalEquivalenceTest::RunTest(const FString& Parameters)
 {
 	using namespace UE::DreamFX::Editor::IncrementalEquivalence;
-	const FSummary& Summary = RunAll();
+	const FSummary& Summary = RunFixture(Parameters);
 	for (const FString& Problem : Summary.EquivalenceProblems)
 	{
 		AddError(Problem);
 	}
-	TestTrue(TEXT("the sequences ran"), Summary.Steps.Num() > 0);
+	TestTrue(TEXT("the sequence ran"), Summary.Steps.Num() > 0);
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamFXIncrementalCoverageTest,
+IMPLEMENT_COMPLEX_AUTOMATION_TEST(FDreamFXIncrementalCoverageTest,
 	"DreamFX.Incremental.Coverage",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+void FDreamFXIncrementalCoverageTest::GetTests(TArray<FString>& OutBeautifiedNames, TArray<FString>& OutTestCommands) const
+{
+	UE::DreamFX::Editor::IncrementalEquivalence::GetFixtureNames(OutTestCommands);
+	OutBeautifiedNames = OutTestCommands;
+}
 
 bool FDreamFXIncrementalCoverageTest::RunTest(const FString& Parameters)
 {
 	using namespace UE::DreamFX::Editor::IncrementalEquivalence;
-	const FSummary& Summary = RunAll();
+	const FSummary& Summary = RunFixture(Parameters);
 	for (const FString& Problem : Summary.EquivalenceProblems)
 	{
 		AddError(Problem);
@@ -1811,8 +1861,8 @@ bool FDreamFXIncrementalCoverageTest::RunTest(const FString& Parameters)
 				Step.FallbackReason.IsEmpty() ? TEXT("(none given)") : *Step.FallbackReason));
 		}
 	}
-	UE_LOG(LogDreamFXIncremental, Display, TEXT("DFXINCR coverage: %d of %d steps expected to be incremental were, out of %d steps in all"),
-		Applied, Expected, Summary.Steps.Num());
+	UE_LOG(LogDreamFXIncremental, Display, TEXT("DFXINCR %s coverage: %d of %d steps expected to be incremental were, out of %d steps in all"),
+		*Parameters, Applied, Expected, Summary.Steps.Num());
 	return true;
 }
 
