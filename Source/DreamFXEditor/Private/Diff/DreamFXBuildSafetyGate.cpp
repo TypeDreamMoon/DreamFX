@@ -138,6 +138,20 @@ namespace UE::DreamFX::Editor
 		 * instance with no name in the fact text to file a declaration under, and a stage's inner
 		 * properties have no one-to-one spelling in the `Stage(...)` block.
 		 */
+		/** True when both values parse as integers and every bit set in Old is also set in New. */
+		bool IsBitSuperset(const FString& New, const FString& Old)
+		{
+			const FString NewTrimmed = New.TrimStartAndEnd();
+			const FString OldTrimmed = Old.TrimStartAndEnd();
+			if (!NewTrimmed.IsNumeric() || !OldTrimmed.IsNumeric())
+			{
+				return false;
+			}
+			const uint64 NewBits = FCString::Strtoui64(*NewTrimmed, nullptr, 10);
+			const uint64 OldBits = FCString::Strtoui64(*OldTrimmed, nullptr, 10);
+			return (NewBits & OldBits) == OldBits;
+		}
+
 		FAddressedFact AddressFact(const FString& Fact)
 		{
 			FAddressedFact Out;
@@ -380,6 +394,18 @@ namespace UE::DreamFX::Editor
 					// value the text meant, so the rebuild is doing what it was told.
 					Verdict.NewValue = *NewValue;
 					if (Declared.Names(Addressed.Scope, Addressed.Subject))
+					{
+						continue;
+					}
+
+					// Rule 3b. A renderer's MaterialParamValidMask is derived: one bit per dynamic
+					// material parameter its materials read. The gate keeps it in the comparison
+					// because a mask that LOSES bits is the tell for material bindings that were
+					// cleared. A mask that only GAINS bits is the material now reading more dynamic
+					// parameters than before (a new DynamicParameter index), which nothing a save
+					// would destroy -- so a superset passes, and anything else is judged below.
+					if (Addressed.Subject.EndsWith(TEXT("MaterialParamValidMask"))
+						&& IsBitSuperset(*NewValue, Addressed.Value))
 					{
 						continue;
 					}
