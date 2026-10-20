@@ -487,3 +487,19 @@ Could not wire the module graph. The Niagara schema rejected a parameter map con
 
 **Fix.** Rebuild the module where a backend runs and commit the updated asset. The trailing half of the message names the check that failed, which is what to fix if you expected this engine to be able to generate.
 
+
+## DFX5109
+
+**Severity** error
+
+**Message**
+
+```
+'%s' references '%s', which does not exist. Create the asset before building (a renderer built against a missing asset renders nothing), or fix the path.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp` (renderer planning)
+
+**Cause.** A renderer property (`Meshes`, `OverrideMaterials`, `Material`, ...) names an asset path whose package does not exist. The value converter turns such a path into a null reference without complaint, so the renderer used to build "successfully" and render nothing -- and once the asset appeared, an incremental build saw an unchanged source and did nothing.
+
+**Fix.** Create the asset first (for generated meshes, run the generator script before building the system), or correct the path.

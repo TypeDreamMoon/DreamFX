@@ -734,6 +734,13 @@ namespace UE::DreamFX::Editor
 		static bool RemoveEmitter(const FStackAddress& EmitterAddress, TArray<FString>& OutErrors);
 
 		/**
+		 * Puts the system's emitter handles in the order Order names them. Handles are moved, never recreated,
+		 * so their ids survive; handles Order does not name keep their relative order after the named ones.
+		 * Returns true when the order changed (the caller's compile rebuilds the per-index runtime data).
+		 */
+		static bool ReorderEmitters(UNiagaraSystem* System, const TArray<FName>& Order, TArray<FString>& OutErrors);
+
+		/**
 		 * Renames an emitter in place, keeping its handle.
 		 *
 		 * R4: an emitter's name is a stable key, not a display name -- Niagara stores literal module

@@ -1832,6 +1832,64 @@ namespace UE::DreamFX::Editor
 					}
 				}
 
+				// An asset path that names no package converts to a null reference without complaint: a mesh
+				// renderer whose `Meshes` entry was not generated yet builds "successfully" and renders nothing,
+				// and once the asset appears an incremental build sees an unchanged source and does nothing.
+				// Every asset path a renderer property carries has to name a package that exists now.
+				if (Json.IsValid())
+				{
+					TArray<FString> Missing;
+					TFunction<void(const TSharedPtr<FJsonValue>&)> Visit = [&Missing, &Visit](const TSharedPtr<FJsonValue>& Value)
+					{
+						if (!Value.IsValid())
+						{
+							return;
+						}
+						if (Value->Type == EJson::String)
+						{
+							const FString Path = Value->AsString();
+							if (!Path.StartsWith(TEXT("/")) || Path.StartsWith(TEXT("/Script/")))
+							{
+								return;
+							}
+							FString PackageName = Path;
+							int32 Dot = INDEX_NONE;
+							if (PackageName.FindChar(TEXT('.'), Dot))
+							{
+								PackageName.LeftInline(Dot);
+							}
+							if (FPackageName::IsValidLongPackageName(PackageName)
+								&& FindPackage(nullptr, *PackageName) == nullptr
+								&& !FPackageName::DoesPackageExist(PackageName))
+							{
+								Missing.AddUnique(Path);
+							}
+						}
+						else if (Value->Type == EJson::Array)
+						{
+							for (const TSharedPtr<FJsonValue>& Element : Value->AsArray())
+							{
+								Visit(Element);
+							}
+						}
+						else if (Value->Type == EJson::Object)
+						{
+							for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Value->AsObject()->Values)
+							{
+								Visit(Field.Value);
+							}
+						}
+					};
+					Visit(Json);
+					for (const FString& Path : Missing)
+					{
+						Diagnostics.Error(TEXT("DFX5109"), Property.Location, FString::Printf(
+							TEXT("'%s' references '%s', which does not exist. Create the asset before building (a renderer built against a missing asset renders nothing), or fix the path."),
+							*Property.Name, *Path));
+						bOk = false;
+					}
+				}
+
 				// These controls refer to reflected FNames, so alternate casing must share the
 				// same final value when diagnosing the material override switch below.
 				const FString JsonName = bMeshRenderer && Property.Name.Equals(TEXT("bOverrideMaterials"), ESearchCase::IgnoreCase)
@@ -4343,6 +4401,28 @@ namespace UE::DreamFX::Editor
 							return false;
 						}
 					}
+				}
+			}
+
+			// Emitter order follows the source. Surviving emitters keep their handle (and so their slot) and new
+			// ones are appended, which left the system's order drifting away from the text after any edit that
+			// inserted an emitter in the middle -- and the handle order is what Niagara falls back on to sort
+			// translucent renderers that share a SortOrderHint, so a layer declared "behind" could end up drawn in
+			// front. The adapter moves handles rather than recreating them, so their ids survive, and the compile
+			// that follows rebuilds the per-index runtime data.
+			{
+				TArray<FName> Order;
+				Order.Reserve(Plan.Emitters.Num());
+				for (const FPlannedEmitter& Emitter : Plan.Emitters)
+				{
+					Order.Add(Emitter.Name);
+				}
+				Errors.Reset();
+				FNiagaraAdapter::ReorderEmitters(System, Order, Errors);
+				if (Errors.Num() > 0)
+				{
+					ReportAdapterErrors(Errors, TEXT("DFX5014"), FSourceLocation(), Diagnostics);
+					return false;
 				}
 			}
 

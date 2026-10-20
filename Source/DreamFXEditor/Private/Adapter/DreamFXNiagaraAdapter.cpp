@@ -2611,6 +2611,61 @@ namespace UE::DreamFX::Editor
 		return Drain(Context, OutErrors);
 	}
 
+	bool FNiagaraAdapter::ReorderEmitters(UNiagaraSystem* System, const TArray<FName>& Order, TArray<FString>& OutErrors)
+	{
+		if (System == nullptr)
+		{
+			OutErrors.Add(TEXT("Cannot reorder the emitters of a null system."));
+			return false;
+		}
+		TArray<FNiagaraEmitterHandle>& Handles = System->GetEmitterHandles();
+		TArray<int32> NewOrder;
+		NewOrder.Reserve(Handles.Num());
+		TArray<bool> Taken;
+		Taken.Init(false, Handles.Num());
+		for (const FName Name : Order)
+		{
+			const int32 Index = Handles.IndexOfByPredicate(
+				[Name](const FNiagaraEmitterHandle& Handle) { return Handle.GetName() == Name; });
+			if (Index != INDEX_NONE && !Taken[Index])
+			{
+				NewOrder.Add(Index);
+				Taken[Index] = true;
+			}
+		}
+		for (int32 Index = 0; Index < Handles.Num(); ++Index)
+		{
+			if (!Taken[Index])
+			{
+				NewOrder.Add(Index);
+			}
+		}
+		bool bChanged = false;
+		for (int32 Index = 0; Index < NewOrder.Num(); ++Index)
+		{
+			bChanged |= NewOrder[Index] != Index;
+		}
+		if (!bChanged)
+		{
+			return false;
+		}
+
+		// A view model built over the old order indexes handles by position, so it cannot outlive the move.
+		DropSharedContext(System);
+		FEpochGuard Epoch(System);
+		System->Modify();
+		TArray<FNiagaraEmitterHandle> Ordered;
+		Ordered.Reserve(Handles.Num());
+		for (const int32 Index : NewOrder)
+		{
+			Ordered.Add(Handles[Index]);
+		}
+		Handles = MoveTemp(Ordered);
+		System->InvalidateCachedData();
+		System->MarkPackageDirty();
+		return true;
+	}
+
 	bool FNiagaraAdapter::AddEmitter(UNiagaraSystem* System, FName EmitterName, TArray<FString>& OutErrors)
 	{
 		if (System == nullptr)
