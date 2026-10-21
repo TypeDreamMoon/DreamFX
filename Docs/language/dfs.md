@@ -413,6 +413,26 @@ says so in the file header rather than flattening it away.
 binding struct caches a display name, a data-set name and source-mode flags that only its own
 `SetValue` recomputes, so writing the serialised field would leave half a binding behind.
 
+A mesh entry can take its mesh from a user parameter instead of an asset — a data interface that
+implements Niagara's renderable-mesh interface, such as `DI<DynamicMesh>` written by a simulation.
+List the bindings in `MeshBindings`, parallel to `Meshes`; a bound entry's `Meshes` slot may be an
+empty string:
+
+```cpp
+Properties = {
+    DI<DynamicMesh> Sheet = "{\"NumVertices\":256, \"Sections\":[{\"NumTriangles\":378}], … }";
+}
+…
+MeshRenderer Sheet {
+    Meshes       = [""];
+    MeshBindings = ["User.Sheet"];
+}
+```
+
+Each name must be a user parameter of the system (declare it in `Properties` first). The binding's
+type is read from that parameter when the renderer is applied, because a Niagara type definition is
+process-local and cannot be carried in the source. An empty string clears the binding for that entry.
+
 Other binding structures, including a Sprite or Ribbon renderer's `MaterialUserParamBinding`, are
 carried as quoted JSON property values during export. User parameter bindings carry only their name,
 such as `"{\"parameter\":{\"name\":\"User.Material\"}}"`; the renderer supplies the fixed parameter type.

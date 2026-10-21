@@ -841,6 +841,10 @@ namespace UE::DreamFX::Editor
 		static bool SetRendererProperties(const FStackAddress& RendererAddress, const FString& PropertiesJson,
 			TArray<FString>& OutErrors);
 
+		/** Binds Meshes[i].MeshParameterBinding to the named user parameters (`MeshBindings` on a MeshRenderer). */
+		static bool ApplyMeshBindings(const FStackAddress& RendererAddress, const TArray<FString>& Bindings,
+			TArray<FString>& OutErrors);
+
 		/**
 		 * Points a renderer's attribute binding at a parameter: `Bind SpriteSize -> Particles.SpriteSize`.
 		 *

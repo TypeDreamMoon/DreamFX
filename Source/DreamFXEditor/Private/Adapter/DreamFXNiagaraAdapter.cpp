@@ -28,6 +28,7 @@
 #include "NiagaraNodeInput.h"
 #include "NiagaraNodeOutput.h"
 #include "NiagaraRendererProperties.h"
+#include "NiagaraMeshRendererProperties.h"
 #include "NiagaraScript.h"
 #include "NiagaraScriptSource.h"
 #include "NiagaraScriptVariable.h"
@@ -3736,15 +3737,125 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
+		// `MeshBindings = ["User.X", ...]` on a mesh renderer: entry i of `Meshes` takes its mesh from a
+		// user parameter instead of an asset (FNiagaraMeshRendererMeshProperties::MeshParameterBinding,
+		// e.g. a Dynamic Mesh data interface written by a simulation). It is not a property of the renderer,
+		// so it is pulled out here and applied after the ordinary properties. The binding's type is read off
+		// the system's own user parameter -- a type definition is process-local and cannot travel as JSON.
+		FString EffectiveJson = PropertiesJson;
+		TArray<FString> MeshBindings;
+		bool bHasMeshBindings = false;
+		{
+			TSharedPtr<FJsonObject> Root;
+			const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(PropertiesJson);
+			if (FJsonSerializer::Deserialize(Reader, Root) && Root.IsValid() && Root->HasField(TEXT("MeshBindings")))
+			{
+				bHasMeshBindings = true;
+				for (const TSharedPtr<FJsonValue>& Value : Root->GetArrayField(TEXT("MeshBindings")))
+				{
+					MeshBindings.Add(Value.IsValid() ? Value->AsString() : FString());
+				}
+				Root->RemoveField(TEXT("MeshBindings"));
+				EffectiveJson.Reset();
+				const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&EffectiveJson);
+				FJsonSerializer::Serialize(Root.ToSharedRef(), Writer);
+			}
+		}
+
 		// A renderer is addressed by index and its properties add no stack entries, so this is a value
 		// write: the epoch survives it.
 		++GStats.ValueCalls;
-		FEditContext ContextHolder(RendererAddress.System);
-		FNiagaraExternalEditContext& Context = ContextHolder.Get();
-		FNiagaraExt_RendererData Data;
-		Data.PropertyValues = NormalizeObjectReferences(PropertiesJson);
-		UNiagaraExternalEditUtilities::SetRendererData(ToReference(RendererAddress), Data, Context);
-		return Drain(Context, OutErrors);
+		bool bOk = true;
+		{
+			FEditContext ContextHolder(RendererAddress.System);
+			FNiagaraExternalEditContext& Context = ContextHolder.Get();
+			FNiagaraExt_RendererData Data;
+			Data.PropertyValues = NormalizeObjectReferences(EffectiveJson);
+			UNiagaraExternalEditUtilities::SetRendererData(ToReference(RendererAddress), Data, Context);
+			bOk = Drain(Context, OutErrors);
+		}
+		if (bOk && bHasMeshBindings)
+		{
+			bOk = ApplyMeshBindings(RendererAddress, MeshBindings, OutErrors);
+		}
+		return bOk;
+	}
+
+	bool FNiagaraAdapter::ApplyMeshBindings(const FStackAddress& RendererAddress, const TArray<FString>& Bindings,
+		TArray<FString>& OutErrors)
+	{
+		FNiagaraEmitterHandle* Handle = nullptr;
+		UNiagaraRendererProperties* Renderer = nullptr;
+		{
+			// ResolveRenderer lives in the anonymous namespace below; inline the lookup here.
+			if (RendererAddress.System != nullptr)
+			{
+				for (FNiagaraEmitterHandle& Candidate : RendererAddress.System->GetEmitterHandles())
+				{
+					if (Candidate.GetName() != RendererAddress.EmitterName)
+					{
+						continue;
+					}
+					Handle = &Candidate;
+					if (FVersionedNiagaraEmitterData* Data = Candidate.GetEmitterData())
+					{
+						const TArray<UNiagaraRendererProperties*>& Renderers = Data->GetRenderers();
+						Renderer = Renderers.IsValidIndex(RendererAddress.RendererIndex) ? Renderers[RendererAddress.RendererIndex] : nullptr;
+					}
+					break;
+				}
+			}
+		}
+		UNiagaraMeshRendererProperties* MeshRenderer = Cast<UNiagaraMeshRendererProperties>(Renderer);
+		if (MeshRenderer == nullptr)
+		{
+			OutErrors.Add(TEXT("MeshBindings is only meaningful on a MeshRenderer."));
+			return false;
+		}
+		if (Bindings.Num() > MeshRenderer->Meshes.Num())
+		{
+			OutErrors.Add(FString::Printf(TEXT("MeshBindings has %d entries but Meshes has only %d; give every bound entry a Meshes slot (an empty string is fine)."),
+				Bindings.Num(), MeshRenderer->Meshes.Num()));
+			return false;
+		}
+
+		TArray<FNiagaraVariable> UserParameters;
+		RendererAddress.System->GetExposedParameters().GetUserParameters(UserParameters);
+
+		MeshRenderer->Modify();
+		for (int32 Index = 0; Index < Bindings.Num(); ++Index)
+		{
+			FNiagaraParameterBinding& Binding = MeshRenderer->Meshes[Index].MeshParameterBinding;
+			const FString& Name = Bindings[Index];
+			if (Name.IsEmpty())
+			{
+				Binding.ResolvedParameter = FNiagaraVariableBase();
+				Binding.AliasedParameter = FNiagaraVariableBase();
+				continue;
+			}
+			const FString Bare = Name.StartsWith(TEXT("User.")) ? Name.RightChop(5) : Name;
+			const FNiagaraVariable* Found = UserParameters.FindByPredicate([&Bare](const FNiagaraVariable& Variable)
+			{
+				FString VariableName = Variable.GetName().ToString();
+				if (VariableName.StartsWith(TEXT("User.")))
+				{
+					VariableName.RightChopInline(5);
+				}
+				return VariableName.Equals(Bare, ESearchCase::IgnoreCase);
+			});
+			if (Found == nullptr)
+			{
+				OutErrors.Add(FString::Printf(TEXT("MeshBindings[%d] names '%s', which is not a user parameter of this system. Declare it in Properties first."),
+					Index, *Name));
+				return false;
+			}
+			const FNiagaraVariableBase Variable(Found->GetType(), FName(*(TEXT("User.") + Bare)));
+			Binding.AliasedParameter = Variable;
+			Binding.ResolvedParameter = Variable;
+		}
+		FPropertyChangedEvent Event(UNiagaraMeshRendererProperties::StaticClass()->FindPropertyByName(TEXT("Meshes")));
+		MeshRenderer->PostEditChangeProperty(Event);
+		return true;
 	}
 
 	namespace
