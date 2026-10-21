@@ -1,0 +1,17 @@
+// Inputs become locals of every patch body: a name the prologue already declares would not compile,
+// and an input without a value has nothing to pass.
+// EXPECT DFX3062 (11,13)
+// EXPECT DFX3062 (12,13)
+// EXPECT DFX3062 (13,13)
+System(Name="Corpus/NS_DynamicMeshBadInputs", Root="Plugin.DreamFX")
+{
+    DynamicMesh Sheet
+    {
+        Inputs = {
+            float U = 1.0;
+            float DM_Scale = 2.0;
+            float Gain;
+        }
+        Patch Body = Grid(9, 9) { }
+    }
+}

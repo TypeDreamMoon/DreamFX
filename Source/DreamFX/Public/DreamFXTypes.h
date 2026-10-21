@@ -471,6 +471,51 @@ namespace UE::DreamFX
 		DREAMFX_API const FStack* FindStack(EStackKind Kind) const;
 	};
 
+	/**
+	 * One `Patch Name = Tube(65, 17, Copies = 3) { ... }` of a DynamicMesh block: a grid of vertices,
+	 * repeated, and the HLSL that computes each vertex.
+	 */
+	struct FDynamicMeshPatch
+	{
+		FString Name;
+		/** The topology call, as written: Kind Call, Text the topology, counts positional, options named. */
+		FValuePtr Topology;
+		/** Raw HLSL statements, run once per vertex (more under Normals = Auto). */
+		FString Body;
+		FSourceLocation BodyLocation;
+		FSourceLocation Location;
+	};
+
+	/**
+	 * `DynamicMesh Name { Settings, Inputs, Renderer, Draw, Patch ... }` at the top level of a .dfs --
+	 * procedural geometry a GPU simulation writes into a Niagara dynamic mesh every frame.
+	 *
+	 * Sugar, in the sense that it lowers to nothing the language could not already say: a user parameter,
+	 * emitters, and generated modules (Docs/language/dynamic-mesh.md). It is its own node rather than a
+	 * text macro because the lowering has to count vertices and triangles, place sections, and work around
+	 * engine defects -- arithmetic an author should never have to do by hand, and the reason
+	 * gen_polar_dyn.py existed.
+	 */
+	struct FDynamicMesh
+	{
+		FString Name;
+		TArray<FPropertyEntry> Settings;
+		/** `Inputs = { DI<Texture> Shape = User.Shape; ... }` -- typed names, each with the value to pass. */
+		TArray<FParameterDecl> Inputs;
+		/** `Renderer = { SortOrderHint = 10; }` -- extra properties of the mesh renderer that draws it. */
+		TArray<FPropertyEntry> RendererProperties;
+		/** `Draw = { ... }` -- appended to the drawing particle's ParticleUpdate. Empty when not written. */
+		FStack Draw;
+		TArray<FDynamicMeshPatch> Patches;
+		/**
+		 * How many `Emitter` blocks precede this block in its source: where its emitters are inserted, so
+		 * emitter order -- which the build keeps -- follows the text.
+		 */
+		int32 EmitterIndex = 0;
+		FSourceLocation Location;
+		FString SourceFile;
+	};
+
 	enum class EDocumentKind : uint8
 	{
 		System,
@@ -509,6 +554,9 @@ namespace UE::DreamFX
 
 		/** System documents only. */
 		TArray<FEmitter> Emitters;
+
+		/** System documents only: `DynamicMesh` blocks, lowered into parameters and emitters at build time. */
+		TArray<FDynamicMesh> DynamicMeshes;
 
 		/** Emitter documents (.dfe) only. */
 		FEmitter EmitterDefinition;

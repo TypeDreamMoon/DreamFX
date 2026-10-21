@@ -1,0 +1,10 @@
+// The block holds Settings, Inputs, Renderer, Draw and Patch; anything else is a syntax error.
+// EXPECT DFX2030 (7,9)
+System(Name="Corpus/NS_DynamicMeshUnknownSection", Root="Plugin.DreamFX")
+{
+    DynamicMesh Sheet
+    {
+        Shape = Grid(9, 9) { }
+        Patch Body = Grid(9, 9) { }
+    }
+}

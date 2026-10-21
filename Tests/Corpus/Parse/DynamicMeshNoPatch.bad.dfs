@@ -1,0 +1,9 @@
+// A mesh with no patch draws nothing; that is a mistake, not an empty effect.
+// EXPECT DFX3063 (5,5)
+System(Name="Corpus/NS_DynamicMeshNoPatch", Root="Plugin.DreamFX")
+{
+    DynamicMesh Empty
+    {
+        Settings = { TexCoords = 2; }
+    }
+}

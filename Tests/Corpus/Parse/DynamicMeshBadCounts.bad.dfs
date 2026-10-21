@@ -1,0 +1,13 @@
+// Vertex counts are integer literals of at least 2, and a Strip takes one of them; options are named.
+// EXPECT DFX3058 (9,28)
+// EXPECT DFX3058 (10,19)
+// EXPECT DFX3058 (11,31)
+System(Name="Corpus/NS_DynamicMeshBadCounts", Root="Plugin.DreamFX")
+{
+    DynamicMesh Sheet
+    {
+        Patch A = Grid(17, 1) { }
+        Patch B = Strip(17, 9) { }
+        Patch C = Tube(17, 9, Twist = 2) { }
+    }
+}

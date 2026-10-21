@@ -1,0 +1,10 @@
+// A patch's topology is one of the five grids; anything else is reported with the table, at the call.
+// EXPECT DFX3058 (8,22)
+System(Name="Corpus/NS_DynamicMeshUnknownTopology", Root="Plugin.DreamFX")
+{
+    DynamicMesh Sheet
+    {
+        Settings = { Bounds = box(-100, -100, -100, 100, 100, 100); }
+        Patch Body = Cone(17, 9) { }
+    }
+}

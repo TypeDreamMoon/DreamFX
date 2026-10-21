@@ -1,0 +1,12 @@
+// A material that does not resolve is an error at the setting, not a mesh drawn with the default one.
+// EXPECT DFX3061 (8,13)
+System(Name="Corpus/NS_DynamicMeshMissingMaterial", Root="Plugin.DreamFX")
+{
+    DynamicMesh Sheet
+    {
+        Settings = {
+            Material = "/Engine/NoSuchFolder/M_NoSuchMaterial";
+        }
+        Patch Body = Grid(9, 9) { }
+    }
+}

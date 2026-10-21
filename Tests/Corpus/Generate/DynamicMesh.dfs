@@ -1,0 +1,66 @@
+// A DynamicMesh block lowers to a user parameter, one GPU emitter per patch and one emitter that draws
+// the mesh, placed where the block is written among the system's own emitters. The golden pins that
+// shape: emitter order, each lowered stack, and the mesh renderer.
+System(Name="Corpus/NS_DynamicMesh", Root="Plugin.DreamFX")
+{
+    Settings = {
+        FixedBounds = box(-500, -500, -500, 500, 500, 500);
+    }
+
+    Properties = {
+        float Lift = 40.0;
+    }
+
+    Emitter Before
+    {
+        Settings = { SimTarget = CPU; }
+        EmitterUpdate = { EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 1.0); }
+    }
+
+    DynamicMesh Petals
+    {
+        Settings = {
+            Material  = "/Engine/EngineDebugMaterials/VertexColorMaterial";
+            TexCoords = 3;
+            Normals   = Explicit;
+            Bounds    = box(-400, -400, -100, 400, 400, 400);
+            Duration  = 2.5;
+            Visible   = hlsl { step(Particles.Age, 2.0) };
+        }
+
+        Inputs = {
+            float Lift = User.Lift;
+        }
+
+        Renderer = {
+            SortOrderHint = 12;
+        }
+
+        Draw = {
+            Particles.Color = (1.0, 0.5, 0.25, 1.0);
+        }
+
+        Patch Back = Ring(33, 5, Copies = 4)
+        {
+            Position = Dir * lerp(20.0, 300.0, V) + float3(0.0, 0.0, Lift * K);
+            Normal = float3(0.0, 0.0, 1.0);
+            UV2 = float2(K / NK, Rand);
+        }
+
+        Patch Rim = Tube(33, 3, Material = "/Engine/EngineMaterials/WorldGridMaterial", Flip = true)
+        {
+            Position = Dir * 300.0 + float3(0.0, 0.0, V * 30.0);
+        }
+
+        Patch Front = Strip(17)
+        {
+            Color = float4(U, V, 0.0, 1.0);
+        }
+    }
+
+    Emitter After
+    {
+        Settings = { SimTarget = CPU; }
+        EmitterUpdate = { EmitterState(LifeCycleMode = Self, LoopBehavior = Once, LoopDuration = 1.0); }
+    }
+}

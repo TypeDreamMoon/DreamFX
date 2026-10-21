@@ -1,5 +1,6 @@
 #include "DreamFXLint.h"
 
+#include "Generation/DreamFXDynamicMesh.h"
 #include "Generation/DreamFXSystemInheritance.h"
 #include "Misc/ScopeExit.h"
 
@@ -267,6 +268,25 @@ namespace UE::DreamFX::Editor
 		{
 			FDocument Flattened;
 			if (ResolveSystemInheritance(Document, Flattened, Diagnostics)) { Run(Flattened, Diagnostics); }
+			return;
+		}
+
+		if (Document.Kind == EDocumentKind::System && !Document.DynamicMeshes.IsEmpty())
+		{
+			// Lint answers from the text, so the blocks are lowered without looking assets up; what they
+			// lower to is then linted like anything written by hand, generated modules included.
+			FDynamicMeshLowerOptions Options;
+			Options.bResolveAssets = false;
+			FDynamicMeshLowering Lowering;
+			if (LowerDynamicMeshes(Document, Options, Lowering, Diagnostics))
+			{
+				for (const FDocument& Module : Lowering.Modules)
+				{
+					Run(Module, Diagnostics);
+				}
+				Run(Lowering.System, Diagnostics);
+			}
+			Diagnostics.SetFile(Document.SourceFilePath);
 			return;
 		}
 
