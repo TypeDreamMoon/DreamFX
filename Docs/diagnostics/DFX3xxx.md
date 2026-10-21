@@ -14,7 +14,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1930`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1941`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1989`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2000`
 <!-- generated:end DFX3000 -->
 
 **Cause.** The `Root="..."` does not name a mounted content root, or `Name="..."` has no asset name after its last slash.
@@ -32,7 +32,7 @@
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1519`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1520`
 <!-- generated:end DFX3001 -->
 
 **Cause.** The module name resolved to nothing on the search paths. Distinct from DFX3003, which means the module exists but has no such input -- a typo in a path and a typo in an argument would otherwise read the same.
@@ -50,7 +50,7 @@
 Could not read the input schema of module '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1560`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1613`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1561`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1614`
 <!-- generated:end DFX3002 -->
 
 **Cause.** The module was found but its input signature could not be read. The schema is probed by adding the module to a transient system, so this usually means the module cannot live in the stack it was written in.
@@ -68,7 +68,7 @@ Could not read the input schema of module '%s': %s
 Module '%s' has no input named '%s'.%s Available inputs: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1677`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1678`
 <!-- generated:end DFX3003 -->
 
 **Cause.** The module has no input by that name. Niagara input names contain spaces (`Loop Duration`); DreamFX normalises both sides, so `LoopDuration` matches, but a misspelling does not.
@@ -86,7 +86,7 @@ Module '%s' has no input named '%s'.%s Available inputs: %s
 Unknown renderer type '%s'. Expected one of SpriteRenderer, MeshRenderer, RibbonRenderer, LightRenderer, DecalRenderer, ComponentRenderer, VolumeRenderer, or any UNiagaraRendererProperties subclass.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1740`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1741`
 <!-- generated:end DFX3004 -->
 
 **Cause.** Renderer types are a closed set.
@@ -104,7 +104,7 @@ Unknown renderer type '%s'. Expected one of SpriteRenderer, MeshRenderer, Ribbon
 Emitter '%s' is declared more than once. Emitter names are stable keys and must be unique.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2117`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2176`
 <!-- generated:end DFX3005 -->
 
 **Cause.** Two emitters share a name. The name is the stable key the regeneration contract matches handles by (plan 4.5), so a duplicate is data loss, not a naming nit.
@@ -122,7 +122,7 @@ Emitter '%s' is declared more than once. Emitter names are stable keys and must 
 '%s' is neither an allowed inline function (%s) nor a dynamic input: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1183`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1184`
 <!-- generated:end DFX3006 -->
 
 **Cause.** A call in a value position matched neither the L6 builtin whitelist nor any dynamic input asset.
@@ -140,7 +140,7 @@ Emitter '%s' is declared more than once. Emitter names are stable keys and must 
 Could not read the input schema of dynamic input '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1225`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1226`
 <!-- generated:end DFX3007 -->
 
 **Cause.** The dynamic input asset was found but its signature could not be read.
@@ -158,7 +158,7 @@ Could not read the input schema of dynamic input '%s': %s
 Dynamic input '%s' has no input named '%s'. Available inputs: %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1277`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1278`
 <!-- generated:end DFX3008 -->
 
 **Cause.** The dynamic input has no input by that name -- DFX3003 one level down a chain.
@@ -176,7 +176,7 @@ Dynamic input '%s' has no input named '%s'. Available inputs: %s
 Dynamic input '%s' is pinned to version %s, which its asset does not offer. Available version(s): %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1207`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1542`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1208`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1543`
 <!-- generated:end DFX3009 -->
 
 **Cause.** An R7 `@version` pin disagrees with the module asset's exposed version, or pins an asset that never opted into versioning. The pin records which version the source was written against; DreamFX cannot build against any other one, because the external edit API has no way to select a version.
@@ -194,7 +194,7 @@ Dynamic input '%s' is pinned to version %s, which its asset does not offer. Avai
 Property '%s': %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1145`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2051`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:337`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1146`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2110`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:338`
 <!-- generated:end DFX3010 -->
 
 **Cause.** A `Properties` entry is malformed -- see the inner message.
@@ -212,7 +212,7 @@ Property '%s': %s
 Cannot read the default for %s setting '%s'.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1965`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:737`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:766`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2024`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:738`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:767`
 <!-- generated:end DFX3020 -->
 
 **Cause.** A settings key is not supported, or the generator cannot read a mapped setting's fresh-asset default from the current engine. The latter prevents rebuilding with stale values for settings removed from the source.
@@ -230,7 +230,7 @@ Cannot read the default for %s setting '%s'.
 User parameter '%s' is declared more than once.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1998`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2057`
 <!-- generated:end DFX3021 -->
 
 **Cause.** Two user parameters share a name; a blueprint `SetNiagaraVariable` would reach whichever won.
@@ -248,7 +248,7 @@ User parameter '%s' is declared more than once.
 A Module or DynamicInput must declare Settings.Usage -- it decides which stacks the module can be placed in.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:186`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:187`
 <!-- generated:end DFX3030 -->
 
 **Cause.** `Usage` decides which stacks a module may be placed in. Without it the module exists and is unreachable from every stack.
@@ -266,7 +266,7 @@ A Module or DynamicInput must declare Settings.Usage -- it decides which stacks 
 A DynamicInput must declare Settings.Output -- its return type cannot be inferred from the body.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:194`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:195`
 <!-- generated:end DFX3031 -->
 
 **Cause.** A dynamic input's return type cannot be inferred from its body.
@@ -284,7 +284,7 @@ A DynamicInput must declare Settings.Output -- its return type cannot be inferre
 A DynamicInput's Usage must be DynamicInput or a nonempty array of stack names.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:218`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:219`
 <!-- generated:end DFX3032 -->
 
 **Cause.** A `DynamicInput` declares an invalid Usage value: a bare stack name, an empty array, or an array containing an unknown stack name.
@@ -302,7 +302,7 @@ A DynamicInput's Usage must be DynamicInput or a nonempty array of stack names.
 Input '%s' is declared more than once.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:228`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:229`
 <!-- generated:end DFX3033 -->
 
 **Cause.** Two inputs share a name and would collide on the same `Module.` parameter.
@@ -320,7 +320,7 @@ Input '%s' is declared more than once.
 Input '%s' is marked [StaticSwitch] but is a %s. A static switch must be a bool, an int or an enum.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:243`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:244`
 <!-- generated:end DFX3034 -->
 
 **Cause.** R5: a static switch is resolved at compile time, so it has to be something a switch can branch on.
@@ -338,7 +338,7 @@ Input '%s' is marked [StaticSwitch] but is a %s. A static switch must be a bool,
 Input '%s' is a [StaticSwitch], so its default must be a compile-time constant.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:249`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:250`
 <!-- generated:end DFX3035 -->
 
 **Cause.** R5 from the other side: a switch resolved at compile time cannot take a runtime value.
@@ -356,7 +356,7 @@ Input '%s' is a [StaticSwitch], so its default must be a compile-time constant.
 The Body block is empty.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:258`
+**Raised by** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:259`
 <!-- generated:end DFX3036 -->
 
 **Cause.** An empty body generates a module that occupies a stack slot and does nothing.
@@ -428,7 +428,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2136`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2195`
 <!-- generated:end DFX3040 -->
 
 **Cause.** The `from` path did not resolve to a `.dfe` on disk.
@@ -446,7 +446,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 '%s' could not be parsed; see the errors above.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2149`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2208`
 <!-- generated:end DFX3041 -->
 
 **Cause.** The referenced `.dfe` has its own errors; they are reported above this one against the `.dfe`'s own path.
@@ -464,7 +464,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 '%s' declares a %s, but 'from' needs an Emitter document.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2159`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2218`
 <!-- generated:end DFX3042 -->
 
 **Cause.** `from` pulls in an emitter, and the referenced file declares something else.
@@ -482,7 +482,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 '%s' reads user parameters this system does not declare: %s. Add them to the Properties block.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1916`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1975`
 <!-- generated:end DFX3043 -->
 
 **Cause.** A `.dfe` is merged by copy (R3), including whatever `User.*` it reads. The host has to declare those or the copied emitter reads a parameter that does not exist. The diagnostic points at the `from` line, because that is where the decision was made.
@@ -572,7 +572,7 @@ Default override '%s' changes its type from %s to %s. Overrides must keep the ba
 MeshRenderer has no Material property. Set OverrideMaterials = [\"/path/to/material\"]; and bOverrideMaterials = true; to override its mesh materials.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1791`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1792`
 <!-- generated:end DFX3049 -->
 
 **Cause.** A `MeshRenderer` declares `Material`, but mesh materials are controlled by its override array and enable switch.
@@ -590,7 +590,7 @@ MeshRenderer has no Material property. Set OverrideMaterials = [\"/path/to/mater
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:138`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:178`
 <!-- generated:end DFX3050 -->
 
 **Cause.** The system's `Parent` reference cannot be resolved to a `.dfs` source file.
@@ -608,7 +608,7 @@ MeshRenderer has no Material property. Set OverrideMaterials = [\"/path/to/mater
 Only a System document can inherit a .dfs parent.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:131`, `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:154`, `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:161`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:171`, `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:194`, `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:201`
 <!-- generated:end DFX3051 -->
 
 **Cause.** The parent source cannot be parsed, does not declare a `System`, or is being inherited by a non-system document.
@@ -626,7 +626,7 @@ Only a System document can inherit a .dfs parent.
 System inheritance contains a cycle or exceeds 128 sources: %s -> %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:144`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:184`
 <!-- generated:end DFX3052 -->
 
 **Cause.** The system's parent chain revisits a source file or exceeds the limit of 128 sources.
@@ -644,7 +644,7 @@ System inheritance contains a cycle or exceeds 128 sources: %s -> %s.
 Inherited parameter '%s' changes type from %s to %s. An override must preserve the parent's parameter type.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:74`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:85`
 <!-- generated:end DFX3053 -->
 
 **Cause.** A child system redeclares an inherited parameter with a different Niagara type.
@@ -662,7 +662,7 @@ Inherited parameter '%s' changes type from %s to %s. An override must preserve t
 Parameter '%s' is declared twice in one inheritance layer. An override must be declared in the child source, not twice in the same source.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:22`, `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:34`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:22`, `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:34`, `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:45`
 <!-- generated:end DFX3054 -->
 
 **Cause.** One source in a system inheritance chain declares the same parameter or emitter name more than once.
@@ -680,7 +680,7 @@ Parameter '%s' is declared twice in one inheritance layer. An override must be d
 (built at runtime)
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2197`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2203`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2256`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2262`
 <!-- generated:end DFX3055 -->
 
 **Cause.** An emitter's `inherits` path cannot be resolved to a standalone Niagara emitter asset with inheritance enabled.
@@ -698,7 +698,7 @@ Parameter '%s' is declared twice in one inheritance layer. An override must be d
 Native parent has an unavailable version or a cyclic parent chain: %s.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2216`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2223`
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2275`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2282`
 <!-- generated:end DFX3056 -->
 
 **Cause.** A native emitter parent chain contains an unavailable version, a cycle, or unmerged ancestor changes.
@@ -722,4 +722,166 @@ Attribute '%s' is declared with conflicting types.
 **Cause.** A `.dfm` custom attribute has conflicting types, is read during its own initialization, or is first initialized on a path that might not execute.
 
 **Fix.** Give a new attribute one unconditional whole-value initializer before control flow; to update a custom attribute supplied by an earlier module, declare its type without an initializer and keep subsequent types consistent.
+
+## DFX3058
+
+<!-- generated:begin DFX3058 -->
+**Severity** error
+
+**Message**
+
+```
+Patch '%s': unknown topology '%s'. Expected Grid(Columns, Rows), Strip(Columns), Ring(Columns, Rows), Tube(Columns, Rows) or Sphere(Columns, Rows).
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:428`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:438`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:449`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:465`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:476`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:487`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:505`
+<!-- generated:end DFX3058 -->
+
+**Cause.** A patch's topology call is not one the lowering knows: an unknown topology, the wrong number of vertex counts (a `Strip` takes one, the others two), a count that is not an integer literal of at least 2, or an unknown or misshapen option (`Copies`, `Material`, `Flip`).
+
+**Fix.** Write `Grid`, `Strip`, `Ring`, `Tube` or `Sphere` with integer vertex counts, then the options by name: `Tube(65, 17, Copies = 3, Flip = true)`. Counts are vertex counts, so a closed shape's seam column is included.
+
+## DFX3059
+
+<!-- generated:begin DFX3059 -->
+**Severity** error
+
+**Message**
+
+```
+%s needs an emitter named '%s', which %s already uses. Rename one of them.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1041`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1066`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1125`
+<!-- generated:end DFX3059 -->
+
+**Cause.** A `DynamicMesh` named `X` becomes the user parameter `User.X`, the emitter `X` that draws it and one emitter `X_<Patch>` per patch. One of those names is already taken -- by `Properties`, by an `Emitter` block, by another block -- or two patches of one block share a name.
+
+**Fix.** Rename the block, the patch, or whatever already holds the name. The names are part of the built asset, so blueprints that set `User.X` keep working only while the block keeps its name.
+
+## DFX3060
+
+<!-- generated:begin DFX3060 -->
+**Severity** error
+
+**Message**
+
+```
+Material takes a quoted material asset path, e.g. Material = \"/Game/FX/M_Shell.M_Shell\";
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1404`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:274`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:307`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:316`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:392`
+<!-- generated:end DFX3060 -->
+
+**Cause.** A `Settings` entry of a `DynamicMesh` block is unknown, written twice, or has the wrong shape: `TexCoords` is an integer 0-8, `Colors` true/false, `Normals` one of None/Auto/Explicit, `Bounds` a `box(...)` whose minimum is not above its maximum, `Duration` a positive number. A `Renderer` block that sets `Meshes` or `MeshBindings` is refused too -- the renderer draws this mesh and nothing else.
+
+**Fix.** Use the documented key and shape; the message names the expected form.
+
+## DFX3061
+
+<!-- generated:begin DFX3061 -->
+**Severity** error
+
+**Message**
+
+```
+Material '%s': %s
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:282`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:289`
+<!-- generated:end DFX3061 -->
+
+**Cause.** A `Material` (on the block or on a patch) does not resolve to a material asset. The engine would draw the mesh with its default material, which is never what was meant. Lint does not look assets up, so this is reported by a build.
+
+**Fix.** Fix the path. Every spelling a `.dfs` accepts for an asset works: `/Game/FX/M_X`, `/Game/FX/M_X.M_X`, `Plugin.Name:Materials/M_X`.
+
+## DFX3062
+
+<!-- generated:begin DFX3062 -->
+**Severity** error
+
+**Message**
+
+```
+Input '%s' of DynamicMesh '%s' uses a name the patch prologue already declares (U, V, I, J, NU, NV, K, NK, Rand, T, Index, Theta, Phi, Dir, the outputs, or anything starting with DM_). Rename it.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1088`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1095`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1102`
+<!-- generated:end DFX3062 -->
+
+**Cause.** An `Inputs` entry cannot be passed to the patch bodies: its name is one the generated prologue already declares (`U`, `V`, `I`, `J`, `NU`, `NV`, `K`, `NK`, `Rand`, `T`, `Index`, `Theta`, `Phi`, `Dir`, the outputs, anything starting with `DM_`), it is declared twice, or it has no value.
+
+**Fix.** Rename it, or give it the value to pass: `float Gain = User.Gain;`. Inputs are not module inputs with defaults -- each one says what every patch receives.
+
+## DFX3063
+
+<!-- generated:begin DFX3063 -->
+**Severity** error
+
+**Message**
+
+```
+DynamicMesh '%s' has no Patch, so there is nothing to draw. Add one, e.g. `Patch Sheet = Grid(33, 9) { }`.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1115`
+<!-- generated:end DFX3063 -->
+
+**Cause.** The block declares no `Patch`, so the mesh would have no vertices.
+
+**Fix.** Add a patch, e.g. `Patch Sheet = Grid(33, 9) { }` -- an empty body draws the topology's default shape.
+
+## DFX3064
+
+<!-- generated:begin DFX3064 -->
+**Severity** error
+
+**Message**
+
+```
+Patch '%s' has %lld vertices (%d x %d x %d copies); a patch holds at most %lld, because the generated index arithmetic is exact in float only that far. Split it into more patches.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1198`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:515`
+<!-- generated:end DFX3064 -->
+
+**Cause.** A patch has more than 16,777,216 vertices (the generated index arithmetic is exact in float only that far), or the whole mesh -- with the texture coordinate workaround multiplying the declared vertex count by `TexCoords` -- does not fit the data interface's int32 counts.
+
+**Fix.** Split the patch into several, lower its resolution or copies, or use fewer UV channels.
+
+## DFX3065
+
+<!-- generated:begin DFX3065 -->
+**Severity** error
+
+**Message**
+
+```
+Patch '%s' writes '%s', but DynamicMesh '%s' has Normals = Auto, which evaluates the body four times per vertex -- the write would run four times. Keep particle state out of the body, or use Normals = Explicit and write Normal yourself.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1157`
+<!-- generated:end DFX3065 -->
+
+**Cause.** With `Normals = Auto` the patch body is evaluated four times per vertex (three samples a quarter grid step away, then the vertex itself), so a write to a `Particles.*` attribute in it would run four times, the last with the vertex's own values. Accumulating state (`+=`, `++`) would be wrong outright.
+
+**Fix.** Keep particle state out of the body, or switch to `Normals = Explicit` and write `Normal` yourself (the topology's analytic normal is the starting value).
+
+## DFX3066
+
+<!-- generated:begin DFX3066 -->
+**Severity** error
+
+**Message**
+
+```
+DynamicMesh '%s' needs a plain name (letters, digits, underscores): it becomes a user parameter, emitter names and generated asset names.
+```
+
+**Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1058`, `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1133`
+<!-- generated:end DFX3066 -->
+
+**Cause.** A `DynamicMesh` or `Patch` name is not a plain identifier -- typically a back-quoted name with a space or punctuation. The names become the user parameter, emitter names and generated module asset names, and an asset name cannot hold them.
+
+**Fix.** Use letters, digits and underscores, starting with a letter: `DynamicMesh MyMesh`.
 
