@@ -9,7 +9,7 @@ description: "`.dfs` — 一种系统"
 
 产生一个 `UNiagaraSystem`。
 
-添加 `Parent="../Base.dfs"` 以继承另一个系统的源。关于合并、路径与重建规则，见
+添加 `Parent="../Base.dfs"` 以继承另一个系统的源。有关合并、路径与重建规则，见
 [系统源继承](system-inheritance.md)。
 
 ```cpp
@@ -30,8 +30,8 @@ System(Name="Effects/NS_Spark", Root="Game")
 
 ## `Settings`
 
-schema 驱动：名字是从活资产上读出来的，所以拼错会报出真实的可用列表
-（DFX3020）。常用的几个：
+由 schema 驱动：名称从活资产上读取，因此拼错会报出真实的可选列表
+（DFX3020）。常用项：
 
 ```cpp
 Settings = {
@@ -45,21 +45,22 @@ Settings = {
 }
 ```
 
-`ModulePaths` 是 DreamFX 自己的，不是 Niagara 的：它给解析模块短名追加搜索根
-（L4）。引擎默认项（`/Niagara/Modules`、`/Niagara/DynamicInputs`、`/Niagara/Functions`）会留在
-列表上，所以声明自己的目录是追加，而不是替换。
+`ModulePaths` 是 DreamFX 自有的，而非 Niagara 的：它为解析模块短名添加搜索根
+（L4）。引擎默认项（`/Niagara/Modules`、`/Niagara/DynamicInputs`、`/Niagara/Functions`）仍保留在
+列表中，因此声明自己的文件夹是追加到它们之上，而不是替换它们。
 
-重建会把省略掉的受支持系统与发射器设置重置为全新资产的引擎默认值，
-然后应用源中声明的设置。因此移除一个受支持的设置会清除它之前的覆盖；
-这一重置覆盖的是生成器映射的设置，而不是无关的资产字段。
+重建会将省略的受支持系统与发射器设置重置为全新资产的引擎默认值，
+然后再应用源中声明的设置。因此移除某个受支持的设置会清除它此前的
+覆盖值；此重置涵盖的是生成器映射的设置，而非无关的资产字段。
 
-声明一个 `FixedBounds` 盒会打开系统的覆盖标志，因为动态边界下的盒是不起作用的。
-写 `UseFixedBounds = false;` 可以在边界保持动态的同时保留已编写的盒；反编译器对一个持有盒但标志关闭的
-资产正是这样写的，因此往返能保留两者。
+声明的 `FixedBounds` 盒会打开系统的覆盖标志，因为动态边界下的盒是
+不起作用的。写 `UseFixedBounds = false;` 可在边界保持动态的同时保留已编写的盒；
+反编译器对持有盒但标志关闭的资产正是这样写出的，因此往返之后
+两者都得以保留。
 
 <a id="properties--user-parameters"></a>
 
-## `Properties` —— user 参数
+## `Properties` — 用户参数
 
 ```cpp
 Properties = {
@@ -72,10 +73,10 @@ Properties = {
 }
 ```
 
-每一条变成 `User.<Name>`，可在蓝图中用 `SetNiagaraVariable*` 设值。这个名字是跨重建的稳定
-键（plan 4.5），所以重命名会打断每一个引用它的蓝图。
+每一项都会成为 `User.<Name>`，可在蓝图中通过 `SetNiagaraVariable*` 设值。该名称是跨重建的稳定
+键（plan 4.5），因此重命名会打断每一个引用它的蓝图。
 
-参数还可以用 `Group("Name") { ... }` 作用域来组织，与 DreamShader 一致：
+参数也可通过 `Group("Name") { ... }` 作用域来组织，与 DreamShader 一致：
 
 ```cpp
 Properties = {
@@ -90,21 +91,24 @@ Properties = {
 }
 ```
 
-作用域内的每个参数都继承组名，而 `SortPriority` 是按声明顺序盖上的 —— 第 10 步，一个计数器
-贯穿整个块，所以组和嵌套按一条连续的序列给成员编号。嵌套与 `|`（Unreal 的子类别
-语法）组合：`Group("Outer") { Group("Inner") { … } }` 把它的成员命名为 `Outer|Inner`。参数自身显式的
-`[ Group=… ]` 或 `[ SortPriority=… ]` 优先，且不占用自动编号槽位；松散顶层参数两者都不带。
-关键字不区分大小写。
+作用域内的每个参数都继承组名，而 `SortPriority` 按
+声明顺序加盖——第 10 步，一个贯穿整个块的计数器，因此组与嵌套
+按一条连续序列为成员编号。嵌套与 `|`（Unreal 的子类别
+语法）组合：`Group("Outer") { Group("Inner") { … } }` 将成员命名为 `Outer|Inner`。参数自身显式的
+`[ Group=… ]` 或 `[ SortPriority=… ]` 优先，且不占用自动
+槽位；松散的顶层参数两者都不带。关键字不区分大小写。
 
-有三个诊断守护这一形式：DFX2027（名字必须是带引号的字符串）、DFX2028（它必须
+三项诊断守护该形式：DFX2027（名称必须是带引号的字符串）、DFX2028（必须
 非空），以及 DFX2029（参数块内不得有其他形式打开花括号）。
 
-`Description` 会到达资产，`Group` 和 `SortPriority` 也会：适配器会根据
-计划重建系统的 user 参数层级（`UNiagaraSystemEditorData::UserParameterHierarchy`），因此细节面板按源中布局的方式对参数分组和排序。
-UE 5.8 的逐变量 `CategoryName` / `EditorSortPriority` 元数据在引擎侧已废弃 ——
-层级才是参数面板实际读取的内容。计划是关于组织的全部真相：在编辑器内手工做出的排列不会在重建后保留。
+`Description` 会到达资产，`Group` 和 `SortPriority` 亦然：适配器会从
+计划重建系统的用户参数层级（`UNiagaraSystemEditorData::UserParameterHierarchy`），
+因此细节面板按源中布局的方式对参数分组和排序。UE 5.8 的
+逐变量 `CategoryName` / `EditorSortPriority` 元数据在引擎侧已废弃——
+层级才是参数面板实际读取的内容。计划是关于组织的全部真相：
+在编辑器内手工做出的排列不会在重建后保留。
 
-数据接口参数带着它们的配置，即导出器写出的那串引号包裹的 JSON：
+数据接口参数携带其配置，即导出器写出的带引号 JSON 块：
 
 ```cpp
 Properties = {
@@ -113,20 +117,21 @@ Properties = {
 }
 ```
 
-直到 2026-08-12，这只是可声明的（plan 3.5，DFX5098「运行时喂给它」）。那是一次
-有意的范围削减，而它老得很难看：一个碰撞源或一个属性读取器**本身就是**它的配置，
-所以重建出来的镜像 default-construct 了特效用来查询世界的那些对象 —— 烟还是那股烟，
-撞到的东西不是那个东西了。DFX5098 现在的意思是值的**形状**不对，而不是它会被忽略。
+直到 2026-08-12，这只支持声明（plan 3.5，DFX5098「在运行时喂给它」）。那是一次
+有意的范围削减，而它随时间变得很糟：碰撞源或属性读取器**本身就是**它的
+配置，因此重建的镜像会默认构造特效用来查询世界的那些对象——
+烟出来了，而它与什么发生碰撞却没有。DFX5098 现在表示该值是
+形状不对，而不是它会被忽略。
 
-没有值的声明仍然是一个留给运行时填的槽，而且一直如此。`curve { }` 仍然是曲线接口的
-可读写法 —— 见 [values.md](values.md)。
+没有值的声明仍然是一个留待运行时填充的槽位，且仍是这样。`curve { }` 仍然是
+曲线接口的可读写法——见 [values.md](values.md)。
 
 <a id="stacks"></a>
 
 ## 栈
 
-六个栈，两个在系统作用域、四个在每个发射器里（L1），另外还有每个发射器一个的事件栈（用
-`OnEvent` 声明）和任意多个 simulation stage 栈（用 `Stage` 声明）（两者见下）：
+六个栈，两个在系统作用域，四个属于每个发射器（L1），外加一个用 `OnEvent` 声明的
+逐发射器事件栈，以及任意多个用 `Stage` 声明的模拟阶段栈（两者见下）：
 
 ```
 SystemSpawn      SystemUpdate           <- top level of the .dfs
@@ -134,7 +139,7 @@ EmitterSpawn     EmitterUpdate          <- inside an Emitter block
 ParticleSpawn    ParticleUpdate
 ```
 
-写的顺序就是模块顺序。有两种语句形态（L2）：
+写入顺序即模块顺序。有两种语句形式（L2）：
 
 ```cpp
 ParticleUpdate = {
@@ -145,15 +150,17 @@ ParticleUpdate = {
 }
 ```
 
-**连续的赋值折叠成一个 Set Parameters 模块**，而模块调用打断这一串。
-这条规则正是往返能够对称的原因：一个 Set Parameters 模块导出成一段赋值。
+**连续的赋值会折叠为一个 Set Parameters 模块**，而模块调用会打断这一串。
+正是这条规则让往返保持对称：一个 Set Parameters 模块导出为一段
+赋值。
 
-没有声明的栈会被原样留着，构建会说明它留了什么（DFX5003）。这对
-`SystemUpdate` 尤其重要 —— 新系统会自带一个 `SystemState`；如果把每个没声明的栈都清空，
-那每个不写显式 `SystemUpdate` 的 `.dfs` 都会产出一个永远不运行的系统。要接管一个栈
-并清空它，就把它声明成空的：`SystemUpdate = { }`。
+未声明的栈会保持原样，构建会说明它保留了什么（DFX5003）。这对
+`SystemUpdate` 很重要，新系统会在其中获得一个 `SystemState`——若清空所有未声明的栈，
+会让每个没有显式 `SystemUpdate` 的 `.dfs` 产出一个永不运行的系统。要接管一个栈
+并将其清空，就把它声明为空：`SystemUpdate = { }`。
 
-发射器的四个栈不受这条影响：DreamFX 建发射器时不带任何默认模块，所以它们本来就是空的。
+发射器的四个栈不受此影响：DreamFX 构建发射器时不带默认模块，因此
+它们无论如何一开始都是空的。
 
 <a id="module-calls"></a>
 
@@ -167,17 +174,18 @@ disabled GravityForce(Gravity = (0, 0, -980));     // in the stack, not executed
 Grid3D_ResampleFloat() as Grid3D_ResampleFloat003; // pin the node's name (see below)
 ```
 
-`as <name>` 固定的是函数调用**节点**的名字。一旦有东西链接
-`Output.<node>.<value>`，这件事就至关重要 —— 那些链接按节点显示名解析，引擎给新节点编号是按添加顺序来的，
-而一个编号背着多年编辑史的原件（一个 `003`，它的兄弟早被删光了）重建出来会拿到不同的
-编号，于是每一条 output 链接都悬空成「读在写之前」。反编译器在节点名不等于模块资产名时会写
-`as`；手写的源很少需要它。名字在每个发射器内唯一（DFX5034）。
+`as <name>` 固定函数调用**节点**的名称。一旦有任何东西链接
+`Output.<node>.<value>`，这就很关键——那些链接按节点的显示名解析，引擎按添加顺序为新
+节点编号，而一个编号承载了多年编辑历史（一个 `003`，其
+兄弟节点早已删除）的原始资产重建后会得到不同的编号，使每条输出链接悬空
+为「写入前读取」。当节点名称并非简单地等于模块
+资产名时，反编译器会写出 `as`；手写源很少需要它。名称在每个发射器内唯一（DFX5034）。
 
-实参永远具名（DFX2008）。输入名会归一化 —— Niagara 的 `Loop Duration` 写成
+参数始终具名（DFX2008）。输入名称会被规范化——Niagara 的 `Loop Duration` 写作
 `LoopDuration`。
 
-`disabled` 把模块停在那里而不删掉：它留在栈里、保留输入、不运行。这是 Niagara 自己的
-「留着但关掉」状态。它也可以前缀一个赋值：
+`disabled` 把模块暂时搁置而不删除：它留在栈中、保留其输入，且不
+运行。这就是 Niagara 自有的「保留但关闭」状态。它也可以作为赋值的前缀：
 
 ```cpp
 Color Particles.Color = (1, 1, 1, 1);
@@ -185,12 +193,13 @@ disabled Color Particles.Color = (1, 0, 0, 1);
 float Particles.CustomValue = 2.0;
 ```
 
-连续赋值只有在启用状态一致时才会折叠。这个例子创建三个 Set Parameters 节点；中间节点保持禁用，
-两侧节点保持启用。反编译器会保留该状态。`Defaults` 中的声明不能被禁用（DFX2024），
-因为默认值是参数元数据，而不是一个被执行的栈节点。
+连续赋值只有在启用状态一致时才会折叠。此示例创建三个 Set
+Parameters 节点；中间节点保持禁用，两侧节点保持启用。
+反编译器会保留该状态。`Defaults` 中的声明不能被禁用（DFX2024），因为
+默认值是参数元数据，而不是被执行的栈节点。
 
-**静态开关会闸控其他输入，而在模块上，源顺序就是写入顺序。** 一个要等开关取值后才存在的输入，
-必须写在它后面：
+**静态开关会闸控其他输入，而在模块源中，写入顺序即源顺序。** 一个只有在某个开关设置后才
+存在的输入，必须写在它之后：
 
 ```cpp
 EmitterState(
@@ -200,8 +209,8 @@ EmitterState(
 );
 ```
 
-在 **dynamic input** 上这条规则被放宽：开关会被提前，无论以什么顺序出现都先写入，所以两种情况
-都能用。
+在**动态输入**上规则被放宽：开关会被提前，无论以什么顺序出现都先写入，因此
+两种情况都能工作。
 
 ```cpp
 VelocityStrength = RandomRangeFloat(
@@ -211,10 +220,11 @@ VelocityStrength = RandomRangeFloat(
 )
 ```
 
-`dfx schema <Module> -Stack <Stack>` 打印构建看到的签名，静态开关包含在内。
+`dfx schema <Module> -Stack <Stack>` 打印出构建看到的签名，包含静态开关。
 
-`@1.2` 记录源是照哪个版本写的，在模块节点上**选中**它，资产不再暴露它就报错
-（DFX3009）。选中是图层面的操作，所以任何引擎上都能用。
+`@1.2` 记录源是针对哪个版本编写的，在模块节点上**选择**该版本，
+并在资产不再暴露它时报错（DFX3009）。选择是图层面的操作，因此
+在任何引擎上都能工作。
 
 <a id="assignments"></a>
 
@@ -226,12 +236,12 @@ Color Particles.Color      = hlsl { ... }; // a type, when the value carries non
 Emitter.MyCounter          = 0;
 ```
 
-目标带命名空间限定（DFX4025）。类型来自值；`hlsl` 块、dynamic
-input 和内联表达式都不带类型，所以那几种需要显式标注（DFX4022）。
+目标带命名空间限定（DFX4025）。类型来自值；`hlsl` 块、动态
+输入和内联表达式都没有类型，因此这些需要标注（DFX4022）。
 
 <a id="onevent--reacting-to-another-emitters-events"></a>
 
-### `OnEvent` —— 响应另一个发射器的事件
+### `OnEvent` — 响应另一个发射器的事件
 
 ```cpp
 Emitter Receiver
@@ -250,7 +260,7 @@ header 配置 handler，block 和其他任何栈一样。`Source` 指定这个�
 
 `Source` 通常是一个 emitter 名。反编译器也会在那里写出两个带方括号的 token，文本中可能带有它们：`` `<none>` ``，这个无效 id 表示 handler 从它所处的 emitter 读取；以及 `` `<unresolved GUID>` ``，一个系统中没有任何 emitter 响应的 id —— 这就是一个 handler 被带进复制系统、且途中没有任何东西重映射其来源时的样子，于是多个系统共享同一个陈旧 id。两者都原样写回，所以这样的文本能够重建并保持对资产的忠实；第二个是警告（DFX5036），因为来源已不存在的 handler 永远不会触发。反引号是词法器对非裸名称的规则，不是引号选择。
 
-事件*生成器*通常需要在源 emitter 的 `Settings` 中指定 `RequiresPersistentIDs = true`，因为它读取 `Particles.ID`；没有它，构建会报告引擎自身的栈问题（DFX6003）。
+事件*生成器*通常需要在源 emitter 的 `RequiresPersistentIDs = true` 中指定 `Settings`，因为它读取 `Particles.ID`；没有它，构建会报告引擎自身的栈问题（DFX6003）。
 
 <a id="stage--simulation-stages"></a>
 
@@ -373,17 +383,39 @@ MeshRenderer Body
 
 每个元素其实是个结构体，资产只是其中一个字段；哪个字段是靠反射找出来的，所以这对还不存在的 renderer 类型同样成立。结构体的*其他*字段 —— 网格的逐元素轴心、缩放和 LOD 范围 —— 没有语法。会因此丢东西的导出把它写进文件头，而不是抹平了事。
 
-`Bind` 与属性赋值是分开的，因为属性绑定并非普通字段——绑定结构体缓存了一个显示名、一个数据集名和若干 source-mode 标志，只有它自己的 `SetValue` 会重新计算这些内容，因此直接写入序列化字段会留下半个绑定。
+`Bind` 与属性赋值是分开的，因为属性绑定并非普通字段——绑定结构体缓存了一个显示名、一个数据集名和若干 source-mode 标志，只有它自己的 ``SetValue`` 会重新计算这些内容，因此直接写入序列化字段会留下半个绑定。
 
-其他绑定结构，包括 Sprite 或 Ribbon renderer 的 `MaterialUserParamBinding`，在导出时以带引号的 JSON 属性值形式承载。用户参数绑定只携带其名称，例如 `"{\"parameter\":{\"name\":\"User.Material\"}}"`；固定的参数类型由 renderer 提供。这样避免了序列化 Niagara 的进程本地类型索引。类型不符合预期的绑定会报告一个导出缺口。这些绑定与属性 `Bind` 语句是分开的。
+网格条目可以从用户参数而不是资产中取网格——即一个实现 Niagara 可渲染网格接口的数据接口，例如由模拟写出的 ``DI<DynamicMesh>``。在 ``MeshBindings`` 中列出绑定，与 ``Meshes`` 平行；已绑定条目的 ``Meshes`` 槽位可以是
+空字符串：
 
-**声明顺序就是 renderer 顺序**，而且没有其他寻址方式。调换两个 renderer 块的位置会重画这个特效。
+```cpp
+Properties = {
+    DI<DynamicMesh> Sheet = "{\"NumVertices\":256, \"Sections\":[{\"NumTriangles\":378}], … }";
+}
+…
+MeshRenderer Sheet {
+    Meshes       = [""];
+    MeshBindings = ["User.Sheet"];
+}
+```
 
-在 Sprite、Ribbon 或 Decal renderer 上省略 `Material` 会套用引擎默认值（DFX5004）。
+每个名称都必须是系统的用户参数（先在 ``Properties`` 中声明它）。绑定的
+类型在应用 renderer 时从该参数读取，因为 Niagara 类型定义是
+进程本地的，无法放在源中携带。空字符串会清除该条目的绑定。
+
+其他绑定结构，包括 Sprite 或 Ribbon renderer 的 ``MaterialUserParamBinding``，在导出时以带引号的 JSON 属性值形式承载。用户参数绑定只携带其名称，
+例如 ``"{\"parameter\":{\"name\":\"User.Material\"}}"``；固定的参数类型由 renderer 提供。
+这样避免了序列化 Niagara 的进程本地类型索引。类型不符合预期的绑定会报告
+一个导出缺口。这些绑定与属性 ``Bind`` 语句是分开的。
+
+**声明顺序就是 renderer 顺序**，而且没有其他寻址方式。调换两个
+renderer 块的位置会重画这个特效。
+
+在 Sprite、Ribbon 或 Decal renderer 上省略 ``Material`` 会套用引擎默认值（`DFX5004`）。
 
 <a id="referencing-a-dfe"></a>
 
-## 引用一个 `.dfe`
+## 引用一个 ``.dfe``
 
 ```cpp
 Emitter Flash from "../Emitters/E_MoonFlashCard"

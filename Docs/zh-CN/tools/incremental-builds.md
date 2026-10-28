@@ -9,7 +9,7 @@ description: "增量构建"
 
 > [DreamFX](../../../README.md) » **增量构建**
 
-过去保存 `.dfs` 会清空每个堆栈的系统并重建全部内容，因此一次保存的开销与整个系统的大小成正比，而不是与本次编辑成比例。增量构建会将新的构建计划与上次构建记录的计划进行比较，只写入差异部分。
+过去保存一个 `.dfs` 会清空其系统中每个堆栈并重建全部内容，因此一次保存的开销与整个系统的大小成正比，而不是与本次编辑成比例。增量构建会将新的构建计划与上一次构建记录的计划进行比较，只写入差异部分。
 
 | | |
 | :-- | :-- |
@@ -93,7 +93,7 @@ description: "增量构建"
 | 数据接口按位置引用发射器或渲染器，而发射器或渲染器集合发生了变化 | 自引用令牌将指向错误的目标 |
 | 增量写入本身失败 | 完整重建在同一次构建中运行，并报告其自身的诊断信息 |
 
-回退是一次正确的构建，只是较慢。下一次成功构建会存储新的摘要，因此回退之后的构建会再次变为增量构建。
+回退得到的仍是一次正确的构建，只是较慢。下一次成功构建会存储新的摘要，因此回退之后的构建又会恢复为增量构建。
 
 > [!NOTE]
 > “资源已更改”回退是安全网，而不是麻烦。已存储的计划描述的是上次构建留下的资源状态。一旦资源在 DreamFX 之外被编辑过，计划就不再描述当前存在的内容，因此基于它计算出的差异不可信，只有完整重建——即参照——才是可信的。
@@ -106,13 +106,13 @@ description: "增量构建"
 
 - 一个自动化测试会将同一编辑历史构建两次——一次增量地逐次编辑构建，一次完整构建——并比较两个资源的事实（`DescribeSystemFacts`，构建安全门和 `asset-diff` 所读取的事实）。
 
-该测试为 `DreamFX.Incremental.Equivalence`；`DreamFX.Incremental.Coverage` 运行相同的历史，并还会断言哪些编辑是以增量方式应用而非回退。三个夹具系统（若干发射器，其中一个模块由两个堆栈共享；一个事件源和接收器；一个带模拟阶段的 GPU 发射器）通过约九十次变更进行编辑，每次变更都是 `Tests/DreamFXIncrementalEquivalenceTest.cpp` 顶部变更表中的一对查找-替换，因此新增用例只需多一条条目。除了事实之外，每一步还会比较原始节点名称以及适配器读取的每个模块输入，并且在最后一步之后对反编译文本比较一次。
+该测试为 `DreamFX.Incremental.Equivalence`；`DreamFX.Incremental.Coverage` 运行相同的历史，并还会断言哪些编辑是以增量方式应用而非回退。每个夹具（`DreamFX.Incremental.Equivalence.Sparks`、`.Relay`、`.Gpu`）各有一个子测试；一个夹具的历史在每个进程中只运行一次，且其两个子测试都读取该记录，因此分片运行时应当将一个夹具的两个子测试保留在同一进程中。三个夹具系统（若干发射器，其中一个模块由两个堆栈共享；一个事件源和接收器；一个带模拟阶段的 GPU 发射器）通过约九十次变更进行编辑，每次变更都是 `Tests/DreamFXIncrementalEquivalenceTest.cpp` 顶部变更表中的一对查找-替换，因此新增用例只需多一条条目。除了事实之外，每一步还会比较原始节点名称以及适配器读取的每个模块输入，并且在最后一步之后对反编译文本比较一次。
 
 ```text
 UnrealEditor-Cmd <uproject> -ExecCmds="Automation RunTests DreamFX.Incremental; Quit" -unattended -nullrhi -nosplash -stdout -FullStdOutLogOutput -TestExit="Automation Test Queue Empty"
 ```
 
-日志在每一步有一行 `DFXINCR`，包含增量报告和每次构建的墙钟时间，这同时也是前后测量。差异会在造成差异的那一步报告，并附上双方的事实，随后两个资源都会被从头重建，以便下一步独立评判。`-DreamFXIncrementalDump=<dir>` 为两个资源写出每一步的事实、名称和输入，而带有 `-DreamFXIncrementalFixture=<name>` 的 `-DreamFXIncrementalSteps=<word>|<word>` 可将一次运行缩小到少量变更。
+日志在每一步有一行 `DFXINCR`，包含增量报告和每次构建的墙钟时间，这同时也是前后测量。差异会在造成差异的那一步报告，并附上双方的事实，随后两个资源都会被从头重建，以便下一步独立评判。`-DreamFXIncrementalDump=<dir>` 为两个资源写出每一步的事实、名称和输入，而 `-DreamFXIncrementalFixture=<name>` 配合 `-DreamFXIncrementalSteps=<word>|<word>` 可将一次运行缩小到少量变更。
 
 `DescribeSystemFacts` 只统计**从系统出发通过非瞬态引用可达的**数据接口。重建后在内存中遗留的接口——被移除的节点、`Invalidated_*` 缓存的默认值、瞬态占位符——不会被报告。这对比较很重要：以前，同一资源在垃圾回收或保存前后可能对自身作出不同的描述，因此事实比较可能取决于资源最后一次保存或回收的时间。构建安全门和 `asset-diff` 读取相同的事实，因此两者在保存和重新加载后都保持稳定。
 
