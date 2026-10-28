@@ -60,6 +60,8 @@ namespace UE::DreamFX
 			bool ParseSimulationStageArguments(FSimulationStageSpec& OutSpec);
 			bool ParseEmitterDeclaration(FEmitter& OutEmitter);
 			bool ParseRendererDeclaration(FRenderer& OutRenderer);
+			bool ParseDynamicMeshDeclaration(FDynamicMesh& OutMesh);
+			bool ParseDynamicMeshPatch(FDynamicMeshPatch& OutPatch);
 
 			bool ParseStatement(FStack& OutStack, TArray<FString>& RegionStack);
 			bool ParseAttributeList(TArray<FAttribute>& OutAttributes);
@@ -1754,6 +1756,142 @@ namespace UE::DreamFX
 			return ParseEmitterBody(OutEmitter, /*bAllowRenderers=*/true);
 		}
 
+		/**
+		 * `Patch Name = Tube(65, 17, Copies = 3) { ... }` -- the topology is an ordinary call value, so
+		 * counts and options reuse the argument grammar; the body is raw HLSL, read the way a .dfm Body is,
+		 * because tokenising HLSL would mangle it. Checking the topology and its arguments is the
+		 * lowering's job (DFX3058), where the reasons can name the topology table.
+		 */
+		bool FParserImpl::ParseDynamicMeshPatch(FDynamicMeshPatch& OutPatch)
+		{
+			OutPatch.Location = Lexer.Peek().Location;
+			Lexer.Next(); // 'Patch'
+
+			if (!ExpectIdentifier(OutPatch.Name) || !Expect(TEXT("=")))
+			{
+				SkipToStatementEnd();
+				return false;
+			}
+
+			const FSourceLocation TopologyLocation = Lexer.Peek().Location;
+			OutPatch.Topology = ParseValue();
+			if (!OutPatch.Topology.IsValid() || OutPatch.Topology->Kind != EValueKind::Call)
+			{
+				Diagnostics.Error(TEXT("DFX2030"), TopologyLocation,
+					FString::Printf(TEXT("Patch '%s' needs a topology call such as Grid(33, 9) or Tube(65, 17, Copies = 3), followed by its HLSL body in braces."),
+						*OutPatch.Name));
+				if (Lexer.Peek().IsSymbol(TEXT("{")))
+				{
+					SkipBalancedBlock();
+				}
+				else
+				{
+					SkipToStatementEnd();
+				}
+				return false;
+			}
+
+			if (!Lexer.ReadRawBlock(OutPatch.Body, OutPatch.BodyLocation))
+			{
+				return false;
+			}
+			Lexer.TryConsumeSymbol(TEXT(";"));
+			return true;
+		}
+
+		bool FParserImpl::ParseDynamicMeshDeclaration(FDynamicMesh& OutMesh)
+		{
+			OutMesh.Location = Lexer.Peek().Location;
+			Lexer.Next(); // 'DynamicMesh'
+
+			if (!ExpectIdentifier(OutMesh.Name))
+			{
+				SkipToStatementEnd();
+				if (Lexer.Peek().IsSymbol(TEXT("{")))
+				{
+					SkipBalancedBlock();
+				}
+				return false;
+			}
+			if (!Expect(TEXT("{")))
+			{
+				return false;
+			}
+
+			bool bSeenDraw = false;
+			while (!Lexer.Peek().IsEnd() && !Lexer.Peek().IsSymbol(TEXT("}")))
+			{
+				const FToken& Token = Lexer.Peek();
+				const int32 BeforeOffset = Token.Offset;
+				const FString Keyword = Token.Kind == ETokenKind::Identifier ? Token.Text : FString();
+
+				if (Keyword == TEXT("Settings"))
+				{
+					Lexer.Next();
+					ParseSettingsBlock(OutMesh.Settings);
+				}
+				else if (Keyword == TEXT("Inputs"))
+				{
+					Lexer.Next();
+					ParseParameterBlock(OutMesh.Inputs);
+				}
+				else if (Keyword == TEXT("Renderer"))
+				{
+					Lexer.Next();
+					ParseSettingsBlock(OutMesh.RendererProperties);
+				}
+				else if (Keyword == TEXT("Draw"))
+				{
+					// The drawing particle's update stack: an ordinary statement block, so the same
+					// grammar, folding and `disabled` rules apply as anywhere else.
+					if (bSeenDraw)
+					{
+						ErrorAtCurrent(TEXT("DFX2030"),
+							FString::Printf(TEXT("DynamicMesh '%s' declares 'Draw' twice; write its statements in one block."), *OutMesh.Name));
+					}
+					bSeenDraw = true;
+					OutMesh.Draw.Kind = EStackKind::ParticleUpdate;
+					OutMesh.Draw.Location = Token.Location;
+					Lexer.Next();
+					ParseStackBlock(OutMesh.Draw);
+				}
+				else if (Keyword == TEXT("Patch"))
+				{
+					FDynamicMeshPatch Patch;
+					if (ParseDynamicMeshPatch(Patch))
+					{
+						OutMesh.Patches.Add(MoveTemp(Patch));
+					}
+				}
+				else
+				{
+					ErrorAtCurrent(TEXT("DFX2030"),
+						FString::Printf(TEXT("Unknown DynamicMesh section '%s'. Expected Settings, Inputs, Renderer, Draw or Patch."),
+							Token.IsEnd() ? TEXT("end of file") : *Token.Text));
+					Lexer.Next();
+					if (Lexer.Peek().IsSymbol(TEXT("=")))
+					{
+						Lexer.Next();
+					}
+					if (Lexer.Peek().IsSymbol(TEXT("{")))
+					{
+						SkipBalancedBlock();
+					}
+					else
+					{
+						SkipToStatementEnd();
+					}
+				}
+
+				if (Lexer.Peek().Offset == BeforeOffset && !Lexer.Peek().IsEnd())
+				{
+					Lexer.Next();
+				}
+			}
+
+			return Expect(TEXT("}"));
+		}
+
 		bool FParserImpl::ParseSystemBody(FDocument& OutDocument)
 		{
 			if (!Expect(TEXT("{")))
@@ -1794,6 +1932,15 @@ namespace UE::DreamFX
 						OutDocument.Emitters.Add(MoveTemp(Emitter));
 					}
 				}
+				else if (Keyword == TEXT("DynamicMesh"))
+				{
+					FDynamicMesh Mesh;
+					Mesh.EmitterIndex = OutDocument.Emitters.Num();
+					if (ParseDynamicMeshDeclaration(Mesh))
+					{
+						OutDocument.DynamicMeshes.Add(MoveTemp(Mesh));
+					}
+				}
 				else
 				{
 					EStackKind StackKind;
@@ -1811,7 +1958,7 @@ namespace UE::DreamFX
 					else
 					{
 						ErrorAtCurrent(TEXT("DFX2016"),
-							FString::Printf(TEXT("Unknown system section '%s'. Expected Settings, Properties, SystemSpawn, SystemUpdate or Emitter."),
+							FString::Printf(TEXT("Unknown system section '%s'. Expected Settings, Properties, SystemSpawn, SystemUpdate, Emitter or DynamicMesh."),
 								*Keyword));
 						Lexer.Next();
 						if (Lexer.Peek().IsSymbol(TEXT("=")))
@@ -2114,6 +2261,15 @@ namespace UE::DreamFX
 		StampProperties(OutDocument.Settings);
 		for (FParameterDecl& Parameter : OutDocument.Parameters) { Parameter.SourceFile = OutDocument.SourceFilePath; }
 		StampStacks(OutDocument.Stacks);
+		for (FDynamicMesh& Mesh : OutDocument.DynamicMeshes)
+		{
+			Mesh.SourceFile = OutDocument.SourceFilePath;
+			StampProperties(Mesh.Settings);
+			StampProperties(Mesh.RendererProperties);
+			for (FParameterDecl& Input : Mesh.Inputs) { Input.SourceFile = OutDocument.SourceFilePath; }
+			Mesh.Draw.SourceFile = OutDocument.SourceFilePath;
+			for (FStatement& Statement : Mesh.Draw.Statements) { Statement.SourceFile = OutDocument.SourceFilePath; }
+		}
 		StampEmitter(OutDocument.EmitterDefinition);
 		for (FEmitter& Emitter : OutDocument.Emitters)
 		{

@@ -1,0 +1,19 @@
+// A block's name becomes a user parameter and emitter names; all of them have to be free.
+// EXPECT DFX3059 (15,5)
+// EXPECT DFX3059 (17,9)
+System(Name="Corpus/NS_DynamicMeshNameClash", Root="Plugin.DreamFX")
+{
+    Properties = {
+        float Sheet = 1.0;
+    }
+
+    Emitter Sheet_Body
+    {
+        Settings = { SimTarget = CPU; }
+    }
+
+    DynamicMesh Sheet
+    {
+        Patch Body = Grid(9, 9) { }
+    }
+}

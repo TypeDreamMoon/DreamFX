@@ -37,6 +37,17 @@ namespace UE::DreamFX::Editor
 				}
 				Emitters.Add(FName(*Emitter.Name));
 			}
+			TSet<FName> Meshes;
+			for (const FDynamicMesh& Mesh : Document.DynamicMeshes)
+			{
+				if (Meshes.Contains(FName(*Mesh.Name)))
+				{
+					Diagnostics.Error(TEXT("DFX3054"), Mesh.Location, FString::Printf(
+						TEXT("DynamicMesh '%s' is declared twice in one inheritance layer. Give each DynamicMesh in a source a unique name."), *Mesh.Name));
+					return false;
+				}
+				Meshes.Add(FName(*Mesh.Name));
+			}
 			return true;
 		}
 
@@ -105,6 +116,35 @@ namespace UE::DreamFX::Editor
 					*Existing = MoveTemp(Merged);
 				}
 				else { Out.Emitters.Add(Emitter); }
+			}
+
+			// A DynamicMesh is replaced whole by a child block of the same name, not merged: its parts
+			// (patch counts, sections, the generated modules) only mean something together. A child
+			// block that replaces one keeps the parent's place in emitter order; a new one goes where the
+			// child put it among the emitters the child added.
+			Out.DynamicMeshes = Base.DynamicMeshes;
+			for (const FDynamicMesh& Mesh : Child.DynamicMeshes)
+			{
+				FDynamicMesh* Existing = Out.DynamicMeshes.FindByPredicate([&](const FDynamicMesh& Candidate)
+					{ return FName(*Candidate.Name) == FName(*Mesh.Name); });
+				if (Existing)
+				{
+					const int32 InheritedIndex = Existing->EmitterIndex;
+					*Existing = Mesh;
+					Existing->EmitterIndex = InheritedIndex;
+				}
+				else
+				{
+					int32 NewBefore = 0;
+					for (int32 Index = 0; Index < Mesh.EmitterIndex && Index < Child.Emitters.Num(); ++Index)
+					{
+						const FName EmitterName(*Child.Emitters[Index].Name);
+						NewBefore += Base.Emitters.ContainsByPredicate([&](const FEmitter& Candidate)
+							{ return FName(*Candidate.Name) == EmitterName; }) ? 0 : 1;
+					}
+					FDynamicMesh& Added = Out.DynamicMeshes.Add_GetRef(Mesh);
+					Added.EmitterIndex = Base.Emitters.Num() + NewBefore;
+				}
 			}
 
 			FString ParentKey = Child.ParentPath;

@@ -16,6 +16,8 @@ System(Name="Effects/NS_Spark", Root="Game")
 
     Emitter <Name> { ... }              // inline
     Emitter <Name> from "<path>" { ... } // copied from a .dfe, then overridden
+
+    DynamicMesh <Name> { ... }          // procedural geometry, lowered to emitters (dynamic-mesh.md)
 }
 ```
 
@@ -57,10 +59,14 @@ Properties = {
     float            SparkSpeed = 450.0;
     Color            TintA      = (1.0, 0.72, 0.25, 1.0);
     Vector           HitNormal  = (0, 0, 1)              [ Description="Impact normal from blueprint" ];
-    Texture2D        NoiseTex   = "Plugin.MoonToon:Textures/T_Noise01";
+    Texture          NoiseTex   = "{\"Texture\":\"/MoonToon/Textures/T_Noise01.T_Noise01\"}";
     DI<SkeletalMesh> TargetMesh;
 }
 ```
+
+A bare data interface name is shorthand for `DI<Name>`: `Texture` above is `DI<Texture>`, Niagara's
+texture data interface, so its value is that interface's configuration -- `{"Texture":"<object path>"}`
+-- and not an asset path. There is no `Texture2D` type; it reports DFX4021.
 
 Each becomes `User.<Name>`, settable from blueprint with `SetNiagaraVariable*`. The name is a stable
 key across rebuilds (plan 4.5), so renaming one breaks every blueprint that referenced it.
@@ -443,6 +449,23 @@ an export gap. These bindings are separate from attribute `Bind` statements.
 renderer blocks repaints the effect.
 
 Leaving `Material` out on a Sprite, Ribbon or Decal renderer applies the engine default (DFX5004).
+
+## `DynamicMesh` — procedural geometry
+
+```cpp
+DynamicMesh Shell
+{
+    Settings = { Material = "/Game/FX/M_Shell.M_Shell"; Normals = Auto; }
+    Patch Ball = Sphere(65, 33) { Position = Dir * (100.0 + 20.0 * sin(Theta * 6.0 + T)); }
+}
+```
+
+A mesh whose vertices a GPU simulation computes every frame: topology as grids of quads (`Grid`,
+`Strip`, `Ring`, `Tube`, `Sphere`, each with copies), and one HLSL program per patch that writes each
+vertex's position, colour, UVs and normal. The build lowers it into a `DI<DynamicMesh>` user parameter,
+one GPU emitter per patch, generated modules and an emitter that draws the mesh, and works around the
+engine's dynamic mesh defects on the way. The whole language of the block is in
+[dynamic-mesh.md](dynamic-mesh.md).
 
 ## Referencing a `.dfe`
 

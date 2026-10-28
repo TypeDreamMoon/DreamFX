@@ -1,0 +1,9 @@
+// Mesh and patch names become emitter and asset names, so a back-quoted name with a space is refused.
+// EXPECT DFX3066 (5,5)
+System(Name="Corpus/NS_DynamicMeshQuotedName", Root="Plugin.DreamFX")
+{
+    DynamicMesh `My Mesh`
+    {
+        Patch Body = Grid(9, 9) { }
+    }
+}

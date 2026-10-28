@@ -110,7 +110,7 @@ An ordinary integer input may use `int(1.9)` as its default: it is evaluated to 
 The argument must be one finite numeric literal whose truncated value fits `int32` (DFX4044).
 For `[StaticSwitch]` defaults, write the resulting literal directly.
 
-Data interfaces (`DI<X>` and shorthands such as `Texture2D`) and instance-only object types
+Data interfaces (`DI<X>` and shorthands such as `Texture`) and instance-only object types
 (actors, components and classes marked `DefaultToInstanced`) cannot declare input defaults
 (DFX4043). Declare the input without `= ...` and supply its instance from the system or a stack input.
 These values are not asset paths. `Object<Texture>` and other asset reference types remain distinct

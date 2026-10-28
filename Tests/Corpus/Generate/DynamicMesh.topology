@@ -1,0 +1,56 @@
+user User.Lift : NiagaraFloat
+user User.Petals : NiagaraDataInterfaceDynamicMesh
+SystemUpdate:
+  - SystemState
+emitter Before
+  EmitterUpdate:
+    - EmitterState
+emitter Petals_Back
+  EmitterUpdate:
+    - EmitterState
+    - SpawnBurst_Instantaneous
+  ParticleSpawn:
+    - InitializeParticle
+    - DM_GridTopology
+    - DM_Petals_Back
+  ParticleUpdate:
+    - ParticleState
+    - DM_Petals_Back001
+emitter Petals_Rim
+  EmitterUpdate:
+    - EmitterState
+    - SpawnBurst_Instantaneous
+  ParticleSpawn:
+    - InitializeParticle
+    - DM_GridTopology
+    - DM_Petals_Rim
+  ParticleUpdate:
+    - ParticleState
+    - DM_Petals_Rim001
+emitter Petals_Front
+  EmitterUpdate:
+    - EmitterState
+    - SpawnBurst_Instantaneous
+  ParticleSpawn:
+    - InitializeParticle
+    - DM_GridTopology
+    - DM_Petals_Front
+  ParticleUpdate:
+    - ParticleState
+    - DM_Petals_Front001
+emitter Petals
+  EmitterUpdate:
+    - EmitterState
+    - SpawnBurst_Instantaneous
+  ParticleSpawn:
+    - InitializeParticle
+    - DM_Visibility
+  ParticleUpdate:
+    - ParticleState
+    - DM_Visibility001
+    - SetParameters#0
+        = Particles.Color
+  renderer 0: MeshRenderer
+emitter After
+  EmitterUpdate:
+    - EmitterState

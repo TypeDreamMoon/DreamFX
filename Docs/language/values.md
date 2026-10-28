@@ -214,7 +214,7 @@ resulting literal directly.
 | `Color` | `LinearColor` |
 | `Position` | `NiagaraPosition` |
 | `Quat` | `Quat` |
-| `Texture2D`, `DI<X>` | data interfaces |
+| `DI<X>`, or the bare name: `Texture` is `DI<Texture>` | data interfaces |
 
 Data interface parameters carry their configuration as a quoted JSON object, the same verbatim form a
 module's data interface input uses and the same form the exporter writes. Declared bare, they stay a

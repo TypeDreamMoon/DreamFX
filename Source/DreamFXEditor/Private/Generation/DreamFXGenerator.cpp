@@ -3,6 +3,7 @@
 
 #include "Adapter/DreamFXNiagaraAdapter.h"
 #include "DreamFXExpressions.h"
+#include "DreamFXDynamicMesh.h"
 #include "DreamFXEmitterMerge.h"
 #include "DreamFXSystemInheritance.h"
 #include "DreamFXModule.h"
@@ -5236,13 +5237,32 @@ namespace UE::DreamFX::Editor
 		Result.Incremental.bRequested = Options.bIncremental;
 		FDocument Flattened;
 		if (!ResolveSystemInheritance(InputDocument, Flattened, Diagnostics)) { return Result; }
-		const FDocument& Document = Flattened;
-		Diagnostics.SetFile(Document.SourceFilePath);
+		Diagnostics.SetFile(Flattened.SourceFilePath);
 
-		if (!GuardDecompiledNamespace(Document, Diagnostics))
+		if (!GuardDecompiledNamespace(Flattened, Diagnostics))
 		{
 			return Result;
 		}
+
+		// DynamicMesh blocks lower to parameters, emitters and generated modules
+		// (Docs/language/dynamic-mesh.md). The modules are built first: the plan below resolves them by
+		// path, the same way it resolves any .dfm the source calls.
+		if (Flattened.Kind == EDocumentKind::System && !Flattened.DynamicMeshes.IsEmpty())
+		{
+			FDynamicMeshLowering Lowering;
+			if (!LowerDynamicMeshes(Flattened, FDynamicMeshLowerOptions(), Lowering, Diagnostics))
+			{
+				return Result;
+			}
+			if (!BuildDynamicMeshModules(Lowering, Options, Diagnostics))
+			{
+				Result.bDrifted = Options.bVerifyOnly;
+				return Result;
+			}
+			Flattened = MoveTemp(Lowering.System);
+			Diagnostics.SetFile(Flattened.SourceFilePath);
+		}
+		const FDocument& Document = Flattened;
 
 		if (Document.Kind == EDocumentKind::Module || Document.Kind == EDocumentKind::DynamicInput)
 		{

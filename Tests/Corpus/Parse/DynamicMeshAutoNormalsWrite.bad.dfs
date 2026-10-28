@@ -1,0 +1,15 @@
+// Normals = Auto evaluates the body four times per vertex, so a particle write in it would run four
+// times; that is refused rather than left to accumulate.
+// EXPECT DFX3065 (10,9)
+System(Name="Corpus/NS_DynamicMeshAutoNormalsWrite", Root="Plugin.DreamFX")
+{
+    DynamicMesh Sheet
+    {
+        Settings = { Normals = Auto; }
+        Patch Body = Grid(9, 9)
+        {
+            // Particles.Heat = 0.0;  (commented out: not a write)
+            float Particles.Heat = Particles.Age;
+        }
+    }
+}

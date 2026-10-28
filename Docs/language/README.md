@@ -10,6 +10,7 @@ comment — the page says so where the rule is stated.
 | [dfe.md](dfe.md) | `.dfe` — a reusable emitter, and what `from` does to it |
 | [system-inheritance.md](system-inheritance.md) | `.dfs` source parents, overrides, dependency rebuilding, and cycle errors |
 | [native-emitter-inheritance.md](native-emitter-inheritance.md) | Native Niagara emitter parents with `inherits` |
+| [dynamic-mesh.md](dynamic-mesh.md) | `DynamicMesh` blocks in a `.dfs` — procedural geometry computed per vertex on the GPU |
 | [dfm.md](dfm.md) | `.dfm` — a module or dynamic input, and which engines can generate one |
 | [values.md](values.md) | Every value position, the type rules, and the eight `L*` rules by name |
 

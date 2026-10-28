@@ -1,0 +1,86 @@
+// DynamicMesh blocks: procedural geometry computed per vertex on the GPU every frame
+// (Docs/language/dynamic-mesh.md). Three meshes, each a different way of being 3D:
+//
+//   Fan    -- layered fan sheets, the shape of a stylised explosion. Each layer is a cone segment, not a
+//             camera-facing card, so the layers separate in depth as soon as the camera moves.
+//   Swirl  -- three twisted tubes around a wandering axis, lit through Normals = Auto.
+//   Shell  -- a sphere shell displaced by moving noise, lit, pulsing through the Draw block and
+//             blinking through Visible.
+//
+// Nothing here is baked: change a number and the next build changes the shape.
+System(Name="Samples/NS_DreamFXDynamicMesh", Root="Plugin.DreamFX")
+{
+    Settings = {
+        WarmupTime  = 0.0;
+        FixedBounds = box(-1200, -1200, -600, 1200, 1200, 1200);
+    }
+
+    Properties = {
+        float FanSpread = 70.0 [ Description="Half-angle of the widest fan layer, in degrees." ];
+    }
+
+    DynamicMesh Fan
+    {
+        Settings = {
+            Material  = "/Engine/EngineDebugMaterials/VertexColorMaterial";
+            TexCoords = 2;
+            Bounds    = box(-200, -600, -100, 600, 600, 600);
+        }
+
+        Inputs = {
+            float Spread = User.FanSpread;
+        }
+
+        // Back to front: copy K = 0 is drawn first.
+        Patch Layers = Ring(121, 9, Copies = 6)
+        {
+            float Layer = K / (NK - 1.0);
+            float Half = radians(Spread) * (1.0 - 0.35 * Layer);
+            float A = (U - 0.5) * 2.0 * Half + (Rand - 0.5) * 0.3;
+            float Flicker = 0.85 + 0.15 * sin(T * 7.0 + U * 40.0 + K * 3.1);
+            float R = lerp(30.0, 520.0 * (1.0 - 0.4 * Layer) * Flicker, V);
+            // The fan opens towards +Z in the YZ plane; each layer leans towards +X as a cone does.
+            Position = float3(R * lerp(0.15, 0.7, Layer) + 40.0 * Layer, sin(A) * R, cos(A) * R);
+            float Edge = saturate(min(U, 1.0 - U) * 6.0) * (1.0 - V * V);
+            Color = float4(lerp(float3(0.9, 0.1, 0.35), float3(1.0, 0.85, 0.95), Layer) * (0.4 + 0.6 * Edge), 1.0);
+            UV1 = float2(Layer, Edge);
+        }
+    }
+
+    DynamicMesh Swirl
+    {
+        Settings = {
+            Normals = Auto;
+            Bounds  = box(-300, -300, -50, 300, 300, 700);
+        }
+
+        Patch Strands = Tube(49, 41, Copies = 3)
+        {
+            float Phase = K * 2.0943951;
+            float Twist = Theta + V * 5.0 + T * 1.5;
+            float R = 18.0 + 30.0 * sin(V * 3.14159);
+            float3 Axis = float3(cos(V * 4.0 + Phase + T) * 140.0 * V, sin(V * 4.0 + Phase + T) * 140.0 * V, V * 600.0);
+            Position = Axis + float3(cos(Twist), sin(Twist), 0.0) * R + float3(0.0, -700.0, 0.0);
+        }
+    }
+
+    DynamicMesh Shell
+    {
+        Settings = {
+            Normals = Auto;
+            Bounds  = box(-260, -260, -260, 260, 260, 260);
+            Visible = hlsl { step(frac(Engine.Time * 0.2), 0.85) };
+        }
+
+        Draw = {
+            Vector Particles.Scale = hlsl { float3(1.0, 1.0, 1.0) * (1.0 + 0.08 * sin(Engine.Time * 3.0)) };
+            Position Particles.Position = hlsl { float3(0.0, 700.0, 250.0) };
+        }
+
+        Patch Ball = Sphere(97, 49)
+        {
+            float N = sin(Dir.x * 9.0 + T * 2.0) * sin(Dir.y * 7.0 - T * 1.3) * sin(Dir.z * 8.0 + T);
+            Position = Dir * (150.0 + 35.0 * N);
+        }
+    }
+}

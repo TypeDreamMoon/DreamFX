@@ -1,0 +1,18 @@
+// Settings are a closed set with fixed shapes, checked before anything is generated.
+// EXPECT DFX3060 (11,13)
+// EXPECT DFX3060 (12,13)
+// EXPECT DFX3060 (13,13)
+// EXPECT DFX3060 (14,13)
+System(Name="Corpus/NS_DynamicMeshBadSettings", Root="Plugin.DreamFX")
+{
+    DynamicMesh Sheet
+    {
+        Settings = {
+            TexCoords = 9;
+            Normals   = Smooth;
+            Bounds    = box(100, 0, 0, -100, 10, 10);
+            Shading   = 1;
+        }
+        Patch Body = Grid(9, 9) { }
+    }
+}
