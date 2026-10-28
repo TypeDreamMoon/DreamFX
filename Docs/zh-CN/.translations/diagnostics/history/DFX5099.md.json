@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "origin": "ai",
+  "sourceFile": "Docs/diagnostics/history/DFX5099.md",
+  "sourceHash": "4a751f358b0d798abcb80032c7de4e80b4e6a8ca75a3438de42281525930b739",
+  "sourceRevision": "6677fe4ed04df8f491f7a24fbf6da8afe207dfa0",
+  "source": "## DFX5099\n\n**Historical diagnostic.** This informational code is no longer emitted by the current source\ntree. The section is retained for older diagnostic links, outside the generated active-code list.\n\nThe earlier message was:\n\n```text\n[Group] and [SortPriority] are kept in source only: the external edit API's user variable struct has no metadata fields to write them to.\n```\n\nThat limitation has been removed. `Group` and `SortPriority` now reach the asset through the\nsystem's user parameter hierarchy, `UNiagaraSystemEditorData::UserParameterHierarchy`. Rebuilding\napplies the source's grouping and order; manual editor arrangements do not survive a rebuild.\nSee [user parameters in the system reference](../../language/dfs.md) for the current behavior.\n",
+  "translationFile": "Docs/zh-CN/diagnostics/history/DFX5099.md",
+  "translationHash": "4a48651e039c348746ab418fa78c41c3eb841c813a9dd1d6ed0107030b192a70",
+  "model": "deepseek-flash"
+}

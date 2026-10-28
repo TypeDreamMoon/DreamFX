@@ -477,7 +477,7 @@ rather than something guessed at.
 
 ## See also
 
-- [Getting started](../getting-started.md) — the editor-side workflow in order
+- [Getting started](../getting-started/quickstart.md) — the editor-side workflow in order
 - [Language reference](../language/README.md) — what the exported text means
 - [Incremental builds](incremental-builds.md) — what a save writes, and when it falls back to a full rebuild
 - [pull](pull.md) — the write-back behind *Write Back to Source*: what it may touch and what it refuses

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "origin": "ai",
+  "sourceFile": "Docs/diagnostics/history/unpublished-codes.md",
+  "sourceHash": "8ce55000b86e5e1f27a180bce632daad304de9d53ef03b6efff25e483e7c2383",
+  "sourceRevision": "6677fe4ed04df8f491f7a24fbf6da8afe207dfa0",
+  "source": "## DFX5015\n\nThis compatibility heading preserves links from an earlier documentation snapshot. `DFX5015` is\nnow part of the published incremental-build diagnostics: an emitter has no record in the last\nbuild's plan. See the current [DFX5015 reference](../DFX5xxx.md#dfx5015) for its cause and remedy.\n\n## DFX5020\n\nThis compatibility heading preserves links from an earlier documentation snapshot. `DFX5020` is\nnow part of the published incremental-build diagnostics: the stored module-node count does not\nmatch the stack's module count, so its nodes cannot be addressed. See the current\n[DFX5020 reference](../DFX5xxx.md#dfx5020) for its cause and remedy.\n",
+  "translationFile": "Docs/zh-CN/diagnostics/history/unpublished-codes.md",
+  "translationHash": "63025a9984e8e7d364d5c511f0069a446080f75a2f6e79f2a59ccd9c6fd4919b",
+  "model": "deepseek-flash"
+}
