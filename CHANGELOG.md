@@ -30,6 +30,8 @@
 
 ### 修复
 
+- **往返后值被静默改变（[#53](https://github.com/TypeDreamMoon/DreamFX/issues/53)）**：`DynamicMesh` 为生成的 writer / draw 发射器写了 `FixedBounds`，却没有把 `CalculateBoundsMode` 设为 `Fixed`，发射器仍是 Dynamic，引擎不读这个盒子，`Bounds` 成了死值，反编译器按模式跳过盒子，往返后回到默认 ±100；现在这些发射器同时写 `CalculateBoundsMode = Fixed`。系统设置表（生成器 `SystemSettings` 与反编译器 `SystemSettingFields`）补上 `Determinism`、`RandomSeed`、`InitialOwnerVelocityFromActor`，系统级的这三项往返后不再回到引擎默认值。这两处 `mirror-diff` L1/L2 都看不出来，只有 `asset-diff -DumpFacts` 逐值对比才会发现。
+
 - 文档：`.dfs` 用户参数示例里的 `Texture2D` 不是类型（报 `DFX4021`）。裸名是数据接口简写，纹理数据接口写 `Texture`（即 `DI<Texture>`），值是接口配置 JSON `{"Texture":"<对象路径>"}`，不是资产路径；`dfm.md` / `values.md` 同步修正。
 
 - **构建安全事实（`DescribeSystemFacts`，供构建安全闸与 `asset-diff` 使用）只统计从系统经非瞬态引用可达的数据接口**：重建后遗留在内存里的接口（被移除的节点、`Invalidated_*` 缓存默认值、瞬态占位）不再被报告。此前同一份资产在垃圾回收或保存前后会给出不同的描述。

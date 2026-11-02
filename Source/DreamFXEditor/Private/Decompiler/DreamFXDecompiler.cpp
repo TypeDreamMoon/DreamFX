@@ -941,6 +941,11 @@ namespace UE::DreamFX::Editor
 			// birth velocity 2273 (=136500 * 1/60) original vs 4529 (=136500 * 1/30) mirror.
 			{ TEXT("FixedTickDelta"),     TEXT("bFixedTickDelta") },
 			{ TEXT("FixedTickDeltaTime"), TEXT("FixedTickDeltaTime") },
+			// UNiagaraSystem carries its own seed and owner-velocity switch, separate from each emitter's;
+			// missing from both tables they came back as engine defaults with no fact difference anywhere but asset-diff.
+			{ TEXT("Determinism"),        TEXT("bDeterminism") },
+			{ TEXT("RandomSeed"),         TEXT("RandomSeed") },
+			{ TEXT("InitialOwnerVelocityFromActor"), TEXT("bInitialOwnerVelocityFromActor") },
 			// Preserve non-default authored bounds even while the system flag is disabled; the flag
 			// then has to be written too, because a declared box turns it on (WriteChangedSettings).
 			{ TEXT("UseFixedBounds"),     TEXT("bFixedBounds") },

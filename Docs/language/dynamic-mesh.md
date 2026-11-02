@@ -71,7 +71,7 @@ emitter `<Name>` (draws it) and one emitter `<Name>_<Patch>` per patch (computes
 | `TexCoords` | UV channels per vertex, `0`–`8`; the body writes `UV0` … `UV<n-1>` | `1` |
 | `Colors` | `true` / `false`: allocate the vertex colour channel | `true` |
 | `Normals` | `None`, `Auto` or `Explicit` (below) | `None` |
-| `Bounds` | `box(...)` in the mesh's local space — culling bounds and the emitters' fixed bounds | `box(-1000, -1000, -1000, 1000, 1000, 1000)` |
+| `Bounds` | `box(...)` in the mesh's local space — culling bounds; the generated emitters use it as their fixed bounds (`CalculateBoundsMode = Fixed`) | `box(-1000, -1000, -1000, 1000, 1000, 1000)` |
 | `Duration` | seconds the mesh exists, then it is gone | as long as the system runs |
 | `Visible` | any float value (literal, link, `hlsl { }`, dynamic input); the mesh is drawn while it is > 0.5 | always drawn |
 

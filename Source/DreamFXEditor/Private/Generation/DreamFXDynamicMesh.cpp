@@ -1301,6 +1301,9 @@ namespace UE::DreamFX::Editor
 				Writer.Settings.Add(MakeProperty(TEXT("LocalSpace"), FValue::MakeBool(true, PatchLocation), PatchLocation, File));
 				Writer.Settings.Add(MakeProperty(TEXT("AllocationMode"), FValue::MakeName(TEXT("Fixed"), PatchLocation), PatchLocation, File));
 				Writer.Settings.Add(MakeProperty(TEXT("PreAllocationCount"), MakeInt(Patch.VertexCount, PatchLocation), PatchLocation, File));
+				// Emitter FixedBounds is only read when the bounds mode is Fixed; without this the declared
+				// Bounds is stored but inert (Dynamic mode), and the decompiler rightly drops it.
+				Writer.Settings.Add(MakeProperty(TEXT("CalculateBoundsMode"), FValue::MakeName(TEXT("Fixed"), PatchLocation), PatchLocation, File));
 				Writer.Settings.Add(MakeProperty(TEXT("FixedBounds"), Plan.Bounds, PatchLocation, File));
 				EmitterLifecycle(Writer, Patch.VertexCount);
 
@@ -1353,6 +1356,9 @@ namespace UE::DreamFX::Editor
 			Draw.FromSourceFile = File;
 			Draw.Settings.Add(MakeProperty(TEXT("SimTarget"), FValue::MakeName(TEXT("CPU"), Location), Location, File));
 			Draw.Settings.Add(MakeProperty(TEXT("LocalSpace"), FValue::MakeBool(true, Location), Location, File));
+			// Emitter FixedBounds is only read when the bounds mode is Fixed; without this the declared
+			// Bounds is stored but inert (Dynamic mode), and the decompiler rightly drops it.
+			Draw.Settings.Add(MakeProperty(TEXT("CalculateBoundsMode"), FValue::MakeName(TEXT("Fixed"), Location), Location, File));
 			Draw.Settings.Add(MakeProperty(TEXT("FixedBounds"), Plan.Bounds, Location, File));
 			EmitterLifecycle(Draw, 1);
 

@@ -454,6 +454,11 @@ namespace UE::DreamFX::Editor
 			// nothing below the system properties records that fact.
 			{ TEXT("FixedTickDelta"),     TEXT("bFixedTickDelta"),     nullptr },
 			{ TEXT("FixedTickDeltaTime"), TEXT("FixedTickDeltaTime"),  nullptr },
+			// UNiagaraSystem carries its own seed and owner-velocity switch, separate from each emitter's;
+			// missing from both tables they came back as engine defaults with no fact difference anywhere but asset-diff.
+			{ TEXT("Determinism"),        TEXT("bDeterminism"),        nullptr },
+			{ TEXT("RandomSeed"),         TEXT("RandomSeed"),          nullptr },
+			{ TEXT("InitialOwnerVelocityFromActor"), TEXT("bInitialOwnerVelocityFromActor"), nullptr },
 		};
 
 		const FSettingMapping EmitterSettings[] =

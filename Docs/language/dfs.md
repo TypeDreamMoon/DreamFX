@@ -34,6 +34,9 @@ Settings = {
     UseFixedBounds = true;          // the system's "Fixed Bounds" override flag (bFixedBounds)
     FixedTickDelta     = true;      // substep at a fixed rate instead of once per frame
     FixedTickDeltaTime = 0.01667;   // ... of 60Hz. Changes simulation, not just smoothness
+    Determinism        = true;      // the system's own seed switch, separate from each emitter's
+    RandomSeed         = 1234;
+    InitialOwnerVelocityFromActor = false;   // engine default is true
     ModulePaths = ["/Niagara/Modules", "/Game/FX/Modules"];
 }
 ```
