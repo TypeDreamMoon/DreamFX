@@ -1,10 +1,9 @@
 ---
-title: "Agent 技能"
-description: "插件自带的四个技能，以及编码代理在编写 DreamFXLang 时必须遵循的“先读 schema”循环。"
+title: Agent 技能
+description: 插件自带的四个技能，以及编码代理在编写 DreamFXLang 时必须遵循的“先读 schema”循环。
 ---
 
-插件在
-[`.skill/`](https://github.com/TypeDreamMoon/DreamFX/tree/main/.skill) 下自带四个 agent 技能。它们是给编码代理（Claude Code 之类）的说明：如何编写、构建、调试和迁移特效，全程 headless。
+插件在 [`.skill/`](https://github.com/TypeDreamMoon/DreamFX/tree/main/.skill) 下自带四个 agent 技能。它们是给编码代理（Claude Code 之类）的说明：如何编写、构建、调试和迁移特效，全程 headless。
 
 | 技能 | 做什么 |
 | --- | --- |
@@ -40,7 +39,7 @@ description: "插件自带的四个技能，以及编码代理在编写 DreamFXL
 <a id="build-it"></a>
 
 ### 构建它
-`dfx.ps1 build <file> -Force`。
+`dfx.ps1 build <file> -Force`.
 
 <a id="fix-and-repeat"></a>
 

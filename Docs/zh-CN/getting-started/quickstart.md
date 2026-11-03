@@ -1,8 +1,3 @@
----
-title: "DreamFX 快速入门"
-description: "DreamFX 快速入门"
----
-
 <a id="getting-started-with-dreamfx"></a>
 
 # DreamFX 快速入门
@@ -17,8 +12,7 @@ DreamFX 将文本编译为标准的 Niagara 资产。你编写一个 `.dfs` 文�
 
 ## 1. 确认插件已启用
 
-`DreamFX` 和 `DreamFXEditor` 是编辑器模块，它们会随编辑器和 commandlet 一起加载。
-确认驱动能找到引擎：
+`DreamFX` 和 `DreamFXEditor` 是编辑器模块，它们会随编辑器和 commandlet 一起加载。确认驱动能找到引擎：
 
 ```bash
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 list

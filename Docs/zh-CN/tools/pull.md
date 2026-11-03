@@ -1,18 +1,10 @@
----
-title: "`pull`：将当前资产值写回源"
-description: "`pull`：将当前资产值写回源"
----
-
 <a id="pull-write-current-asset-values-back-to-source"></a>
 
 # `pull`：将当前资产值写回源
 
-> 记录于 2026-10-09，分支 `feat/pull`。工具：`dfx pull`，实现于
-> `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp`。
+> 记录于 2026-10-09，分支 `feat/pull`。工具：`dfx pull`，实现于 `Source/DreamFXEditor/Private/WriteBack/DreamFXPull.cpp`。
 >
-> [写回覆盖范围](write-back-coverage.md)记录了实测差距。另一份研究笔记
-> `write-back-from-dreamgui.md` 描述了值得复用的 DreamGUI/DUI 技术。本文档
-> 涵盖 `pull` 本身的语义、边界和测量；它不替代那些笔记。
+> [写回覆盖范围](write-back-coverage.md)记录了实测差距。另一份研究笔记 `write-back-from-dreamgui.md` 描述了值得复用的 DreamGUI/DUI 技术。本文档涵盖 `pull` 本身的语义、边界和测量；它不替代那些笔记。
 
 <a id="0-summary"></a>
 
@@ -20,11 +12,7 @@ description: "`pull`：将当前资产值写回源"
 
 **`pull` 将值从资产的快速迭代存储复制到源码中已声明的字面量。**
 
-工作流程是“在文本中编写结构，在编辑器中调整值”。最后一步需要谨慎：
-调整后的值存在于资产中，而文本要么完全省略该输入（因此重建
-会恢复模块默认值），要么包含的是**读取路径所看到的**内容，而非**存储
-所包含的**内容。对于 `NS_Effects1_Mesh` 和 `Sprite_Atlas_Size.MeshYaw`，存储包含 `-90`，然而
-每次引脚读取都返回 `0.0`。`pull` 使存储的、调整后的值成为源码的一部分。
+工作流程是“在文本中编写结构，在编辑器中调整值”。最后一步需要谨慎：调整后的值存在于资产中，而文本要么完全省略该输入（因此重建会恢复模块默认值），要么包含的是**读取路径所看到的**内容，而非**存储所包含的**内容。对于 `NS_Effects1_Mesh` 和 `Sprite_Atlas_Size.MeshYaw`，存储包含 `-90`，然而每次引脚读取都返回 `0.0`。`pull` 使存储的、调整后的值成为源码的一部分。
 
 <a id="1-usage"></a>
 
@@ -58,11 +46,7 @@ pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Eng
 | `-Structure` | 允许**结构编辑**，增加或删除行；否则仅报告 |
 | `-NoBaseline` | 忽略先前的 `-Apply` 基线并比较所有内容（第 4c 节） |
 
-`-Asset` 不仅仅是便利：**导出无法以结构方式指向它所导出的资产**。
-Plan-v4 V1 将所有导出放在 `Decompiled/` 命名空间中，因此重建无法
-触碰原始资产。因此，要从原始资产读取调整后的值到其导出中，需要此
-覆盖。源的 `Name=` 仍决定 `build` 写入的内容；`-Asset` 仅选择
-`pull` 读取的内容。
+`-Asset` 不仅仅是便利：**导出无法以结构方式指向它所导出的资产**。 Plan-v4 V1 将所有导出放在 `Decompiled/` 命名空间中，因此重建无法触碰原始资产。因此，要从原始资产读取调整后的值到其导出中，需要此覆盖。源的 `Name=` 仍决定 `build` 写入的内容；`-Asset` 仅选择 `pull` 读取的内容。
 
 <a id="output-locations"></a>
 
@@ -73,30 +57,17 @@ Plan-v4 V1 将所有导出放在 `Decompiled/` 命名空间中，因此重建无
 | 写入前的源，每个文件一个备份 | `Saved/DreamFX/Pull/<source path relative to project root>`，例如 `Saved/DreamFX/Pull/DFX/Decompiled/Game/FX/NS_Spark.dfs` |
 | 本次运行的报告，包括试运行 | 相同路径，扩展名为 `.report.txt` |
 
-备份和报告保存在 `Saved/` 中，**位于 `DFX/` 之外**。存储于资产中但未在文本中声明的
-输入会**逐一报告，不截断**。真实资产可能有数十个：
-`破空灰尘` 有 94 个。这些名称仅出现在此报告中，每个代表一个输入，
-重建必须从其模块默认值恢复。截断会隐藏该风险。
+备份和报告保存在 `Saved/` 中，**位于 `DFX/` 之外**。存储于资产中但未在文本中声明的输入会**逐一报告，不截断**。真实资产可能有数十个： `破空灰尘` 有 94 个。这些名称仅出现在此报告中，每个代表一个输入，重建必须从其模块默认值恢复。截断会隐藏该风险。
 
-编辑器通过资产上下文菜单中的 **Write Back to Source**
-以及 Niagara 系统编辑器工具栏的 DreamFX 菜单暴露相同的操作。它等同于 `-Apply`，其中 `-Structure`
-由 `bPullStructuralEdits` 控制。资产保存时的可选写回使用 `bPullOnAssetSave`
-（默认关闭）。写入文件后，编辑器通知源监视器，使其不会重建
-它刚刚读取的资产。参见[编辑器集成](editor-integration.md#write-back-to-source)。
+编辑器通过资产上下文菜单中的 **Write Back to Source** 以及 Niagara 系统编辑器工具栏的 DreamFX 菜单暴露相同的操作。它等同于 `-Apply`，其中 `-Structure` 由 `bPullStructuralEdits` 控制。资产保存时的可选写回使用 `bPullOnAssetSave` （默认关闭）。写入文件后，编辑器通知源监视器，使其不会重建它刚刚读取的资产。参见[编辑器集成](editor-integration.md#write-back-to-source)。
 
 <a id="2-what--apply-means"></a>
 
 ## 2. `-Apply` 的含义
 
-- **没有 `-Apply`**，读取资产、解析源并计算每个替换字面量。
-  打印 `file(line,column): info DFX7116: pull: <module>.<input>: <old literal> -> <new value>`
-  并停止。源字节不变；报告文件仍会写入。
-- **有 `-Apply`**，备份源并仅替换**每个字面量自身的字节范围**。
-  结果**必须成功解析**才能保存。解析失败会报告 `DFX7110`
-  并保持源不变。
-- **幂等**：第二次 `-Apply` 不写入任何字节（第 5 节，情况 1）。比较是**按值**，
-  而非拼写：使用与 `build` 相同的 `FValueLowering::Lower` 将字面量小写，然后将其
-  字节与存储比较。`0` 和 `0.0` 相等且不会被重新格式化。
+- **没有 `-Apply`**，读取资产、解析源并计算每个替换字面量。打印 `file(line,column): info DFX7116: pull: <module>.<input>: <old literal> -> <new value>` 并停止。源字节不变；报告文件仍会写入。
+- **有 `-Apply`**，备份源并仅替换**每个字面量自身的字节范围**。结果**必须成功解析**才能保存。解析失败会报告 `DFX7110` 并保持源不变。
+- **幂等**：第二次 `-Apply` 不写入任何字节（第 5 节，情况 1）。比较是**按值**，而非拼写：使用与 `build` 相同的 `FValueLowering::Lower` 将字面量小写，然后将其字节与存储比较。`0` 和 `0.0` 相等且不会被重新格式化。
 - **`pull` 从不写入资产。** 它使用 `LoadObject` 和只读 API，没有 `Save` 路径。
 
 <a id="3-relationship-to-decompile-and-the-build-safety-gate"></a>
@@ -111,19 +82,9 @@ Plan-v4 V1 将所有导出放在 `Decompiled/` 命名空间中，因此重建无
 | **`pull`** | 资产 → 文本 | 快速迭代**存储** | 更新文本中**已声明**的字面量值 |
 | `build` | 文本 → 资产 | 源文本 | 写入资产；**安全门 DFX8018** 阻止保存会丢失文本无法表达的事实的重建 |
 
-1. **`decompile` 提供键；`pull` 提供值。** `pull` 不发明未声明的输入：
-   那会改变结构。首先使键显式化，最容易的是使用 `decompile -NoDefaults`。
-   [写回覆盖范围，第 6.4 节](write-back-coverage.md#64-read-path-export-every-input-explicitly)
-   称之为写回的读取模式；`pull` 依赖它。
-2. **`pull` 补充安全门。** 安全门捕获已更改的事实，其结构地址
-   在两侧都存在，但其输入在源中缺失。`pull` 使该输入显式化。
-   对于 `NS_Effects1_Mesh`，以原始资产为目标会在两个
-   `MeshYaw: 0000B4C2 -> 00000000` 事实上触发安全门（覆盖范围第 6.8 节，第 6 行）。使用 `pull` 将 `-90.0` 写入
-   源，然后 `build` 成功：源声明了更改后的值，因此规则 3 允许它。
-3. **已存储但未声明的值会被报告，而非添加**（`DFX7106`）。它们是否
-   真的会消失是安全门（`DFX8018`）的决定。等于模块默认值的值会在重建时
-   恢复而不丢失事实：在第 6.8 节测量的 37 个未声明条目中，只有 8 个真正丢失。`pull` 不重新计算默认值，那会引入
-   另一个探针和默认表，可能偏离安全门。
+1. **`decompile` 提供键；`pull` 提供值。** `pull` 不发明未声明的输入：那会改变结构。首先使键显式化，最容易的是使用 `decompile -NoDefaults`。[写回覆盖范围，第 6.4 节](write-back-coverage.md#64-read-path-export-every-input-explicitly) 称之为写回的读取模式；`pull` 依赖它。
+2. **`pull` 补充安全门。** 安全门捕获已更改的事实，其结构地址在两侧都存在，但其输入在源中缺失。`pull` 使该输入显式化。对于 `NS_Effects1_Mesh`，以原始资产为目标会在两个 `MeshYaw: 0000B4C2 -> 00000000` 事实上触发安全门（覆盖范围第 6.8 节，第 6 行）。使用 `pull` 将 `-90.0` 写入源，然后 `build` 成功：源声明了更改后的值，因此规则 3 允许它。
+3. **已存储但未声明的值会被报告，而非添加**（`DFX7106`）。它们是否真的会消失是安全门（`DFX8018`）的决定。等于模块默认值的值会在重建时恢复而不丢失事实：在第 6.8 节测量的 37 个未声明条目中，只有 8 个真正丢失。`pull` 不重新计算默认值，那会引入另一个探针和默认表，可能偏离安全门。
 
 <a id="4-what-can-and-cannot-change"></a>
 
@@ -135,16 +96,12 @@ Plan-v4 V1 将所有导出放在 `Decompiled/` 命名空间中，因此重建无
 
 所有四项对应检查都验证身份而非猜测：
 
-1. **节点顺序**：源语句对应于资产中同一发射器和
-   堆栈中的相同序数节点。
-2. **模块身份**：由 `FModuleLibrary::FindModule` 解析的 `UNiagaraScript` 必须
-   与该节点使用的脚本具有完全相同的资产路径。
+1. **节点顺序**：源语句对应于资产中同一发射器和堆栈中的相同序数节点。
+2. **模块身份**：由 `FModuleLibrary::FindModule` 解析的 `UNiagaraScript` 必须与该节点使用的脚本具有完全相同的资产路径。
 3. **节点名称**：当语句包含 `as <name>` 时，资产节点必须具有该名称。
-4. **折叠赋值**：连续赋值，由 L2 折叠为一个 Set Parameters
-   模块，计为**一个**节点；其对应物必须是 `bIsSetParameters`。
+4. **折叠赋值**：连续赋值，由 L2 折叠为一个 Set Parameters 模块，计为**一个**节点；其对应物必须是 `bIsSetParameters`。
 
-任何不匹配都会拒绝**整个堆栈**（`DFX7109`，列出两侧的节点）。通过差一对应的方式
-编辑字面量比拒绝编辑更危险。
+任何不匹配都会拒绝**整个堆栈**（`DFX7109`，列出两侧的节点）。通过差一对应的方式编辑字面量比拒绝编辑更危险。
 
 对于值：
 

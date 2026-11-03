@@ -1,6 +1,6 @@
 ---
-title: "Export 与 Adopt"
-description: "两者都会反编译；区别在于之后发生的事 —— 镜像命名空间、接管流程，以及三条被拒绝的理由。"
+title: Export 与 Adopt
+description: 两者都会反编译；区别在于之后发生的事 —— 镜像命名空间、接管流程，以及三条被拒绝的理由。
 ---
 
 **Export** 与 **Adopt** 都会反编译。它们的区别在于之后会发生什么，而这个区别正是全部意义所在。
@@ -29,8 +29,7 @@ description: "两者都会反编译；区别在于之后发生的事 —— 镜�
 
 所以整棵反编译树都是**普通源码** —— 被监视、保存即构建、被 lint 并进入 CI —— 而无论文件如何被编辑，原始资产都保持不变。
 
-在此约定之前写出的导出仍然会命名原始资产。它们会被以
-[DFX8013](../diagnostics/DFX8xxx.md#dfx8013) **拒绝**，而不是被执行；重新导出即可替换它们。
+在此约定之前写出的导出仍然会命名原始资产。它们会被以 [DFX8013](../diagnostics/DFX8xxx.md#dfx8013) **拒绝**，而不是被执行；重新导出即可替换它们。
 
 对一个*已经是*镜像的资产执行导出同样会被拒绝 —— 那会留下两份源码争夺一个资产 —— 并且提示会链接到该镜像所基于的源码。
 
@@ -42,13 +41,12 @@ description: "两者都会反编译；区别在于之后发生的事 —— 镜�
 <a id="decompile"></a>
 
 ### 反编译
-如果有任何无法表示的内容 → **拒绝**，并列出是什么
-（[DFX8010](../diagnostics/DFX8xxx.md#dfx8010)）。
+如果有任何无法表示的内容 → **拒绝**，并列出是什么（[DFX8010](../diagnostics/DFX8xxx.md#dfx8010)）。
 
 <a id="work-out-the-source-path-from-the-mount-point"></a>
 
 ### 根据挂载点推导出源码路径
-`/Game/FX/NS_X` → `<Project>/DFX/FX/NS_X.dfs`；`/MoonToon/FX/NS_X` → `<MoonToon>/DFX/FX/NS_X.dfs`。
+`/Game/FX/NS_X` → `<Project>/DFX/FX/NS_X.dfs`; `/MoonToon/FX/NS_X` → `<MoonToon>/DFX/FX/NS_X.dfs`.
 
 <a id="check-nothing-else-already-declares-this-asset"></a>
 
@@ -70,13 +68,11 @@ description: "两者都会反编译；区别在于之后发生的事 —— 镜�
 不一致即为 [DFX8012](../diagnostics/DFX8xxx.md#dfx8012)，并记录第一处不同的行。
 
 
-第 1 步正是第 6 步有意义的原因：在没有已知缺口的情况下，不一致是**真正的缺陷**，
-而不是预期内的丢失。
+第 1 步正是第 6 步有意义的原因：在没有已知缺口的情况下，不一致是**真正的缺陷**，而不是预期内的丢失。
 
 > **注意：**
 >
-> `DFX8012` 会保留源码文件 —— 资产已经根据它重建，所以文本无论如何都是权威的 ——
-> 并记录第一处不同的行供你判断。
+> `DFX8012` 会保留源码文件 —— 资产已经根据它重建，所以文本无论如何都是权威的 —— 并记录第一处不同的行供你判断。
 
 <a id="which-one-to-use"></a>
 
@@ -91,8 +87,7 @@ description: "两者都会反编译；区别在于之后发生的事 —— 镜�
 
 > **警告：**
 >
-> Adopt 之后，该资产就是构建产物：手动编辑会在下次重建时被抹掉。这正是你选择采用 Adopt 所要求的 ——
-> 只要确保团队知晓即可。
+> Adopt 之后，该资产就是构建产物：手动编辑会在下次重建时被抹掉。这正是你选择采用 Adopt 所要求的 —— 只要确保团队知晓即可。
 
 <a id="the-same-thing-from-the-command-line"></a>
 
@@ -109,5 +104,4 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion -Out 
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile-all -Path=/Game/VFX
 ```
 
-`-NoDefaults` 会打印每一个输入，包括与全新模块默认值相等的那些。这**仅用于诊断** ——
-其结果并非旨在维护；它回答的是“基线隐藏了什么？”。
+`-NoDefaults` 会打印每一个输入，包括与全新模块默认值相等的那些。这**仅用于诊断** —— 其结果并非旨在维护；它回答的是“基线隐藏了什么？”。

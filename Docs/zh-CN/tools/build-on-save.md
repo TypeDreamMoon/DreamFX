@@ -1,8 +1,3 @@
----
-title: "保存时构建与最新状态检查"
-description: "保存时构建与最新状态检查"
----
-
 <a id="build-on-save-and-up-to-date-checks"></a>
 
 # 保存时构建与最新状态检查

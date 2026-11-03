@@ -1,8 +1,3 @@
----
-title: "编辑器集成"
-description: "编辑器集成"
----
-
 <a id="editor-integration"></a>
 
 # 编辑器集成
@@ -181,10 +176,8 @@ full rebuild (the asset changed since its last build)
 
 **循环防护。** 写回会重写源 watcher 正在监视的文件，而 watcher 无法将其与作者的保存区分开：它会重建这些值刚刚来自的资产。因此命令会告诉 watcher 它写入了什么——`FSourceWatcher::IgnoreOwnWrite(File)` 会记录写入后该文件当时的哈希——而 watcher 会在文件仍哈希到该值期间丢弃该文件自身的重建。任何依赖该文件的内容（从它继承的子 `.dfs`）仍会被重建。这些规则有意针对内容，而不是通知：
 
-- 作者再次编辑该文件会改变哈希，因此保存时会像往常一样重新构建，而记录则会被
-  丢弃；
-- 对同一次写入的多个通知（操作系统会报告不止一个，而监视器会按 tick 将它们批量合并）
-  全部跳过，完全不跳过也不会有任何代价——记录会在 10 秒后自行过期；
+- 作者再次编辑该文件会改变哈希，因此保存时会像往常一样重新构建，而记录则会被丢弃；
+- 对同一次写入的多个通知（操作系统会报告不止一个，而监视器会按 tick 将它们批量合并）全部跳过，完全不跳过也不会有任何代价——记录会在 10 秒后自行过期；
 - 重新扫描或目录移动无法说明内容是谁写入的，因此它仍会将文件加入队列；
 - *Rebuild from Source* 和 *Rebuild DFX* 会直接将文件加入队列，永不跳过。
 
@@ -198,19 +191,14 @@ full rebuild (the asset changed since its last build)
 
 因此，当一个批次包含超过 **Bulk Rebuild Threshold** 个文件（Project Settings → Plugins → DreamFX，默认 8）时，会改为询问而不是直接构建：
 
-> DreamFX：*N* 个源文件被同时更改。现在全部重建会排队数百次 Niagara
-> 编译。—— **立即重建**
+> DreamFX：*N* 个源文件被同时更改。现在全部重建会排队数百次 Niagara 编译。—— **立即重建**
 
-这些文件会被保留，而不是丢弃：丢弃它们会让资产过时却无人察觉，这正是该门槛旨在防止的失败，只是更隐蔽。如果提示过期，*Tools
-→ DreamFX → Rebuild DFX* 会执行相同的操作。
+这些文件会被保留，而不是丢弃：丢弃它们会让资产过时却无人察觉，这正是该门槛旨在防止的失败，只是更隐蔽。如果提示过期，*Tools → DreamFX → Rebuild DFX* 会执行相同的操作。
 
 普通保存永远不会被门槛拦截——单个文件，或任何等于或低于阈值的批次，都会立即重建（在启用该设置时增量进行），因为这条路径就是迭代循环。显式的 *Rebuild DFX* 同样永远不会被门槛拦截：它是被明确请求的。
 
 > [!NOTE]
-> 这个门槛最初是基于一种不同的理论编写的——即危险在于监视器会重放编辑器关闭期间发生变化的一切——而测量结果与之相矛盾。
-> `RegisterDirectoryChangedCallback_Handle` 在注册时就开始监视，并且报告没有积压：
-> 编辑器关闭时更改的十二个文件在重新打开时产生了*完全没有任何*结果。真正造成伤害的批次是在编辑器打开时到达的。修复前用十二个文件测量：54
-> 次 Niagara 系统编译和八次编译池饱和。修复后：出现提示，在被请求之前什么都不会构建。
+> 这个门槛最初是基于一种不同的理论编写的——即危险在于监视器会重放编辑器关闭期间发生变化的一切——而测量结果与之相矛盾。 `RegisterDirectoryChangedCallback_Handle` 在注册时就开始监视，并且报告没有积压：编辑器关闭时更改的十二个文件在重新打开时产生了*完全没有任何*结果。真正造成伤害的批次是在编辑器打开时到达的。修复前用十二个文件测量：54 次 Niagara 系统编译和八次编译池饱和。修复后：出现提示，在被请求之前什么都不会构建。
 
 <a id="verify-dfx"></a>
 
@@ -238,31 +226,21 @@ full rebuild (the asset changed since its last build)
 | 无法表示的功能 | 警告，并在文件中列出它们 | **拒绝** |
 | 含义 | “让我以文本形式阅读和试玩这个” | “从现在起，这段文本是唯一的真相” |
 
-将两者区分开的是结构性的，而非流程性的：导出无法命名它来自哪个资产。
-`/Game/FX/NS_X` 导出到 `DFX/Decompiled/Game/FX/NS_X.dfs`，其 `Name=` 是 `Decompiled/FX/NS_X`，
-因此构建会写入 `/Game/Decompiled/FX/NS_X`，而无论文件如何被编辑，原始资产都不会被触及。
-整个反编译树因此就是普通源文件——被监视、保存时构建、被 lint 并纳入 CI。
+将两者区分开的是结构性的，而非流程性的：导出无法命名它来自哪个资产。 `/Game/FX/NS_X` 导出到 `DFX/Decompiled/Game/FX/NS_X.dfs`，其 `Name=` 是 `Decompiled/FX/NS_X`，因此构建会写入 `/Game/Decompiled/FX/NS_X`，而无论文件如何被编辑，原始资产都不会被触及。整个反编译树因此就是普通源文件——被监视、保存时构建、被 lint 并纳入 CI。
 
-在此安排之前写入的导出仍会命名原始资产。它们会被以
-[DFX8013](../diagnostics/DFX8xxx.md#dfx8013) 拒绝而不是被照样执行；重新导出会替换它们。
+在此安排之前写入的导出仍会命名原始资产。它们会被以 [DFX8013](../diagnostics/DFX8xxx.md#dfx8013) 拒绝而不是被照样执行；重新导出会替换它们。
 
-导出*已经*是镜像的资产也会被拒绝——这会让两个源声明同一个
-资产。桥接的 `decompile` 操作会针对这种拒绝、反编译失败或
-文件写入失败报告 `ok: false`。成功响应会包含写入的 `outputPath`；桥接请求不会
-启动文本编辑器。
+导出*已经*是镜像的资产也会被拒绝——这会让两个源声明同一个资产。桥接的 `decompile` 操作会针对这种拒绝、反编译失败或文件写入失败报告 `ok: false`。成功响应会包含写入的 `outputPath`；桥接请求不会启动文本编辑器。
 
 <a id="adopt"></a>
 
 ### Adopt
 
-1. 根据资产的挂载点算出源路径：`/Game/FX/NS_X` → `<Project>/DFX/FX/NS_X.dfs`，
-   `/MoonToon/FX/NS_X` → `<MoonToon>/DFX/FX/NS_X.dfs`。
-2. 如果该目标已存在，则**拒绝**，包括不完整或无效的源文件，或另一个
-   `.dfs` 已经声明了相同的目标资产。
+1. 根据资产的挂载点算出源路径：`/Game/FX/NS_X` → `<Project>/DFX/FX/NS_X.dfs`， `/MoonToon/FX/NS_X` → `<MoonToon>/DFX/FX/NS_X.dfs`。
+2. 如果该目标已存在，则**拒绝**，包括不完整或无效的源文件，或另一个 `.dfs` 已经声明了相同的目标资产。
 3. 反编译。如果有任何内容无法表示，则**拒绝**，并列出具体内容。
 4. 确认，列出要写入的文件和要重建的资产。
-5. 再次检查目标，并在不替换现有目标的情况下发布新文件，
-   包括在确认对话框打开期间创建的文件。重建资产并标记来源。
+5. 再次检查目标，并在不替换现有目标的情况下发布新文件，包括在确认对话框打开期间创建的文件。重建资产并标记来源。
 6. 重新反编译重建后的资产并逐字节比较。
 
 | 诊断 | 原因 |
@@ -277,9 +255,7 @@ full rebuild (the asset changed since its last build)
 
 ### Open DreamFX Workspace (VSCode)
 
-重写 `DFX/DreamFX.code-workspace`，然后通过 VSCode → 操作系统默认编辑器 →
-Notepad 启动它。该文件**每次都会被完全重写，绝不合并**：手动添加的 `launch` 或 `tasks`
-块会丢失。每用户的配置应放在 `DFX/.vscode/` 中。
+重写 `DFX/DreamFX.code-workspace`，然后通过 VSCode → 操作系统默认编辑器 → Notepad 启动它。该文件**每次都会被完全重写，绝不合并**：手动添加的 `launch` 或 `tasks` 块会丢失。每用户的配置应放在 `DFX/.vscode/` 中。
 
 ```json
 {
@@ -296,13 +272,9 @@ Notepad 启动它。该文件**每次都会被完全重写，绝不合并**：�
 }
 ```
 
-项目根目录始终排在最前，并且始终是 `"."`——工作区文件就位于其中，而稳定的
-文件夹标识能让 VSCode 的每文件夹状态在重写后保持关联。位于另一个
-盘符上的插件根在 Windows 上没有相对形式，会获得绝对路径。
+项目根目录始终排在最前，并且始终是 `"."`——工作区文件就位于其中，而稳定的文件夹标识能让 VSCode 的每文件夹状态在重写后保持关联。位于另一个盘符上的插件根在 Windows 上没有相对形式，会获得绝对路径。
 
-`dreamfxlang` 是 [DreamFXLang
-扩展](https://github.com/TypeDreamMoon/dreamfx-language-support) 注册的语言 id。无论该扩展是否已安装，都会写入该关联——没有它，VSCode 会回退到纯文本，这
-无害——而推荐只是一个 VSCode 显示一次、若被忽略便不再显示的提示。
+`dreamfxlang` 是 [DreamFXLang 扩展](https://github.com/TypeDreamMoon/dreamfx-language-support) 注册的语言 id。无论该扩展是否已安装，都会写入该关联——没有它，VSCode 会回退到纯文本，这无害——而推荐只是一个 VSCode 显示一次、若被忽略便不再显示的提示。
 
 | Toast | 条件 |
 | :-- | :-- |
@@ -326,8 +298,7 @@ Notepad 启动它。该文件**每次都会被完全重写，绝不合并**：�
 | 7–8 | `%ProgramFiles(x86)%\Microsoft VS Code\{Code.exe, bin\code.cmd}` |
 | 9 | 每个 `PATH` 条目，检查 `code.cmd`、`code.exe`、`Code.exe`、`code-insiders.cmd`、`Code - Insiders.exe` |
 
-打开**工作区**会遵循 *Open Workspace In New Window*。打开**文件**始终传递
-`--reuse-window -g <path>:<line>:<col>`——每次诊断跳转都开一个新窗口会无法使用。
+打开**工作区**会遵循 *Open Workspace In New Window*。打开**文件**始终传递 `--reuse-window -g <path>:<line>:<col>`——每次诊断跳转都开一个新窗口会无法使用。
 
 <a id="settings"></a>
 
@@ -347,8 +318,7 @@ Notepad 启动它。该文件**每次都会被完全重写，绝不合并**：�
 
 ## 用脚本调用同样的命令
 
-`UDreamFXEditorLibrary` 把每条命令都暴露给 Python 和 Blueprint，转发到菜单调用的同一份实现。
-Slate 条目无法从脚本调用，而只有人类点击才能触达的命令，就是永远不会被回归测试的命令。
+`UDreamFXEditorLibrary` 把每条命令都暴露给 Python 和 Blueprint，转发到菜单调用的同一份实现。 Slate 条目无法从脚本调用，而只有人类点击才能触达的命令，就是永远不会被回归测试的命令。
 
 ```python
 import unreal
@@ -360,8 +330,7 @@ lib.export_system(unreal.load_asset("/Game/FX/NS_Spark"))
 lib.adopt_system(unreal.load_asset("/Game/FX/NS_Spark"), True)   # True = skip the confirmation
 ```
 
-`bSkipConfirmation` 只抑制模态对话框。两种拒绝仍然生效，只是改为以 toast 和日志行的形式报告，
-而非对话框——一个没人能点的模态会阻塞调用线程。
+`bSkipConfirmation` 只抑制模态对话框。两种拒绝仍然生效，只是改为以 toast 和日志行的形式报告，而非对话框——一个没人能点的模态会阻塞调用线程。
 
 <a id="disabling-the-integration"></a>
 
@@ -379,8 +348,7 @@ UnrealEditor.exe "<Project>.uproject" -NoDreamFXEditor
 | source watcher 与存盘即重建 | 解析器、生成器、反编译器和设置对象 |
 | 生成资产守卫 | 已经生成并保存在磁盘上的资产 |
 
-commandlet 运行会经另一条路到达同样的状态：`IsRunningCommandlet()` 返回真，
-模块什么都不注册。
+commandlet 运行会经另一条路到达同样的状态：`IsRunningCommandlet()` 返回真，模块什么都不注册。
 
 <a id="the-module-index"></a>
 
@@ -390,22 +358,12 @@ commandlet 运行会经另一条路到达同样的状态：`IsRunningCommandlet(
 pwsh -File .skill/dfx.ps1 index
 ```
 
-写入 `DFX/.dfx-index.json`：搜索路径暴露的每个模块和动态输入，带其声明的 stack、分类、描述和 **input signature**。
-编辑器扩展读取该文件以提供补全和悬停——它不能询问引擎，因为每次 `dfx` 调用都会启动引擎，
-而有人正在打字时发生的任何事情都不能花掉几十秒。
+写入 `DFX/.dfx-index.json`：搜索路径暴露的每个模块和动态输入，带其声明的 stack、分类、描述和 **input signature**。编辑器扩展读取该文件以提供补全和悬停——它不能询问引擎，因为每次 `dfx` 调用都会启动引擎，而有人正在打字时发生的任何事情都不能花掉几十秒。
 
-两半，代价差异极大。stack 和元数据来自资产的 usage 位掩码，这是免费的——和引擎自带的 stack UI
-用来过滤的是同一份列表。input signature 则是*探测*出来的，因为资产级 schema 完全遗漏了内联编辑条件和
-static switch，而一个不含枚举形输入的补全列表比没有还糟。此处实测：571 个模块，不探测 2.9 秒，探测 8.1 秒。
+两半，代价差异极大。stack 和元数据来自资产的 usage 位掩码，这是免费的——和引擎自带的 stack UI 用来过滤的是同一份列表。input signature 则是*探测*出来的，因为资产级 schema 完全遗漏了内联编辑条件和 static switch，而一个不含枚举形输入的补全列表比没有还糟。此处实测：571 个模块，不探测 2.9 秒，探测 8.1 秒。
 
 > [!WARNING]
-> **有些模块图无法遍历。** `/Niagara/Modules/Masks/ConeMask`——引擎自带内容——
-> 会让 `UNiagaraGraph::ReferencesStaticVariable` 无界递归，栈溢出最终终止进程。
-> 该模块上的 `dfx schema` 一直如此；索引只是走到第 45 个模块时撞了进去。
-> 插件无法给引擎代码加 visited 集合，而栈溢出也不值得去捕获，所以遍历改为*可恢复*：
-> 即将被探测的模块先被记录，下一次运行开始时仍然记录在案的模块会被隔离。`dfx.ps1` 反复重跑，
-> 直到遍历完成，所以少数几个坏图只多花几次启动，而不是让功能失效。被隔离的模块保留其名称、路径和 stack；
-> 只有它的输入缺失，并且它会如实说明。
+> **有些模块图无法遍历。** `/Niagara/Modules/Masks/ConeMask`——引擎自带内容—— 会让 `UNiagaraGraph::ReferencesStaticVariable` 无界递归，栈溢出最终终止进程。该模块上的 `dfx schema` 一直如此；索引只是走到第 45 个模块时撞了进去。插件无法给引擎代码加 visited 集合，而栈溢出也不值得去捕获，所以遍历改为*可恢复*：即将被探测的模块先被记录，下一次运行开始时仍然记录在案的模块会被隔离。`dfx.ps1` 反复重跑，直到遍历完成，所以少数几个坏图只多花几次启动，而不是让功能失效。被隔离的模块保留其名称、路径和 stack；只有它的输入缺失，并且它会如实说明。
 
 | 标志 | |
 | :-- | :-- |
@@ -413,10 +371,7 @@ static switch，而一个不含枚举形输入的补全列表比没有还糟。�
 | `-NoInputs` | 跳过探测。快，足以回答“存在什么” |
 | `-Retry` | 清除隔离并重新尝试每个模块——用于引擎升级之后 |
 
-索引会记录引擎路径和已启用的插件列表，因为正是它们令索引失效：
-不同的引擎就是不同的模块集合，而启用一个内容插件会多出一整个家族。
-目前还没有任何东西比较它们——那需要有一个实时编辑器来对照——所以重建是一条命令，
-而不是靠猜。
+索引会记录引擎路径和已启用的插件列表，因为正是它们令索引失效：不同的引擎就是不同的模块集合，而启用一个内容插件会多出一整个家族。目前还没有任何东西比较它们——那需要有一个实时编辑器来对照——所以重建是一条命令，而不是靠猜。
 
 <a id="see-also"></a>
 
@@ -427,6 +382,5 @@ static switch，而一个不含枚举形输入的补全列表比没有还糟。�
 - [增量构建](incremental-builds.md) —— 一次保存会写什么，以及何时回退为完整重建
 - [pull](pull.md) —— *Write Back to Source* 背后的写回：它可以碰什么，拒绝什么
 - [资产比较与导出](asset-comparison-and-export.md) —— 比较失败和导出覆盖范围的限制
-- [诊断](../diagnostics/README.md) —— 每个 `DFXnnnn`，包括 `DFX8010`–`DFX8018`，那些
-  说明反编译无法携带什么的 gap 代码
+- [诊断](../diagnostics/README.md) —— 每个 `DFXnnnn`，包括 `DFX8010`–`DFX8018`，那些说明反编译无法携带什么的 gap 代码
 - `dfx.ps1 coverage` —— 对整个内容树问同样的问题，按功能分桶

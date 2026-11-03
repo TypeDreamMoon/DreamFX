@@ -1,8 +1,3 @@
----
-title: "系统源继承"
-description: "系统源继承"
----
-
 <a id="system-source-inheritance"></a>
 
 # 系统源继承

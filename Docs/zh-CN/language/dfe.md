@@ -1,8 +1,3 @@
----
-title: "`.dfe` —— 可复用的发射器"
-description: "`.dfe` —— 可复用的发射器"
----
-
 <a id="dfe--a-reusable-emitter"></a>
 
 # `.dfe` —— 可复用的发射器
@@ -26,8 +21,7 @@ Emitter(Name="Emitters/E_MoonFlashCard", Root="Plugin.DreamFX")
 }
 ```
 
-`QualityLevelMask` 是可扩展性位掩码,它住在发射器的 `FNiagaraPlatformSet` 里而不是顶层。
-属性位于结构体内的设置,内部用点号路径寻址;而 DSL 名取叶子,因为那才是作者设置的那一部分。
+`QualityLevelMask` 是可扩展性位掩码,它住在发射器的 `FNiagaraPlatformSet` 里而不是顶层。属性位于结构体内的设置,内部用点号路径寻址;而 DSL 名取叶子,因为那才是作者设置的那一部分。
 
 一个 `.dfe` 单独构建什么都不产(DFX5097)。它的存在是为了被拉进一个系统:
 
@@ -48,8 +42,7 @@ Emitter Flash from "../Emitters/E_MoonFlashCard"
 
 `from` 取的是快照(R3)。之后再改 `.dfe`,已经拷贝过它的系统不会有任何变化,直到那些系统重建;生成出来的资产也不带回指的链接。
 
-这个决定也是反编译出的系统永远自包含的原因:拷贝一旦发生,
-「这些里面哪些是覆盖」就无法恢复了,所以导出无法重建 `from`。它是单向的语法糖。
+这个决定也是反编译出的系统永远自包含的原因:拷贝一旦发生, 「这些里面哪些是覆盖」就无法恢复了,所以导出无法重建 `from`。它是单向的语法糖。
 
 <a id="what-the-override-block-replaces"></a>
 

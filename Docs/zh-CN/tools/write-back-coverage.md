@@ -1,25 +1,12 @@
----
-title: "回写覆盖范围与缺口：实测清单"
-description: "回写覆盖范围与缺口：实测清单"
----
-
 <a id="write-back-coverage-and-gaps-measured-inventory"></a>
 
 # 回写覆盖范围与缺口：实测清单
 
-> 记录于 2026-10-08，用于回答 **DFX 能回写什么、不能回写什么**，以及**哪些编辑器
-> 更改无法同步回文本**。
+> 记录于 2026-10-08，用于回答 **DFX 能回写什么、不能回写什么**，以及**哪些编辑器更改无法同步回文本**。
 >
-> 范围：读取原始资产并写出源文本，例外是第 3.2 节描述的嵌入式脚本提取。数字来自一次
-> 在 UE 5.8.2 源码版引擎、搭载 DreamFX `359b3b3` 的本地连续运行，
-> 覆盖 `/AtlasFX`、`/Game/GameActor2D` 和 `/Game/AssetMaterial` 下的全部 59 个 Niagara 系统。
-> 命令与产物列于第 7 节。凡未实际运行的内容均明确标记为**未验证**。后续实现结果
-> 分别注明日期于第 6.8–6.10 节；本文件是历史测量记录，并不声称每一个初始缺口
-> 都仍存在于当前代码中。
+> 范围：读取原始资产并写出源文本，例外是第 3.2 节描述的嵌入式脚本提取。数字来自一次在 UE 5.8.2 源码版引擎、搭载 DreamFX `359b3b3` 的本地连续运行，覆盖 `/AtlasFX`、`/Game/GameActor2D` 和 `/Game/AssetMaterial` 下的全部 59 个 Niagara 系统。命令与产物列于第 7 节。凡未实际运行的内容均明确标记为**未验证**。后续实现结果分别注明日期于第 6.8–6.10 节；本文件是历史测量记录，并不声称每一个初始缺口都仍存在于当前代码中。
 >
-> 另一份研究笔记 `write-back-from-dreamgui.md` 涵盖 **DreamGUI/DUI 的方法及 DreamFX 可复用的
-> 技术**。本文件记录 **DFX 的实测缺口**，不重复那部分设计讨论。该研究笔记不属于
-> 本文档检出内容。
+> 另一份研究笔记 `write-back-from-dreamgui.md` 涵盖 **DreamGUI/DUI 的方法及 DreamFX 可复用的技术**。本文件记录 **DFX 的实测缺口**，不重复那部分设计讨论。该研究笔记不属于本文档检出内容。
 
 <a id="0-conclusions"></a>
 
@@ -27,22 +14,11 @@ description: "回写覆盖范围与缺口：实测清单"
 
 **成功读取资产并不能证明它可以被回写。**
 
-- **读取**：59/59 个系统成功导出；仅六个资产报告了 17 处无法表达的feature。
-  `coverage` 命令自身报告的可表达率为 **100%**。
-- **写入**：从这 59 个系统中重建五个样本，成功了**四个**，其中一个
-  甚至无法进入编译（`NS_ScanScene`，21 个 `DFX4007` 错误）。
-- 四个成功构建的样本通过了 **L1/L2**，但使用 `asset-diff` 独立进行的**资产反射**
-  比对发现**三个资产存在真实差异**，包括一处已确认的存储值
-  分歧（第 3.5 节）。其视觉/运行时后果未经验证。
-- 旧的特定故障“网格渲染器材质参数属性绑定消失、
-  渲染成白色方块”**在实测的导出/重建路径中未能复现**（第 2.1 节的反射
-  证据）。同类的丢失发生在别处：**模块输入字面量**，
-  对 `mirror-diff` 不可见。
-- **`mirror-diff`（L1+L2）本身无法确立无损回写。** 还需纳入 `asset-diff`，其
-  本身存在两处覆盖缺口（第 3.9 节）。在初始测量时，双向
-  编辑仍需要**一个能识别文本中缺失状态的资产级安全门**，以及**一条
-  针对被抑制输入的可支持读取路径**。当时唯一存在的开关 `-NoDefaults`，
-  被记录为诊断输出，不用于维护用途。
+- **读取**：59/59 个系统成功导出；仅六个资产报告了 17 处无法表达的feature。 `coverage` 命令自身报告的可表达率为 **100%**。
+- **写入**：从这 59 个系统中重建五个样本，成功了**四个**，其中一个甚至无法进入编译（`NS_ScanScene`，21 个 `DFX4007` 错误）。
+- 四个成功构建的样本通过了 **L1/L2**，但使用 `asset-diff` 独立进行的**资产反射**比对发现**三个资产存在真实差异**，包括一处已确认的存储值分歧（第 3.5 节）。其视觉/运行时后果未经验证。
+- 旧的特定故障“网格渲染器材质参数属性绑定消失、渲染成白色方块”**在实测的导出/重建路径中未能复现**（第 2.1 节的反射证据）。同类的丢失发生在别处：**模块输入字面量**，对 `mirror-diff` 不可见。
+- **`mirror-diff`（L1+L2）本身无法确立无损回写。** 还需纳入 `asset-diff`，其本身存在两处覆盖缺口（第 3.9 节）。在初始测量时，双向编辑仍需要**一个能识别文本中缺失状态的资产级安全门**，以及**一条针对被抑制输入的可支持读取路径**。当时唯一存在的开关 `-NoDefaults`，被记录为诊断输出，不用于维护用途。
 
 <a id="1-coverage-check-coverage"></a>
 
@@ -52,8 +28,7 @@ description: "回写覆盖范围与缺口：实测清单"
 pwsh -File .skill/dfx.ps1 coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine D:\UnrealEngine-5.8.2
 ```
 
-**扫描 59 个系统，导出 59 个，零失败。** 报告的缺口：六个资产，17 处。
-下方的资产和发射器标识符保留其原始拼写。
+**扫描 59 个系统，导出 59 个，零失败。** 报告的缺口：六个资产，17 处。下方的资产和发射器标识符保留其原始拼写。
 
 | # | 报告的缺口 | 数量 | 资产 |
 |---|---|---|---|
@@ -68,19 +43,9 @@ pwsh -File .skill/dfx.ps1 coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/Asset
 
 有三点限定会影响该结论：
 
-1. `coverage` 计数的是 **`FDecompileResult::UnsupportedFeatures`**
-   （`Source/DreamFXEditor/Private/Commandlet/DreamFXCommandlet.cpp:309-381`），即**反编译器自身承认**无法表达的
-   feature。**它并不测试生成。**
-   `NS_ScanScene` 在此报告 `ok (2 gap(s))`，但其导出完全无法重建（第 3.3 节）。
-   此处衡量的是**读取覆盖范围**，而非回写覆盖范围。
-2. 继承缺口是已记录的**对父链的 DFX8014 展平**：丢失的是链接，
-   而非内容（`Docs/diagnostics/DFX8xxx.md:223-239`）。测量证实了这一点：
-   `TR刀光_System` 中全部四个继承的发射器栈都得以保留，而 `parent` 变成了 `none`
-   （第 3.1 节）。表中计入 15 处继承，包括三个推力
-   发射器；早先的 12 处小计涵盖了三个资产中的四个刀光发射器。
-3. 这 59 个系统包含**零个 `Stage` 块、零个含多个事件处理器的情况、
-   零个自定义阶段类以及零个 `RibbonRenderer` 块**。DFX8015/DFX8016 从未被
-   触发。它们是**未经此内容验证**的实现缺口，而非已确认不存在。
+1. `coverage` 计数的是 **`FDecompileResult::UnsupportedFeatures`** （`Source/DreamFXEditor/Private/Commandlet/DreamFXCommandlet.cpp:309-381`），即**反编译器自身承认**无法表达的 feature。**它并不测试生成。** `NS_ScanScene` 在此报告 `ok (2 gap(s))`，但其导出完全无法重建（第 3.3 节）。此处衡量的是**读取覆盖范围**，而非回写覆盖范围。
+2. 继承缺口是已记录的**对父链的 DFX8014 展平**：丢失的是链接，而非内容（`Docs/diagnostics/DFX8xxx.md:223-239`）。测量证实了这一点： `TR刀光_System` 中全部四个继承的发射器栈都得以保留，而 `parent` 变成了 `none` （第 3.1 节）。表中计入 15 处继承，包括三个推力发射器；早先的 12 处小计涵盖了三个资产中的四个刀光发射器。
+3. 这 59 个系统包含**零个 `Stage` 块、零个含多个事件处理器的情况、零个自定义阶段类以及零个 `RibbonRenderer` 块**。DFX8015/DFX8016 从未被触发。它们是**未经此内容验证**的实现缺口，而非已确认不存在。
 
 <a id="2-decompilation-evidence"></a>
 
@@ -122,16 +87,13 @@ pwsh -File .skill/dfx.ps1 decompile-all -Path '/AtlasFX+/Game/GameActor2D+/Game/
 | `Stage ` 块 / `Defaults = {` / `as <node name>` 引脚 | 0 / 0 | **未验证** |
 | 实际 `hlsl { }` 块 | 0 / 0 | 此内容中没有降级的内联表达式 |
 
-> 每个导出头都包含 `// Inline arithmetic is not recovered: expressions come back as
-> equivalent hlsl { } blocks.` 这**是注释，不是表达式**。文本搜索
-> `hlsl {` 会匹配全部 59 个文件，不得计为表达式降级。
+> 每个导出头都包含 `// Inline arithmetic is not recovered: expressions come back as equivalent hlsl { } blocks.` 这**是注释，不是表达式**。文本搜索 `hlsl {` 会匹配全部 59 个文件，不得计为表达式降级。
 
 <a id="21-material-parameter-attribute-bindings-the-old-gap-is-closed-for-this-path"></a>
 
 ### 2.1 材质参数属性绑定：此路径下旧的缺口已闭合
 
-手动编写的系统 `/Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh`，没有
-文本源，且是旧白色方块故障的典型代表，它导出了这个渲染器：
+手动编写的系统 `/Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh`，没有文本源，且是旧白色方块故障的典型代表，它导出了这个渲染器：
 
 ```c
 // DFX/Decompiled/Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh.dfs:90-100
@@ -148,14 +110,9 @@ MeshRenderer
 }
 ```
 
-`Sheet ← User.Atlas.ResolvedTexture` 位于 `MaterialParameters` blob 中。R4 反编译
-以 **JSON 字符串**的形式保留了结构化属性值，无需专门语法：
-`Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1009-1044` 中的 `TryWriteJsonBlob`，
-在 `:1231-1237` 和 `:1249-1254` 处调用。生成时对称地将它们**作为 JSON** 插入
-（`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:276-295`）。
+`Sheet ← User.Atlas.ResolvedTexture` 位于 `MaterialParameters` blob 中。R4 反编译以 **JSON 字符串**的形式保留了结构化属性值，无需专门语法： `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1009-1044` 中的 `TryWriteJsonBlob`，在 `:1231-1237` 和 `:1249-1254` 处调用。生成时对称地将它们**作为 JSON** 插入（`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:276-295`）。
 
-**反射证据**，独立于文本导出：`asset-diff` 使用
-`ExportText_InContainer` 直接读取属性（`Source/DreamFXEditor/Private/Diff/DreamFXAssetFacts.cpp:425-436`）：
+**反射证据**，独立于文本导出：`asset-diff` 使用 `ExportText_InContainer` 直接读取属性（`Source/DreamFXEditor/Private/Diff/DreamFXAssetFacts.cpp:425-436`）：
 
 ```text
 emitter Atlas2D_Mesh renderer 0:NiagaraMeshRendererProperties MaterialParameters = (AttributeBindings=((MaterialParameterName="Sheet",NiagaraVariable=(Name="User.Atlas",TypeDefHandle=(RegisteredTypeIn…
@@ -164,25 +121,16 @@ emitter Atlas2D_Mesh renderer 0:NiagaraMeshRendererProperties MaterialParamValid
 
 原始与镜像在 `Saved/DreamFX/NS_Effects1_Mesh.{original,mirror}.facts` 中**逐字符**匹配。
 
-> 旧故障在此引擎/补丁组合上通过此路径**不会复现**。
-> 那个特定缺口可以闭合，但**那一类丢失**仍然存在（第 3.4 节）。
+> 旧故障在此引擎/补丁组合上通过此路径**不会复现**。那个特定缺口可以闭合，但**那一类丢失**仍然存在（第 3.4 节）。
 
 <a id="22-bind-and-materialparameters-are-different-mechanisms"></a>
 
 ### 2.2 `Bind` 与 `MaterialParameters` 是不同机制
 
-- `Bind X -> Y;` 处理 **`FNiagaraVariableAttributeBinding`** 的字段，例如
-  `PositionBinding`、`ColorBinding` 和 `CustomSortingBinding`。读取时仅访问
-  恰好为该结构体类型的 `FStructProperty` 值
-  （`Source/DreamFXEditor/Private/Adapter/DreamFXNiagaraAdapter.cpp:2662-2675`）。反编译器
-  会故意跳过以 `Binding` 结尾的属性键，因为 `Bind` 行表示它们
-  （`Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1178-1183`）。
-- `MaterialParameters` 是一个 **`TArray<FNiagaraMaterialAttributeBinding>`**，一个不同的结构体，
-  使用 JSON blob 路径而非 `Bind` 语句。
+- `Bind X -> Y;` 处理 **`FNiagaraVariableAttributeBinding`** 的字段，例如 `PositionBinding`、`ColorBinding` 和 `CustomSortingBinding`。读取时仅访问恰好为该结构体类型的 `FStructProperty` 值（`Source/DreamFXEditor/Private/Adapter/DreamFXNiagaraAdapter.cpp:2662-2675`）。反编译器会故意跳过以 `Binding` 结尾的属性键，因为 `Bind` 行表示它们（`Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1178-1183`）。
+- `MaterialParameters` 是一个 **`TArray<FNiagaraMaterialAttributeBinding>`**，一个不同的结构体，使用 JSON blob 路径而非 `Bind` 语句。
 
-这对回写很重要：`MaterialParameters` 没有与 `Bind` 等价的强类型写入路径。其经实测的往返测试成功（第 5 节），但验证依赖于
-`FJsonSerializer` 以及引擎的 JSON 到结构体转换器。转换错误是引擎错误，
-而非 DFX 特有的诊断。
+这对回写很重要：`MaterialParameters` 没有与 `Bind` 等价的强类型写入路径。其经实测的往返测试成功（第 5 节），但验证依赖于 `FJsonSerializer` 以及引擎的 JSON 到结构体转换器。转换错误是引擎错误，而非 DFX 特有的诊断。
 
 <a id="23-meshes-and-overridematerials-did-not-export-as-the-documented-path-arrays"></a>
 
@@ -195,26 +143,15 @@ Meshes            = ["/Engine/BasicShapes/Cube"];
 OverrideMaterials = ["Plugin.MoonToon:Materials/FX/M_Chunk"];
 ```
 
-实测输出：**90 个 `Meshes` 和 80 个 `OverrideMaterials` 出现，全部为 JSON blob，零个路径
-数组**。`TryWriteReferenceArray`（`DreamFXDecompiler.cpp:1055-1133`）要求成功执行
-`GetArrayElementReferenceField` 且所有其他元素字段都等于默认构造的
-元素。真实元素在
-`mesh`/`explicitMat` 中带有导出文本引用，例如 `/Script/Engine.StaticMesh'…'`；`TryReadReferenceObject`（`:920`）无法读取这些，因此输出回退到
-blob 分支（`:1249-1254`）。
+实测输出：**90 个 `Meshes` 和 80 个 `OverrideMaterials` 出现，全部为 JSON blob，零个路径数组**。`TryWriteReferenceArray`（`DreamFXDecompiler.cpp:1055-1133`）要求成功执行 `GetArrayElementReferenceField` 且所有其他元素字段都等于默认构造的元素。真实元素在 `mesh`/`explicitMat` 中带有导出文本引用，例如 `/Script/Engine.StaticMesh'…'`；`TryReadReferenceObject`（`:920`）无法读取这些，因此输出回退到 blob 分支（`:1249-1254`）。
 
-**没有数据丢失**：blob 是无损的，并且所有五个可用的镜像都通过了 L1。然而，
-文档所述的编写形式与实际导出输出不同。文档和编辑器集成
-不得假设导出内容包含路径数组。
+**没有数据丢失**：blob 是无损的，并且所有五个可用的镜像都通过了 L1。然而，文档所述的编写形式与实际导出输出不同。文档和编辑器集成不得假设导出内容包含路径数组。
 
 <a id="3-unsupported-write-back-and-loss-inventory"></a>
 
 ## 3. 不支持的回写与丢失清单
 
-> 2026-10-09 第二轮处理后的状态：3.1/3.2 节仍为已声明的缺口；3.3 的
-> 命名空间不对称仍然存在；3.4 的值回写已由 `pull` 解决（`-NoDefaults`
-> 提供键，正式存储读取器提供值）；3.5 已按 6.9 中所述解决；
-> 3.6/3.7/3.8 未改变。3.9/3.10/3.11 节描述工具属性和测量
-> 边界。6.10 节逐项记录后续处置。
+> 2026-10-09 第二轮处理后的状态：3.1/3.2 节仍为已声明的缺口；3.3 的命名空间不对称仍然存在；3.4 的值回写已由 `pull` 解决（`-NoDefaults` 提供键，正式存储读取器提供值）；3.5 已按 6.9 中所述解决； 3.6/3.7/3.8 未改变。3.9/3.10/3.11 节描述工具属性和测量边界。6.10 节逐项记录后续处置。
 
 <a id="31-parent-chains-declared-dfx8014"></a>
 
@@ -226,25 +163,20 @@ blob 分支（`:1249-1254`）。
 | `SAO_Kirito/Leng刀光` | 两个链接，`突刺` 和 `突刺001`，父级 `…/突刺.突刺` | 相同 | 相同模式 |
 | `SAO_Kirito/Leng纯色` | 一个链接 | 相同 | 相同模式 |
 
-**丢失的是链接，而不是内容。** `TR刀光_System`，有四个已报告的缺口，收到此
-L1 判定：`bodies identical; the original records 4 gap(s) its mirror does not have`。
+**丢失的是链接，而不是内容。** `TR刀光_System`，有四个已报告的缺口，收到此 L1 判定：`bodies identical; the original records 4 gap(s) its mirror does not have`。
 
 <a id="32-unresolvable-module-scripts-declared"></a>
 
 ### 3.2 无法解析的模块脚本（已声明）
 
-在 `/Game/GameActor2D/Origin_Miku/SceneScan/Niagara/NS_ScanScene` 中，`GetNormalizedDistance` 和
-`UpdateScanSpriteSize` 报告了 `has no resolvable script asset (scratch pad or missing reference)`。
-`decompile-all` 中的 R3 将它们提取为独立的脚本资产：
+在 `/Game/GameActor2D/Origin_Miku/SceneScan/Niagara/NS_ScanScene` 中，`GetNormalizedDistance` 和 `UpdateScanSpriteSize` 报告了 `has no resolvable script asset (scratch pad or missing reference)`。 `decompile-all` 中的 R3 将它们提取为独立的脚本资产：
 
 ```text
 extracted embedded script 'GetNormalizedDistance'   -> /Game/Decompiled/GameActor2D/Origin_Miku/SceneScan/Niagara/Scripts/NS_ScanScene_GetNormalizedDistance
 extracted embedded script 'UpdateScanSpriteSize'    -> /Game/Decompiled/GameActor2D/Origin_Miku/SceneScan/Niagara/Scripts/NS_ScanScene_UpdateScanSpriteSize
 ```
 
-> **副作用：** `decompile-all` 不只写入文本。此步骤在 `/Game/Decompiled/…/Scripts/` 下写入 **两个 `.uasset`
-> 文件**。`Content/Decompiled/` 被 `.gitignore` 忽略。
-> 任何将此命令描述为只读的说明都必须注明这一例外。
+> **副作用：** `decompile-all` 不只写入文本。此步骤在 `/Game/Decompiled/…/Scripts/` 下写入 **两个 `.uasset` 文件**。`Content/Decompiled/` 被 `.gitignore` 忽略。任何将此命令描述为只读的说明都必须注明这一例外。
 
 <a id="33-an-entire-exported-document-cannot-rebuild-undeclared"></a>
 
@@ -297,33 +229,26 @@ ri system-update Constants.Fountain.EmitterState.MaxDistance (NiagaraFloat) = 00
 
 请仔细解读这些计数：
 
-- 抑制**旨在行为上等价**：模块默认值应在重建时恢复
-  被省略的值。仅凭这些事实**不能证明渲染不正确**。
+- 抑制**旨在行为上等价**：模块默认值应在重建时恢复被省略的值。仅凭这些事实**不能证明渲染不正确**。
 - 然而它们**在此文本中缺失**。对于以源为权威的编辑，这意味着：
-  1. **没有受支持的读取表示**：正常的 `decompile` 输出既没有输入值，
-     也没有标记表明某个值被抑制。只有 `-NoDefaults` 会揭示它；当时，
-     `.skill/dfx.ps1:127-129` 明确表示“仅用于诊断——结果不打算被维护。”
+  1. **没有受支持的读取表示**：正常的 `decompile` 输出既没有输入值，也没有标记表明某个值被抑制。只有 `-NoDefaults` 会揭示它；当时， `.skill/dfx.ps1:127-129` 明确表示“仅用于诊断——结果不打算被维护。”
   2. **没有回写地址**：基于行的回写和脏集需要输入的键，而该键在源中完全不存在。
-- 它**在模块更新时很脆弱**：如果模块默认值发生变化，镜像会跟随它们，
-  而原始版本保留其存储的值。
+- 它**在模块更新时很脆弱**：如果模块默认值发生变化，镜像会跟随它们，而原始版本保留其存储的值。
 
 <a id="35-confirmed-stored-value-divergence-meshyaw-90--0-undeclared"></a>
 
 ### 3.5 已确认的存储值差异：`MeshYaw` −90 → 0（未声明）
 
-`/Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh` 在三个实测资产差异中最小：`136 fact(s) vs 136`，**两对**，表示在生成和
-更新脚本中的同一输入。
+`/Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh` 在三个实测资产差异中最小：`136 fact(s) vs 136`，**两对**，表示在生成和更新脚本中的同一输入。
 
 ```text
 ORIG  ri Atlas2D_Mesh ParticleUpdateScript Constants.Atlas2D_Mesh.Sprite_Atlas_Size.MeshYaw (NiagaraFloat) = 0000B4C2
 MIRR  ri Atlas2D_Mesh ParticleUpdateScript Constants.Atlas2D_Mesh.Sprite_Atlas_Size.MeshYaw (NiagaraFloat) = 00000000
 ```
 
-`0xC2B40000` 是 **−90.0**；`0x00000000` 是 **0.0**。这些是同一变量的不同值。
-以下链条中的每一个环节都经过测量：
+`0xC2B40000` 是 **−90.0**；`0x00000000` 是 **0.0**。这些是同一变量的不同值。以下链条中的每一个环节都经过测量：
 
-1. 源**省略了** `MeshYaw`。`NS_Effects1_Mesh.dfs:87` 仅包含
-   `/AtlasFX/Modules/Sprite_Atlas_Size(DepthScale = User.DepthScale);`。
+1. 源**省略了** `MeshYaw`。`NS_Effects1_Mesh.dfs:87` 仅包含 `/AtlasFX/Modules/Sprite_Atlas_Size(DepthScale = User.DepthScale);`。
 2. 原始版本**存储 −90**，如上所示。
 3. `-NoDefaults` 打印所有输入，却仍然导出 **0**：
 
@@ -338,25 +263,16 @@ MIRR  ri Atlas2D_Mesh ParticleUpdateScript Constants.Atlas2D_Mesh.Sprite_Atlas_S
    );
    ```
 
-   `/AtlasFX/Templates/NS_Atlas2D_Mesh` 的相同导出给出了完全相同的 `MeshYaw = 0.0`。
-   因此读取路径无法区分“真的为零”和“存储为 −90”。
-4. 在两个模板和 Misaka 系统中，**只有此输入**的值不同；
-   `MeshSize`、`MinSize` 和 `UniformScale` 在两侧一致。
+   `/AtlasFX/Templates/NS_Atlas2D_Mesh` 的相同导出给出了完全相同的 `MeshYaw = 0.0`。因此读取路径无法区分“真的为零”和“存储为 −90”。
+4. 在两个模板和 Misaka 系统中，**只有此输入**的值不同； `MeshSize`、`MinSize` 和 `UniformScale` 在两侧一致。
 
-**已确认：**源端并未完整描述原始模块输入状态；读取端的
-`MeshYaw` 与快速迭代存储不同，且镜像与原始版本不同。
-没有 `-NoCompile` 时，`asset-diff` **会强制双方重新编译并等待**
-（`DreamFXCommandlet.cpp:816-827`），因此这不仅仅是一个过期的、未编译的值。
+**已确认：**源端并未完整描述原始模块输入状态；读取端的 `MeshYaw` 与快速迭代存储不同，且镜像与原始版本不同。没有 `-NoCompile` 时，`asset-diff` **会强制双方重新编译并等待**（`DreamFXCommandlet.cpp:816-827`），因此这不仅仅是一个过期的、未编译的值。
 
-**未验证：**Niagara 运行时是消费引脚值还是快速迭代值，因此
-镜像在渲染上是否真的不同。这需要 L3 或视觉对比。
+**未验证：**Niagara 运行时是消费引脚值还是快速迭代值，因此镜像在渲染上是否真的不同。这需要 L3 或视觉对比。
 
-相关背景（并非证据）：`Plugins/AtlasFX/Source/AtlasFXEditor/Private/AtlasFXPaperZDPreview.cpp:63` 中一条 AtlasFX 源注释
-将早先的不可见预览归因于网格模板 `MeshYaw = -90`，该模板将平面旋转为
-侧对相机（在游戏中同样表现为一条细线）；该模板已被改回零。
+相关背景（并非证据）：`Plugins/AtlasFX/Source/AtlasFXEditor/Private/AtlasFXPaperZDPreview.cpp:63` 中一条 AtlasFX 源注释将早先的不可见预览归因于网格模板 `MeshYaw = -90`，该模板将平面旋转为侧对相机（在游戏中同样表现为一条细线）；该模板已被改回零。
 
-这是唯一一条将确定的源/资产值差异与可能可见的变化联系起来的
-初始线索，因此值得优先调查。
+这是唯一一条将确定的源/资产值差异与可能可见的变化联系起来的初始线索，因此值得优先调查。
 
 <a id="36-renderer-materialparamvalidmask-15--0-undeclared"></a>
 
@@ -377,13 +293,9 @@ ORIG  ri 位置 ParticleSpawnScriptInterpolated Constants.位置.DynamicMaterial
 ORIG  ri 位置 ParticleSpawnScriptInterpolated Constants.位置.DynamicMaterialParameters.Index 0 Param 4 (NiagaraFloat) = 00000000
 ```
 
-源端**确实包含** `DynamicMaterialParameters@1.1(…)`，位于 `TR刀光_System.dfs:528`。
-该模块存在；丢失的状态是渲染器的有效掩码及相应 RI 常量。
+源端**确实包含** `DynamicMaterialParameters@1.1(…)`，位于 `TR刀光_System.dfs:528`。该模块存在；丢失的状态是渲染器的有效掩码及相应 RI 常量。
 
-**未验证：**`MaterialParamValidMask` 是否是在加载/编译期间重新计算的缓存。
-它不是 `CPF_Transient`（否则 `AppendPropertyFacts`、`DreamFXAssetFacts.cpp:85-89` 会
-跳过它），因此它是序列化的资产状态。重新编译是否会恢复它未经单独
-测试。其后果与第 3.5 节一样仍未验证。
+**未验证：**`MaterialParamValidMask` 是否是在加载/编译期间重新计算的缓存。它不是 `CPF_Transient`（否则 `AppendPropertyFacts`、`DreamFXAssetFacts.cpp:85-89` 会跳过它），因此它是序列化的资产状态。重新编译是否会恢复它未经单独测试。其后果与第 3.5 节一样仍未验证。
 
 <a id="37-curvedi-node-name-drift-undeclared"></a>
 
@@ -399,21 +311,15 @@ MIRR   compiled Fountain001 ParticleSpawnScriptInterpolated di 'Emitter.FloatFro
 MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.FloatFromCurve006.FloatCurve' … calls: SampleCurve
 ```
 
-双方都调用 `SampleCurve`，表明行为相似，但这并非行为层面的证明。
-**拥有曲线的模块节点名称**发生漂移（`Scale Alpha` → `FloatFromCurve`，
-`FloatCurve001` → `FloatFromCurve006`）。`dfs.md:120-126` 中的 `as <name>` 用于处理稳定的节点
-标识，但**59 个导出中没有一个包含 `as` 引脚**。
+双方都调用 `SampleCurve`，表明行为相似，但这并非行为层面的证明。**拥有曲线的模块节点名称**发生漂移（`Scale Alpha` → `FloatFromCurve`， `FloatCurve001` → `FloatFromCurve006`）。`dfs.md:120-126` 中的 `as <name>` 用于处理稳定的节点标识，但**59 个导出中没有一个包含 `as` 引脚**。
 
-**未验证：**这是否会破坏 `Output.<node>.<value>` 链接。在可用的 L2 检查中
-未出现由此导致的编译错误，但 `as` 的缺失已然确立。
+**未验证：**这是否会破坏 `Output.<node>.<value>` 链接。在可用的 L2 检查中未出现由此导致的编译错误，但 `as` 的缺失已然确立。
 
 <a id="38-effecttype-asymmetric-readwrite-tables-code-finding-not-exercised"></a>
 
 ### 3.8 `EffectType`：非对称读/写表（代码发现，未实际触发）
 
-`DreamFXDecompiler.cpp:1266-1274` 处的注释要求反编译器表与生成器 `EmitterSettings`
-保持对齐：两者是同一契约的两半，仅存在于
-一侧的设置会被静默丢失。检查发现：
+`DreamFXDecompiler.cpp:1266-1274` 处的注释要求反编译器表与生成器 `EmitterSettings` 保持对齐：两者是同一契约的两半，仅存在于一侧的设置会被静默丢失。检查发现：
 
 | 范围 | 生成器 | 读取器 |
 |---|---|---|
@@ -421,9 +327,7 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 | 发射器条目 | SimTarget / LocalSpace / Determinism / RandomSeed / AllocationMode / PreAllocationCount / InterpolatedSpawning / CalculateBoundsMode / FixedBounds / RequiresPersistentIDs / Enabled / QualityLevelMask | 相同条目 |
 | 系统 | `DreamFXGenerator.cpp:396-406`，**5**：`EffectType`、`WarmupTime`、`FixedBounds`、`FixedTickDelta`、`FixedTickDeltaTime` | `DreamFXDecompiler.cpp:1300-1313`，**4**：**没有 `EffectType`** |
 
-在此修订版中，**`EffectType` 可以写入但无法读回**。导出/重建可能会对
-使用它的系统静默省略该值。此内容中 `EffectType =` 出现次数为零，因此该失败
-**未被实际触发**。这种不对称本身是真实存在的，只需一个表项即可修正。
+在此修订版中，**`EffectType` 可以写入但无法读回**。导出/重建可能会对使用它的系统静默省略该值。此内容中 `EffectType =` 出现次数为零，因此该失败**未被实际触发**。这种不对称本身是真实存在的，只需一个表项即可修正。
 
 <a id="39-verification-tool-blind-spots"></a>
 
@@ -443,34 +347,21 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 
 这些差异可能来自比较器而非丢失的创作状态：
 
-1. **`<self>` 前缀**：原始
-   `emitter Fountain renderer 0:… Meshes = ((Mesh="/Script/Engine.StaticMesh'<self>_Mesh.破空灰尘_Mesh'"))`
-   对比镜像 `…'StaticMesh'/Game/AssetMaterial/FXs/破空/破空灰尘_Mesh.破空灰尘_Mesh'`。
-   `SelfPackage` 不同是因为镜像位于 `/Game/Decompiled/…` 之下；归一化
-   会为**同一绝对引用**产生不同的字符串。
-2. **`EditorData` / `EditorParameters`**：诸如 `…破空灰尘:Fountain.NiagaraEmitterEditorData~`
-   对比 `…破空灰尘:Fountain~.NiagaraEmitterEditorData~` 的名称反映的是仅编辑器内的对象命名。
-3. **渲染器 `*Binding` 字段内的 `bBindingExistsOnSource=True→False`** 是编译器派生的
-   缓存噪声。**不要将这种排除延伸到 `MaterialParamValidMask`**：第 3.6 节
-   的差异需要独立调查。
+1. **`<self>` 前缀**：原始 `emitter Fountain renderer 0:… Meshes = ((Mesh="/Script/Engine.StaticMesh'<self>_Mesh.破空灰尘_Mesh'"))` 对比镜像 `…'StaticMesh'/Game/AssetMaterial/FXs/破空/破空灰尘_Mesh.破空灰尘_Mesh'`。 `SelfPackage` 不同是因为镜像位于 `/Game/Decompiled/…` 之下；归一化会为**同一绝对引用**产生不同的字符串。
+2. **`EditorData` / `EditorParameters`**：诸如 `…破空灰尘:Fountain.NiagaraEmitterEditorData~` 对比 `…破空灰尘:Fountain~.NiagaraEmitterEditorData~` 的名称反映的是仅编辑器内的对象命名。
+3. **渲染器 `*Binding` 字段内的 `bBindingExistsOnSource=True→False`** 是编译器派生的缓存噪声。**不要将这种排除延伸到 `MaterialParamValidMask`**：第 3.6 节的差异需要独立调查。
 
 <a id="311-explicitly-unverified-features"></a>
 
 ### 3.11 明确未验证的功能
 
-`Stage` 块；多个事件处理器或事件生成器；自定义 C++ 阶段类；
-`RibbonRenderer`；`SubImageSize`；`MeshRenderer.Meshes` 元素中的自定义枢轴/缩放/LOD；
-`EffectType`；`ModulePaths`；`RequiresPersistentIDs`；`as <node name>`；`Defaults = {}`；
-实际内联 `hlsl { }`；`.dfe` `from` 引用；以及按设备配置文件的平台集覆盖
-（`FNiagaraPlatformSet` 超出 `QualityLevelMask`）。未出现在本内容中不构成受支持的证明。
+`Stage` 块；多个事件处理器或事件生成器；自定义 C++ 阶段类； `RibbonRenderer`；`SubImageSize`；`MeshRenderer.Meshes` 元素中的自定义枢轴/缩放/LOD； `EffectType`；`ModulePaths`；`RequiresPersistentIDs`；`as <node name>`；`Defaults = {}`；实际内联 `hlsl { }`；`.dfe` `from` 引用；以及按设备配置文件的平台集覆盖（`FNiagaraPlatformSet` 超出 `QualityLevelMask`）。未出现在本内容中不构成受支持的证明。
 
 <a id="4-supported-write-back-inventory"></a>
 
 ## 4. 受支持的写回清单
 
-只有当某功能出现在导出中、通过 L1/L2 **并且**在反射级事实上存续时，才算作
-**已测得的写回支持**。仅满足前两项只能确立文本层面的成功，反射覆盖范围
-仍受限于下文所述条件。
+只有当某功能出现在导出中、通过 L1/L2 **并且**在反射级事实上存续时，才算作**已测得的写回支持**。仅满足前两项只能确立文本层面的成功，反射覆盖范围仍受限于下文所述条件。
 
 | 类别 | 结果 | 证据 |
 |---|---|---|
@@ -495,9 +386,7 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 
 ## 5. 定点样本
 
-由于批量重建可能导致编辑器停滞，因此对五个系统进行了抽样：文档示例
-包含 24 个系统，创建了 237 个编译任务。每个源均在单独的编辑器进程中
-使用 `-Force` 重建。
+由于批量重建可能导致编辑器停滞，因此对五个系统进行了抽样：文档示例包含 24 个系统，创建了 237 个编译任务。每个源均在单独的编辑器进程中使用 `-Force` 重建。
 
 | # | 资产 | 选择原因 | 构建 | L1 | L2 | `asset-diff` | 首个差异 |
 |---|---|---|---|---|---|---|---|
@@ -507,43 +396,29 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 | S4 | `/Game/GameActor2D/Origin_Miku/SceneScan/Niagara/NS_ScanScene` | 唯一包含提取出的嵌入式脚本的系统 | **21 个错误，0 个构建** | —，镜像从未构建 | — | **缺失** | 全部 `DFX4007`；首个位于 `NS_ScanScene.dfs(16,30)`，`'NPC.NPC_Scan001.MaxScanRange'` |
 | S5 | `/Game/AssetMaterial/FXs/破空/破空灰尘` | `/Game/AssetMaterial` 的代表 | 0 错误 | **通过** | **通过**，UpToDate | **不同**，444→403，57↔16 | 仅存在于原始中的 37 个模块输入和四个系统更新常量 |
 
-聚合扫描报告 **L1：5 个通过，0 个失败，54 个从未构建；L2：5 个编译干净，
-0 个失败**。`dfx` 返回 `FAILED (exit 54)`，因为 `Missing` 对退出码有贡献
-（3.9）。`asset-diff` 报告 **2 个相同，3 个不同，54 个缺失**。这些聚合计数涵盖
-扫描中的可用镜像，且与五个新选择的构建尝试不同。
+聚合扫描报告 **L1：5 个通过，0 个失败，54 个从未构建；L2：5 个编译干净， 0 个失败**。`dfx` 返回 `FAILED (exit 54)`，因为 `Missing` 对退出码有贡献（3.9）。`asset-diff` 报告 **2 个相同，3 个不同，54 个缺失**。这些聚合计数涵盖扫描中的可用镜像，且与五个新选择的构建尝试不同。
 
-核心结果是 `mirror-diff` 通过全部五个可用镜像，而 `asset-diff`
-在三个资产中发现了差异。
+核心结果是 `mirror-diff` 通过全部五个可用镜像，而 `asset-diff` 在三个资产中发现了差异。
 
-附加的 S2 证据：重新导出其镜像并对原始导出使用 `Compare-Object`
-得到 **103 行对 103 行**，仅在第一行的来源注释上不同。
-甚至 `MaterialParameters`、`Meshes` 和 `OverrideMaterials` blob 也逐字节匹配。其问题
-**不是文本往返**，而是**文本遗漏了 `MeshYaw`**。
+附加的 S2 证据：重新导出其镜像并对原始导出使用 `Compare-Object` 得到 **103 行对 103 行**，仅在第一行的来源注释上不同。甚至 `MaterialParameters`、`Meshes` 和 `OverrideMaterials` blob 也逐字节匹配。其问题**不是文本往返**，而是**文本遗漏了 `MeshYaw`**。
 
 <a id="6-implementation-recommendations-and-follow-up"></a>
 
 ## 6. 实现建议与后续工作
 
-> 单独的 DreamGUI 研究笔记提出了此顺序：（1）构建安全门，（2）`pull`，
-> （3）行级回写加脏跟踪，（4）协调编译抑制。本节
-> 增加了实测证据和具体变更，修订了前两项的依据。
+> 单独的 DreamGUI 研究笔记提出了此顺序：（1）构建安全门，（2）`pull`，（3）行级回写加脏跟踪，（4）协调编译抑制。本节增加了实测证据和具体变更，修订了前两项的依据。
 
 <a id="61-safety-gate-use-describesystemfacts-not-exported-text"></a>
 
 ### 6.1 安全门：使用 `DescribeSystemFacts`，而不是导出的文本
 
-先前的建议是复用 `build` 中的 `DFX8010` 门。测量支持
-该目标，但**不支持该实现依据**：DFX8010 依赖 `Result.UnsupportedFeatures`，
-然而三个存在差异的资产均未报告 3.4–3.7 中的任何损失。S2 和 S5 报告为零；
-S3 仅报告四个声明的父链接。文本层面的门无法看到这些损失。
+先前的建议是复用 `build` 中的 `DFX8010` 门。测量支持该目标，但**不支持该实现依据**：DFX8010 依赖 `Result.UnsupportedFeatures`，然而三个存在差异的资产均未报告 3.4–3.7 中的任何损失。S2 和 S5 报告为零； S3 仅报告四个声明的父链接。文本层面的门无法看到这些损失。
 
-`Source/DreamFXEditor/Private/Diff/DreamFXAssetFacts.cpp` 中的 `DescribeSystemFacts` 已经是一个
-独立的基于反射的资产探测。在加载目标之后、提交写入之前：
+`Source/DreamFXEditor/Private/Diff/DreamFXAssetFacts.cpp` 中的 `DescribeSystemFacts` 已经是一个独立的基于反射的资产探测。在加载目标之后、提交写入之前：
 
 1. 记录其当前事实。
 2. 确定源将产生什么。
-3. 列出文本无法复现的事实，并拒绝破坏性替换，除非使用 `-Force` 明确
-   强制。
+3. 列出文本无法复现的事实，并拒绝破坏性替换，除非使用 `-Force` 明确强制。
 
 这在一个集成点复用了现有工具，以覆盖 S2/S3/S5 类别的静默损失。
 
@@ -551,19 +426,13 @@ S3 仅报告四个声明的父链接。文本层面的门无法看到这些损�
 
 ### 6.2 向 `asset-diff` 添加系统属性
 
-`DescribeSystem`（`DreamFXAssetFacts.cpp:246`）从未为
-`UNiagaraSystem` 对象本身调用 `AppendPropertyFacts`。反射该对象为
-`EffectType`、`WarmupTime`、`FixedBounds`、`bFixedTickDelta` 和 `bDeterminism` 添加了一个独立见证。
-还提议从跳过集合中移除
-`VersionedParent`（`:258`），以便父链比较不会
-依赖单独的适配器路径。
+`DescribeSystem`（`DreamFXAssetFacts.cpp:246`）从未为 `UNiagaraSystem` 对象本身调用 `AppendPropertyFacts`。反射该对象为 `EffectType`、`WarmupTime`、`FixedBounds`、`bFixedTickDelta` 和 `bDeterminism` 添加了一个独立见证。还提议从跳过集合中移除 `VersionedParent`（`:258`），以便父链比较不会依赖单独的适配器路径。
 
 <a id="63-fix-emitternodeinput-readwrite-asymmetry"></a>
 
 ### 6.3 修复 `<Emitter>.<Node>.<Input>` 的读/写不对称
 
-`IsNamespacedName`（`DreamFXValueLowering.cpp:204-227`，允许列表位于 `:39-44`）拒绝首段为发射器名称的
-引用，尽管反编译器会发出它们（`:655-656`）。选项：
+`IsNamespacedName`（`DreamFXValueLowering.cpp:204-227`，允许列表位于 `:39-44`）拒绝首段为发射器名称的引用，尽管反编译器会发出它们（`:655-656`）。选项：
 
 - **接受真实上下文**：`Bind` 已经接受发射器别名（`DreamFXGenerator.cpp:1490-1502` 中的 DFX4026 注释），并且 `Output.<node>.<value>` 已被允许。从该系统识别发射器/节点名称比扩展固定的关键字列表更准确。
 - **声明不支持的输出**：如果无法表达，请记录 `UnsupportedFeatures`，而不是发出被写入器拒绝的标记，这样 `coverage` 就不会再将其描述为 `ok`。
@@ -652,60 +521,28 @@ S3 仅报告四个声明的父链接。文本层面的门无法看到这些损�
 
 ### 6.9 已实现：`pull`（资产 → 源）
 
-> 分支 `feat/pull`；`dfx pull`；诊断 `DFX7106`–`DFX7116`。
-> [拉取参考](pull.md)包含完整语义、限制和测量结果。本节
-> 将其与先前的发现关联起来。
+> 分支 `feat/pull`；`dfx pull`；诊断 `DFX7106`–`DFX7116`。[拉取参考](pull.md)包含完整语义、限制和测量结果。本节将其与先前的发现关联起来。
 
-- **第 6.4 节被部分采纳、部分替换。** `-NoDefaults` 仍然将**键**放入
-  源中；`pull` 无法更新未声明的输入。**值**现在直接来自
-  对快速迭代存储的反射，与 `asset-diff` 和门禁对齐，而不是
-  来自引脚。不再需要单独计算的抑制集合：未声明的源输入
-  只是被原样保留（`DFX7106`）。
-- **第 3.5 节的 `MeshYaw` 现在可以在源中更正。** `pull -Apply` 恰好更改一行，
-  `0.0 -> -90.0`；随后 `build` 报告一个已构建、零错误且没有构建安全消息，
-  因为规则 3 允许该声明值。两个 `asset-diff` 侧都变为 `0000B4C2`。L3/视觉
-  问题仍然**未验证**：这修复的是源是否包含该值，而不是消费哪种
-  运行时表示。
-- **来自 6.8 第 7 行的八个事实被报告并跳过**，表明普通拉取
-  不会添加结构。对于 `破空灰尘`：比较了 19 个，零个待写入，94 个未声明，零个未处理的
-  栈，SHA256 不变。**计数区别：**94 是按名称去重的；先前的
-  37/57 数字按**每个脚本的事实**计数，包括同一名称的单独 spawn/update 副本。
-  它们是不同的量，不可互换。
-- **通过拉取发现的适配器契约：** `FNiagaraAdapter::GetEmitterInfo` 会**追加**到其
-  输出。为一个 `FEmitterInfo` 复用给两个发射器会将第一个发射器的栈泄漏到
-  第二个中。`pull` 为每个发射器创建一个新实例并记录了这一点。共享适配器
-  本身未被更改；那需要单独评估。
+- **第 6.4 节被部分采纳、部分替换。** `-NoDefaults` 仍然将**键**放入源中；`pull` 无法更新未声明的输入。**值**现在直接来自对快速迭代存储的反射，与 `asset-diff` 和门禁对齐，而不是来自引脚。不再需要单独计算的抑制集合：未声明的源输入只是被原样保留（`DFX7106`）。
+- **第 3.5 节的 `MeshYaw` 现在可以在源中更正。** `pull -Apply` 恰好更改一行， `0.0 -> -90.0`；随后 `build` 报告一个已构建、零错误且没有构建安全消息，因为规则 3 允许该声明值。两个 `asset-diff` 侧都变为 `0000B4C2`。L3/视觉问题仍然**未验证**：这修复的是源是否包含该值，而不是消费哪种运行时表示。
+- **来自 6.8 第 7 行的八个事实被报告并跳过**，表明普通拉取不会添加结构。对于 `破空灰尘`：比较了 19 个，零个待写入，94 个未声明，零个未处理的栈，SHA256 不变。**计数区别：**94 是按名称去重的；先前的 37/57 数字按**每个脚本的事实**计数，包括同一名称的单独 spawn/update 副本。它们是不同的量，不可互换。
+- **通过拉取发现的适配器契约：** `FNiagaraAdapter::GetEmitterInfo` 会**追加**到其输出。为一个 `FEmitterInfo` 复用给两个发射器会将第一个发射器的栈泄漏到第二个中。`pull` 为每个发射器创建一个新实例并记录了这一点。共享适配器本身未被更改；那需要单独评估。
 
 <a id="610-implemented-wider-coverage-dirty-tracking-and-structural-edits"></a>
 
 ### 6.10 已实现：更广的覆盖率、脏跟踪和结构编辑
 
-> 分支 `feat/write-back`，从 `feat/pull` 开始的三个提交；新诊断
-> `DFX7112`–`DFX7115`。细节和实测用例见[拉取](pull.md)第 4b/4c/4d/5b 节。
+> 分支 `feat/write-back`，从 `feat/pull` 开始的三个提交；新诊断 `DFX7112`–`DFX7115`。细节和实测用例见[拉取](pull.md)第 4b/4c/4d/5b 节。
 
 先前缺口的处置：
 
-- **3.4，被省略的模块字面量：** `decompile -NoDefaults` 仍然提供输入**键**；普通
-  拉取不添加参数。正式的**值**路径直接读取快速迭代存储
-  中的源声明地址。单独的抑制集合提案仍然不必要。
+- **3.4，被省略的模块字面量：** `decompile -NoDefaults` 仍然提供输入**键**；普通拉取不添加参数。正式的**值**路径直接读取快速迭代存储中的源声明地址。单独的抑制集合提案仍然不必要。
 - **3.5，`MeshYaw`：**已在 6.9 中针对文本写回处理；本次未变。
-- **3.6/3.7/3.8，`MaterialParamValidMask`、DI 节点名称和 `EffectType`：**本次未触碰。
-  它们分别涉及渲染器/编译状态、节点标识和一个缺失的读取方字段，
-  而不是值写回操作。
+- **3.6/3.7/3.8，`MaterialParamValidMask`、DI 节点名称和 `EffectType`：**本次未触碰。它们分别涉及渲染器/编译状态、节点标识和一个缺失的读取方字段，而不是值写回操作。
 
-**最初的支持表低估了后续覆盖率。**渲染器属性、设置和
-分配现在都有断言支持的写入路径。`Settings` 反向使用生成器自己的映射
-表；渲染器值的拼写由反编译器和 `pull` 通过
-`WriteBack/DreamFXSourceValue.h` 共享。提取该共享实现暴露出一个回归：
-来自先前 `switch` 的遗留 `break` 语句导致只有第一个属性被导出，
-使五个 RoundTrip 夹具失败。独立的 `DescribeSystemFacts` 断言捕获了
-对称导出比较可能遗漏的问题。
+**最初的支持表低估了后续覆盖率。**渲染器属性、设置和分配现在都有断言支持的写入路径。`Settings` 反向使用生成器自己的映射表；渲染器值的拼写由反编译器和 `pull` 通过 `WriteBack/DreamFXSourceValue.h` 共享。提取该共享实现暴露出一个回归：来自先前 `switch` 的遗留 `break` 语句导致只有第一个属性被导出，使五个 RoundTrip 夹具失败。独立的 `DescribeSystemFacts` 断言捕获了对称导出比较可能遗漏的问题。
 
-**资产级验收标准被更精确地实现：**在**原地重建同一资产**后，
-任何事实都不得在其地址仍然存在时消失。这针对的是与 DFX8018 相同的
-状态丢失类别，而不是要求两个单独创建的资产具有
-相同的事实。被移除的整个结构和被折叠的重复常量会分别报告。6.8 中描述的默认值
-恢复解释了为什么缺失的源条目在原地重建时不会全部变成丢失的事实。
+**资产级验收标准被更精确地实现：**在**原地重建同一资产**后，任何事实都不得在其地址仍然存在时消失。这针对的是与 DFX8018 相同的状态丢失类别，而不是要求两个单独创建的资产具有相同的事实。被移除的整个结构和被折叠的重复常量会分别报告。6.8 中描述的默认值恢复解释了为什么缺失的源条目在原地重建时不会全部变成丢失的事实。
 
 **在判定标准上存在一项经实测确认的差异，并由 `feat/collapsed-copy-drift` 解决。** `SetInput`——即编辑器滑块所用的同一外部编辑 API——会把一个 EmitterUpdate 常量写入**两个**存储：`system-spawn` 与 `system-update`，而 DreamFX 重建只会物化其中一个。上一轮将此记录为一项未解决的差异。探针工件与完整日志位于 `Saved/DreamFX/CollapseProbe/`；真实系统导出为 `/AtlasFX/Decompiled/Templates/NS_Atlas2D_Mesh`，编辑的是 `EmitterState` 的 `Loop Duration`。
 

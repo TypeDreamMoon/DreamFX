@@ -1,6 +1,6 @@
 ---
-title: "诊断"
-description: "每个 DFXnnnn 代码 —— 如何阅读一个代码、每个系列属于哪个流水线阶段，以及指向生成的代码目录的链接。"
+title: 诊断
+description: 每个 DFXnnnn 代码 —— 如何阅读一个代码、每个系列属于哪个流水线阶段，以及指向生成的代码目录的链接。
 ---
 
 每个 DreamFX 诊断都是一个 `DFXnnnn`，带有**文件、行和列**：
@@ -32,9 +32,7 @@ Did you mean 'Gravity'? Available inputs: Gravity, CoordinateSpace
 
 > **注意：**
 >
-> 这些页面中有一半是**机器写的**：严重级别、消息模板和抛出位置从插件源中扫描出来，
-> 而 `gen-diagnostics.ps1 -Check` 是阻止它们漂移的门。人写的那一半 —— 成因与修法 —— 只写一次。
-> 见 [ci.ps1 与门](../tools/ci.md)。
+> 这些页面中有一半是**机器写的**：严重级别、消息模板和抛出位置从插件源中扫描出来，而 `gen-diagnostics.ps1 -Check` 是阻止它们漂移的门。人写的那一半 —— 成因与修法 —— 只写一次。见 [ci.ps1 与门](../tools/ci.md)。
 
 <a id="the-order-to-debug-in"></a>
 
@@ -49,8 +47,7 @@ Did you mean 'Gravity'? Available inputs: Gravity, CoordinateSpace
 <a id="check-against-the-real-signature"></a>
 
 ### 对照真实签名核对
-`dfx.ps1 schema <Module> -Stack <Stack>` 会打印构建所看到的输入签名 ——
-包括静态开关。关于名称，权威在资产，而不在记忆。
+`dfx.ps1 schema <Module> -Stack <Stack>` 会打印构建所看到的输入签名 —— 包括静态开关。关于名称，权威在资产，而不在记忆。
 
 <a id="still-wrong-read-the-limits"></a>
 
@@ -62,8 +59,7 @@ Did you mean 'Gravity'? Available inputs: Gravity, CoordinateSpace
 
 ## 按代码查找
 
-[完整代码索引](README.md)由当前插件源生成。它拥有
-严重级别与消息表；本指南链接到该目录，而不是维护第二份副本。
+[完整代码索引](README.md)由当前插件源生成。它拥有严重级别与消息表；本指南链接到该目录，而不是维护第二份副本。
 
 <a id="dfx1xxx--driver-and-file-io"></a>
 
