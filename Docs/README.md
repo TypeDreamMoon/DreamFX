@@ -4,8 +4,8 @@
 
 These English Markdown documents are the maintained originals for the plugin and its
 [documentation site](https://fx.toolchain.64hz.cn/en/docs). Edit the source here. The site maps
-these files to stable page URLs and publishes both languages. Chinese translation pull requests
-are opened and reviewed in this plugin repository. Moving a source file does not require changing its public URL.
+these files to stable page URLs and publishes both languages. Chinese translations
+are maintained and reviewed in this plugin repository. Moving a source file does not require changing its public URL.
 
 ## Getting started
 
@@ -70,6 +70,6 @@ The website's `docs-sync/config.json` maps source files to existing page IDs, in
 `plugin/` routes. Keep those IDs when reorganizing source paths. This navigation file is excluded
 from automatic page discovery so it does not create another website route.
 
-The `zh-CN/` tree mirrors English source paths. Imported translations are unreviewed; the [TRANSLATIONS.md snapshot](zh-CN/TRANSLATIONS.md) preserves the initial migration inventory, and `.translations/` records source versions without treating an import as approval. Website-only notes remain in the website repository.
+The `zh-CN/` tree mirrors English source paths. Beside it, `zh-CN/.align/` records which English paragraph each Chinese paragraph was translated from, so when the English changes only the changed paragraphs are translated again. Correct a translation by editing the Chinese page directly; the next run keeps the edit. Website-only notes remain in the website repository.
 
-Check translation status locally with `python -B Docs/translation-status.py`; add `--all` to include every source or `--json` for structured output. This read-only tool does not need the website repository or a Git checkout.
+Translations are made and checked with [dreamdocs](https://github.com/TypeDreamMoon/dreamdocs): `dreamdocs status` lists the stale and missing paragraphs, `dreamdocs translate` translates them, and `dreamdocs check --plugin .` is what CI runs. Its settings for this plugin are in `dreamdocs.json`.
