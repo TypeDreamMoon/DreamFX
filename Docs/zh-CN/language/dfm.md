@@ -1,8 +1,3 @@
----
-title: "`.dfm` — 模块与动态输入"
-description: "`.dfm` — 模块或动态输入"
----
-
 <a id="dfm--a-module-or-a-dynamic-input"></a>
 
 # `.dfm` — 模块或动态输入
@@ -106,7 +101,7 @@ ScaleSpriteSize(ScaleSpriteSizeMode = Uniform, UniformScaleFactor = ToonPulse(Fr
 
 普通的整数输入可以用 `int(1.9)` 作为默认值：它会在存储前被求值为 `1`。参数必须是一个有限数值字面量，其截断值能放入 `int32`（DFX4044）。对于 `[StaticSwitch]` 默认值，直接写出结果字面量。
 
-数据接口（`DI<X>` 以及诸如 `Texture2D` 的简写）和仅实例对象类型（标记为 `DefaultToInstanced` 的 actor、组件和类）不能声明输入默认值（DFX4043）。声明输入时不带 `= ...`，并从系统或栈输入提供它的实例。这些值不是资产路径。`Object<Texture>` 和其他资产引用类型仍然与数据接口不同；普通资产引用在系统参数和栈输入上是支持的。
+数据接口（`DI<X>` 以及诸如 `Texture` 的简写）和仅实例对象类型（标记为 `DefaultToInstanced` 的 actor、组件和类）不能声明输入默认值（DFX4043）。声明输入时不带 `= ...`，并从系统或栈输入提供它的实例。这些值不是资产路径。`Object<Texture>` 和其他资产引用类型仍然与数据接口不同；普通资产引用在系统参数和栈输入上是支持的。
 
 属性：`[ Description="..." ]`、`[ Advanced ]`、`[ StaticSwitch ]`。
 
@@ -168,22 +163,15 @@ Body = {
 }
 ```
 
-`float Gust = 1.0;` 会在调用前让 CPU VM 编译失败，报 `internal compiler error: out/inout
-parameters must be lvalues in call to 'SampleWind_Module_Wind'`（DFX6006）：VM 的 HLSL 前端
-hlslcc 会先把带初值的局部常量折进实参表，再去检查 out 形参，而常量不是 lvalue。GPU 模拟两种写法都接受；
-按未初始化写，一份 body 两端都通。
+`float Gust = 1.0;` 会在调用前让 CPU VM 编译失败，报 `internal compiler error: out/inout parameters must be lvalues in call to 'SampleWind_Module_Wind'`（DFX6006）：VM 的 HLSL 前端 hlslcc 会先把带初值的局部常量折进实参表，再去检查 out 形参，而常量不是 lvalue。GPU 模拟两种写法都接受；按未初始化写，一份 body 两端都通。
 
 <a id="modules-take-statements-dynamic-inputs-take-one-expression"></a>
 
 ### 模块吃语句，动态输入吃一个表达式
 
-模块的 body 逐字输出 —— 局部变量、分支、想写几条语句都行。**这正是
-DFX4030 一直在指的那件能力**，也是把 `.dfm` 生成解锁掉值得做的
-理由：`.dfs` 里的内联 `hlsl { }` 是一个 rvalue，永远装不下更多。
+模块的 body 逐字输出 —— 局部变量、分支、想写几条语句都行。**这正是 DFX4030 一直在指的那件能力**，也是把 `.dfm` 生成解锁掉值得做的理由：`.dfs` 里的内联 `hlsl { }` 是一个 rvalue，永远装不下更多。
 
-动态输入的 body 被 Niagara 翻译器包成 `Output = (Type)( <body> );`，所以它必须是**一个表达式**，
-写不写 `return` 都行。前面放语句只会产出无效 HLSL 而不是一条说清真正问题的错误，
-所以 DreamFX 先接住它（DFX3037），并指向模块形式。
+动态输入的 body 被 Niagara 翻译器包成 `Output = (Type)( <body> );`，所以它必须是**一个表达式**，写不写 `return` 都行。前面放语句只会产出无效 HLSL 而不是一条说清真正问题的错误，所以 DreamFX 先接住它（DFX3037），并指向模块形式。
 
 ---
 
@@ -191,9 +179,6 @@ DFX4030 一直在指的那件能力**，也是把 `.dfm` 生成解锁掉值得�
 
 ## 一级生成的代价
 
-整个 body 变成一个 `UNiagaraNodeCustomHlsl`，所以在节点编辑器里这个模块是个黑盒
-（plan 3.3）。对一个文本优先的工作流来说这就是本意 —— 文本才是源。它比内联 `hlsl { }`
-多买到的是栈输入装不下的一切：语句、带默认值和 tooltip 的具名输入、跨系统按名复用。
+整个 body 变成一个 `UNiagaraNodeCustomHlsl`，所以在节点编辑器里这个模块是个黑盒（plan 3.3）。对一个文本优先的工作流来说这就是本意 —— 文本才是源。它比内联 `hlsl { }` 多买到的是栈输入装不下的一切：语句、带默认值和 tooltip 的具名输入、跨系统按名复用。
 
-把 body 铺成真正的节点图是二级，且不在计划内：那是 DreamShader 已经背着的那个约 1.3 万行的问题，
-再来一遍。
+把 body 铺成真正的节点图是二级，且不在计划内：那是 DreamShader 已经背着的那个约 1.3 万行的问题，再来一遍。

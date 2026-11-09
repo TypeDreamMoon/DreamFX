@@ -1,14 +1,8 @@
----
-title: "DFX3xxx —— 声明与文档结构"
-description: "DFX3xxx —— 声明与文档结构"
----
-
 <a id="dfx3xxx-----declarations-and-document-structure"></a>
 
 # DFX3xxx —— 声明与文档结构
 
-> 生成标记之间的区块由 `.skill/gen-diagnostics.ps1` 写入。
-> 标记下方的所有内容均为手工撰写，在重新生成后依然保留。
+> 生成标记之间的区块由 `.skill/gen-diagnostics.ps1` 写入。标记下方的所有内容均为手工撰写，在重新生成后依然保留。
 
 <a id="dfx3000"></a>
 
@@ -23,7 +17,7 @@ description: "DFX3xxx —— 声明与文档结构"
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1930`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1941`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1989`，`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2000`
 <!-- generated:end DFX3000 -->
 
 **原因.** `Root="..."` 没有指向一个已挂载的内容根，或者 `Name="..."` 最后一个斜杠后面没有资产名。
@@ -43,7 +37,7 @@ description: "DFX3xxx —— 声明与文档结构"
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1519`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1520`
 <!-- generated:end DFX3001 -->
 
 **原因.** 模块名在搜索路径上解析不到任何东西。这与 DFX3003 是两回事 —— 那个意思是模块存在，但没有这个输入 —— 否则路径打错和实参打错读起来会一模一样。
@@ -63,7 +57,7 @@ description: "DFX3xxx —— 声明与文档结构"
 Could not read the input schema of module '%s': %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1560`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1613`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1561`，`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1614`
 <!-- generated:end DFX3002 -->
 
 **原因.** 模块找到了，但它的输入签名读不出来。schema 是靠把模块加进一个临时系统探测的，所以这通常意味着这个模块不能待在它被写进去的那个栈里。
@@ -83,7 +77,7 @@ Could not read the input schema of module '%s': %s
 Module '%s' has no input named '%s'.%s Available inputs: %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1677`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1678`
 <!-- generated:end DFX3003 -->
 
 **原因.** 这个模块没有叫这个名字的输入。Niagara 的输入名带空格（`Loop Duration`）；DreamFX 两侧都归一化，所以 `LoopDuration` 能匹配上，但拼错的匹配不上。
@@ -103,7 +97,7 @@ Module '%s' has no input named '%s'.%s Available inputs: %s
 Unknown renderer type '%s'. Expected one of SpriteRenderer, MeshRenderer, RibbonRenderer, LightRenderer, DecalRenderer, ComponentRenderer, VolumeRenderer, or any UNiagaraRendererProperties subclass.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1740`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1741`
 <!-- generated:end DFX3004 -->
 
 **原因.** 渲染器类型是一个闭集。
@@ -123,7 +117,7 @@ Unknown renderer type '%s'. Expected one of SpriteRenderer, MeshRenderer, Ribbon
 Emitter '%s' is declared more than once. Emitter names are stable keys and must be unique.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2117`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2176`
 <!-- generated:end DFX3005 -->
 
 **原因.** 两个发射器同名。名字是重建契约用来匹配 handle 的稳定键（plan 4.5），所以重名是数据丢失，不是命名洁癖。
@@ -143,7 +137,7 @@ Emitter '%s' is declared more than once. Emitter names are stable keys and must 
 '%s' is neither an allowed inline function (%s) nor a dynamic input: %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1183`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1184`
 <!-- generated:end DFX3006 -->
 
 **原因.** 值位置上的一个调用，既不在 L6 的内置白名单里，也不对应任何 dynamic input 资产。
@@ -163,7 +157,7 @@ Emitter '%s' is declared more than once. Emitter names are stable keys and must 
 Could not read the input schema of dynamic input '%s': %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1225`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1226`
 <!-- generated:end DFX3007 -->
 
 **原因.** dynamic input 资产找到了，但签名读不出来。
@@ -183,7 +177,7 @@ Could not read the input schema of dynamic input '%s': %s
 Dynamic input '%s' has no input named '%s'. Available inputs: %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1277`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1278`
 <!-- generated:end DFX3008 -->
 
 **原因.** 这个 dynamic input 没有叫这个名字的输入 —— 也就是链条下一层的 DFX3003。
@@ -203,7 +197,7 @@ Dynamic input '%s' has no input named '%s'. Available inputs: %s
 Dynamic input '%s' is pinned to version %s, which its asset does not offer. Available version(s): %s.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1207`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1542`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1208`，`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1543`
 <!-- generated:end DFX3009 -->
 
 **原因.** 一个 R7 `@version` 固定与模块资产暴露的版本对不上，或者固定到了一个从未启用版本化的资产上。这个固定记录的是源码是照哪个版本写的；DreamFX 建不出别的版本，因为外部编辑 API 没有选版本的办法。
@@ -223,7 +217,7 @@ Dynamic input '%s' is pinned to version %s, which its asset does not offer. Avai
 Property '%s': %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1145`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2051`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:337`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1146`，`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2110`，`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:338`
 <!-- generated:end DFX3010 -->
 
 **原因.** 某条 `Properties` 声明的形状不对 —— 看内层消息。
@@ -243,7 +237,7 @@ Property '%s': %s
 Cannot read the default for %s setting '%s'.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1965`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:737`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:766`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2024`，`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:738`，`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:767`
 <!-- generated:end DFX3020 -->
 
 **原因.** 一个设置键不受支持，或者生成器无法从当前引擎读取某个映射设置在全新资产上的默认值。后者会阻止用已被移除设置的陈旧值进行重建。
@@ -263,7 +257,7 @@ Cannot read the default for %s setting '%s'.
 User parameter '%s' is declared more than once.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1998`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2057`
 <!-- generated:end DFX3021 -->
 
 **原因.** 两个用户参数同名；蓝图的 `SetNiagaraVariable` 会打到赢的那一个上。
@@ -283,7 +277,7 @@ User parameter '%s' is declared more than once.
 A Module or DynamicInput must declare Settings.Usage -- it decides which stacks the module can be placed in.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:186`
+**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:187`
 <!-- generated:end DFX3030 -->
 
 **原因.** `Usage` 决定一个模块能被放进哪些栈。没有它，模块存在，但从任何栈都够不着。
@@ -303,7 +297,7 @@ A Module or DynamicInput must declare Settings.Usage -- it decides which stacks 
 A DynamicInput must declare Settings.Output -- its return type cannot be inferred from the body.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:194`
+**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:195`
 <!-- generated:end DFX3031 -->
 
 **原因.** dynamic input 的返回类型没法从它的 body 推出来。
@@ -323,7 +317,7 @@ A DynamicInput must declare Settings.Output -- its return type cannot be inferre
 A DynamicInput's Usage must be DynamicInput or a nonempty array of stack names.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:218`
+**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:219`
 <!-- generated:end DFX3032 -->
 
 **原因.** 一个 `DynamicInput` 声明了无效的 Usage 值：一个裸栈名、一个空数组，或者一个包含未知栈名的数组。
@@ -343,7 +337,7 @@ A DynamicInput's Usage must be DynamicInput or a nonempty array of stack names.
 Input '%s' is declared more than once.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:228`
+**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:229`
 <!-- generated:end DFX3033 -->
 
 **原因.** 两个输入同名，会在同一个 `Module.` 参数上撞车。
@@ -363,7 +357,7 @@ Input '%s' is declared more than once.
 Input '%s' is marked [StaticSwitch] but is a %s. A static switch must be a bool, an int or an enum.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:243`
+**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:244`
 <!-- generated:end DFX3034 -->
 
 **原因.** R5：静态开关在编译期求解，所以它必须是开关能分支的东西。
@@ -383,7 +377,7 @@ Input '%s' is marked [StaticSwitch] but is a %s. A static switch must be a bool,
 Input '%s' is a [StaticSwitch], so its default must be a compile-time constant.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:249`
+**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:250`
 <!-- generated:end DFX3035 -->
 
 **原因.** 同一条 R5 的另一面：编译期求解的开关不能取运行时的值。
@@ -403,7 +397,7 @@ Input '%s' is a [StaticSwitch], so its default must be a compile-time constant.
 The Body block is empty.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:258`
+**触发位置** `Source/DreamFXEditor/Private/Lint/DreamFXLint.cpp:259`
 <!-- generated:end DFX3036 -->
 
 **原因.** 空 body 生成出来的模块占着一个栈位，什么都不做。
@@ -483,7 +477,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2136`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2195`
 <!-- generated:end DFX3040 -->
 
 **原因.** `from` 路径在磁盘上没解析到 `.dfe`。
@@ -503,7 +497,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 '%s' could not be parsed; see the errors above.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2149`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2208`
 <!-- generated:end DFX3041 -->
 
 **原因.** 被引用的 `.dfe` 自己有错；那些错在这一条之前、按 `.dfe` 自己的路径报出来了。
@@ -523,7 +517,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 '%s' declares a %s, but 'from' needs an Emitter document.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2159`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2218`
 <!-- generated:end DFX3042 -->
 
 **原因.** `from` 拉进来的是一个 emitter，而被引用的文件声明的是别的东西。
@@ -543,7 +537,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 '%s' reads user parameters this system does not declare: %s. Add them to the Properties block.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1916`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1975`
 <!-- generated:end DFX3043 -->
 
 **原因.** `.dfe` 是按拷贝合并的（R3），它读的 `User.*` 一起被拷过来。宿主必须声明这些参数，否则拷进来的 emitter 会去读一个不存在的参数。诊断指在 `from` 那一行，因为决定是在那里做的。
@@ -643,7 +637,7 @@ Default override '%s' changes its type from %s to %s. Overrides must keep the ba
 MeshRenderer has no Material property. Set OverrideMaterials = [\"/path/to/material\"]; and bOverrideMaterials = true; to override its mesh materials.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1791`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1792`
 <!-- generated:end DFX3049 -->
 
 **原因.** `MeshRenderer` 声明了 `Material`，但网格体材质由其覆盖数组和启用开关控制。
@@ -663,7 +657,7 @@ MeshRenderer has no Material property. Set OverrideMaterials = [\"/path/to/mater
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:138`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:178`
 <!-- generated:end DFX3050 -->
 
 **原因.** 系统的 `Parent` 引用无法解析到一个 `.dfs` 源文件。
@@ -683,7 +677,7 @@ MeshRenderer has no Material property. Set OverrideMaterials = [\"/path/to/mater
 Only a System document can inherit a .dfs parent.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:131`、`Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:154`、`Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:161`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:171`、`Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:194`、`Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:201`
 <!-- generated:end DFX3051 -->
 
 **原因.** 父源无法解析、没有声明 `System`，或者正被一个非 system 文档继承。
@@ -703,7 +697,7 @@ Only a System document can inherit a .dfs parent.
 System inheritance contains a cycle or exceeds 128 sources: %s -> %s.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:144`
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:184`
 <!-- generated:end DFX3052 -->
 
 **原因.** 系统的父链重复访问同一个源文件，或超过了 128 个源的限制。
@@ -715,7 +709,7 @@ System inheritance contains a cycle or exceeds 128 sources: %s -> %s.
 ## DFX3053
 
 <!-- generated:begin DFX3053 -->
-**严重级别：** 错误 (`error`)
+**严重级别** 错误
 
 **消息：**
 
@@ -723,7 +717,7 @@ System inheritance contains a cycle or exceeds 128 sources: %s -> %s.
 Inherited parameter '%s' changes type from %s to %s. An override must preserve the parent's parameter type.
 ```
 
-**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:74`
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:85`
 <!-- generated:end DFX3053 -->
 
 **原因.** 子系统用不同的 Niagara 类型重新声明了一个继承来的参数。
@@ -735,7 +729,7 @@ Inherited parameter '%s' changes type from %s to %s. An override must preserve t
 ## DFX3054
 
 <!-- generated:begin DFX3054 -->
-**严重级别：** 错误 (`error`)
+**严重级别** 错误
 
 **消息：**
 
@@ -743,7 +737,7 @@ Inherited parameter '%s' changes type from %s to %s. An override must preserve t
 Parameter '%s' is declared twice in one inheritance layer. An override must be declared in the child source, not twice in the same source.
 ```
 
-**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:22`, `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:34`
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:22`、`Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:34`、`Source/DreamFXEditor/Private/Generation/DreamFXSystemInheritance.cpp:45`
 <!-- generated:end DFX3054 -->
 
 **原因.** 系统继承链中的某一个源把同一个参数名或 emitter 名声明了不止一次。
@@ -755,7 +749,7 @@ Parameter '%s' is declared twice in one inheritance layer. An override must be d
 ## DFX3055
 
 <!-- generated:begin DFX3055 -->
-**严重级别：** 错误 (`error`)
+**严重级别** 错误
 
 **消息：**
 
@@ -763,7 +757,7 @@ Parameter '%s' is declared twice in one inheritance layer. An override must be d
 (built at runtime)
 ```
 
-**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2197`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2203`
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2256`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2262`
 <!-- generated:end DFX3055 -->
 
 **原因.** 某个 emitter 的 `inherits` 路径解析不到一个已启用继承的独立 Niagara emitter 资产。
@@ -775,7 +769,7 @@ Parameter '%s' is declared twice in one inheritance layer. An override must be d
 ## DFX3056
 
 <!-- generated:begin DFX3056 -->
-**严重级别：** 错误 (`error`)
+**严重级别** 错误
 
 **消息：**
 
@@ -783,7 +777,7 @@ Parameter '%s' is declared twice in one inheritance layer. An override must be d
 Native parent has an unavailable version or a cyclic parent chain: %s.
 ```
 
-**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2216`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2223`
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2275`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2282`
 <!-- generated:end DFX3056 -->
 
 **原因.** 原生 emitter 的父链里有一个不可用的版本、一个循环，或者有未合并的祖先改动。
@@ -795,7 +789,7 @@ Native parent has an unavailable version or a cyclic parent chain: %s.
 ## DFX3057
 
 <!-- generated:begin DFX3057 -->
-**严重级别：** 错误 (`error`)
+**严重级别** 错误
 
 **消息：**
 
@@ -809,3 +803,184 @@ Attribute '%s' is declared with conflicting types.
 **原因.** 一个 `.dfm` 自定义属性类型互相冲突、在自己初始化期间被读取，或者首次初始化发生在一个可能不会执行到的路径上。
 
 **修复.** 新属性要在控制流之前给它一个无条件的整体值初始化器；要更新由更早模块提供的自定义属性，就只声明它的类型而不带初始化器，并保持后续类型一致。
+
+<a id="dfx3058"></a>
+
+## DFX3058
+
+<!-- generated:begin DFX3058 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+Patch '%s': unknown topology '%s'. Expected Grid(Columns, Rows), Strip(Columns), Ring(Columns, Rows), Tube(Columns, Rows) or Sphere(Columns, Rows).
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:428`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:438`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:449`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:465`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:476`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:487`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:505`
+<!-- generated:end DFX3058 -->
+
+**原因：** 某个 patch 的拓扑调用不是 lowering 能识别的形式：未知拓扑、顶点数个数错误（`Strip` 接受一个，其他接受两个）、计数不是至少为 2 的整数字面量，或选项未知或形式错误（`Copies`、`Material`、`Flip`）。
+
+**修复：** 使用整数顶点数写 `Grid`、`Strip`、`Ring`、`Tube` 或 `Sphere`，然后按名称写选项：`Tube(65, 17, Copies = 3, Flip = true)`。计数是顶点数，因此闭合形状的接缝列也包含在内。
+
+<a id="dfx3059"></a>
+
+## DFX3059
+
+<!-- generated:begin DFX3059 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+%s needs an emitter named '%s', which %s already uses. Rename one of them.
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1041`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1066`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1125`
+<!-- generated:end DFX3059 -->
+
+**原因：** 名为 `X` 的 `DynamicMesh` 会变成用户参数 `User.X`、绘制它的发射器 `X`，以及每个 patch 一个发射器 `X_<Patch>`。这些名称中有一个已被占用——被 `Properties` 占用、被 `Emitter` 块占用、被另一个块占用——或者同一个块的两个 patch 共享一个名称。
+
+**修复：** 重命名该块、该 patch，或任何已经占用该名称的对象。名称是构建后资产的一部分，因此只有在块保持其名称时，设置 `User.X` 的蓝图才能继续工作。
+
+<a id="dfx3060"></a>
+
+## DFX3060
+
+<!-- generated:begin DFX3060 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+Material takes a quoted material asset path, e.g. Material = \"/Game/FX/M_Shell.M_Shell\";
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1404`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:274`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:307`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:316`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:392`
+<!-- generated:end DFX3060 -->
+
+**原因：** `DynamicMesh` 块的 `Settings` 条目未知、重复书写或形式错误：`TexCoords` 是 0-8 的整数，`Colors` 是 true/false，`Normals` 是 None/Auto/Explicit 之一，`Bounds` 是一个最小值不大于最大值的 `box(...)`，`Duration` 是一个正数。设置了 `Meshes` 或 `MeshBindings` 的 `Renderer` 块也会被拒绝——渲染器只绘制此网格，不绘制其他内容。
+
+**修复：** 使用文档中记录的键和形式；消息会指出期望的形式。
+
+<a id="dfx3061"></a>
+
+## DFX3061
+
+<!-- generated:begin DFX3061 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+Material '%s': %s
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:282`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:289`
+<!-- generated:end DFX3061 -->
+
+**原因：** `Material`（在块上或在某个 patch 上）未解析为材质资产。引擎会用其默认材质绘制该网格，这绝不是本意。Lint 不会查找资产，因此这由构建来报告。
+
+**修复：** 修正路径。`.dfs` 接受的每种资产写法都有效：`/Game/FX/M_X`、`/Game/FX/M_X.M_X`、`Plugin.Name:Materials/M_X`。
+
+<a id="dfx3062"></a>
+
+## DFX3062
+
+<!-- generated:begin DFX3062 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+Input '%s' of DynamicMesh '%s' uses a name the patch prologue already declares (U, V, I, J, NU, NV, K, NK, Rand, T, Index, Theta, Phi, Dir, the outputs, or anything starting with DM_). Rename it.
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1088`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1095`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1102`
+<!-- generated:end DFX3062 -->
+
+**原因：** `Inputs` 条目无法传给 patch 主体：其名称是生成的序言已声明的名称之一（`U`、`V`、`I`、`J`、`NU`、`NV`、`K`、`NK`、`Rand`、`T`、`Index`、`Theta`、`Phi`、`Dir`、输出，以及以 `DM_` 开头的任何内容），被声明了两次，或没有值。
+
+**修复：** 重命名它，或给它要传入的值：`float Gain = User.Gain;`。输入不是带默认值的模块输入——每个输入都说明每个 patch 接收什么。
+
+<a id="dfx3063"></a>
+
+## DFX3063
+
+<!-- generated:begin DFX3063 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+DynamicMesh '%s' has no Patch, so there is nothing to draw. Add one, e.g. `Patch Sheet = Grid(33, 9) { }`.
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1115`
+<!-- generated:end DFX3063 -->
+
+**原因：** 该块未声明 `Patch`，因此网格将没有顶点。
+
+**修复：** 添加一个 patch，例如 `Patch Sheet = Grid(33, 9) { }`——空主体会绘制拓扑的默认形状。
+
+<a id="dfx3064"></a>
+
+## DFX3064
+
+<!-- generated:begin DFX3064 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+Patch '%s' has %lld vertices (%d x %d x %d copies); a patch holds at most %lld, because the generated index arithmetic is exact in float only that far. Split it into more patches.
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1198`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:515`
+<!-- generated:end DFX3064 -->
+
+**原因：** 某个 patch 的顶点数超过 16,777,216（生成的索引运算只有在不超过该值时才能在 float 中保持精确），或者整个网格——在纹理坐标变通方案将声明的顶点数乘以 `TexCoords` 后——无法容纳进数据接口的 int32 计数。
+
+**修复：** 将该 patch 拆分为多个，降低其分辨率或副本数，或减少 UV 通道数。
+
+<a id="dfx3065"></a>
+
+## DFX3065
+
+<!-- generated:begin DFX3065 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+Patch '%s' writes '%s', but DynamicMesh '%s' has Normals = Auto, which evaluates the body four times per vertex -- the write would run four times. Keep particle state out of the body, or use Normals = Explicit and write Normal yourself.
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1157`
+<!-- generated:end DFX3065 -->
+
+**原因：** 使用 `Normals = Auto` 时，patch 主体会针对每个顶点求值四次（三个采样点相距四分之一个网格步长，然后是该顶点本身），因此其中的 `Particles.*` 属性写入会运行四次，最后一次使用顶点自身的值。累积状态（`+=`、`++`）会完全错误。
+
+**修复：** 将粒子状态移出主体，或切换到 `Normals = Explicit` 并自行写入 `Normal`（拓扑的解析法线是起始值）。
+
+<a id="dfx3066"></a>
+
+## DFX3066
+
+<!-- generated:begin DFX3066 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+DynamicMesh '%s' needs a plain name (letters, digits, underscores): it becomes a user parameter, emitter names and generated asset names.
+```
+
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1058`、`Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:1133`
+<!-- generated:end DFX3066 -->
+
+**原因：** `DynamicMesh` 或 `Patch` 的名称不是普通标识符——通常是用反引号括起来并带空格或标点的名称。这些名称会成为用户参数、发射器名称和生成的模块资产名称，而资产名称不能包含它们。
+
+**修复：** 使用字母、数字和下划线，并以字母开头：`DynamicMesh MyMesh`。
+

@@ -1,8 +1,3 @@
----
-title: "DreamFXLang 参考"
-description: "DreamFXLang 参考"
----
-
 <a id="dreamfxlang-reference"></a>
 
 # DreamFXLang 参考
@@ -15,6 +10,7 @@ description: "DreamFXLang 参考"
 | [dfe.md](dfe.md) | `.dfe` —— 一个可复用发射器，以及 `from` 对它做了什么 |
 | [system-inheritance.md](system-inheritance.md) | `.dfs` 源父级、覆盖、依赖重建和循环错误 |
 | [native-emitter-inheritance.md](native-emitter-inheritance.md) | 带 `inherits` 的原生 Niagara 发射器父级 |
+| [dynamic-mesh.md](dynamic-mesh.md) | `DynamicMesh` 块位于 `.dfs` 中——在 GPU 上逐顶点计算程序化几何体 |
 | [dfm.md](dfm.md) | `.dfm` —— 一个模块或 dynamic input，以及哪些引擎能生成它 |
 | [values.md](values.md) | 每一个值位置、类型规则，以及按名称列出的八条 `L*` 规则 |
 
@@ -31,19 +27,11 @@ description: "DreamFXLang 参考"
 }
 ```
 
-`Kind` 是 `System`、`Emitter`、`Module` 或 `DynamicInput`，并且必须与文件扩展名一致
-(DFX2021)。`Root` 是 `Game`、空(同样含义)或 `Plugin.<PluginName>`；`Name` 是相对于该根的内容目录的资源
-路径。
+`Kind` 是 `System`、`Emitter`、`Module` 或 `DynamicInput`，并且必须与文件扩展名一致 (DFX2021)。`Root` 是 `Game`、空(同样含义)或 `Plugin.<PluginName>`；`Name` 是相对于该根的内容目录的资源路径。
 
-系统还接受 `Parent="../Base.dfs"`，用于[源继承](system-inheritance.md)。
-发射器声明可以使用 `inherits "/Game/FX/NE_Base"` 指定
-[原生 Niagara 父级](native-emitter-inheritance.md)。发射器 `from` 保留其源拷贝语义；
-对 `.dfe` 的编辑会通过源监视器重建依赖系统。
+系统还接受 `Parent="../Base.dfs"`，用于[源继承](system-inheritance.md)。发射器声明可以使用 `inherits "/Game/FX/NE_Base"` 指定[原生 Niagara 父级](native-emitter-inheritance.md)。发射器 `from` 保留其源拷贝语义；对 `.dfe` 的编辑会通过源监视器重建依赖系统。
 
-块使用 `Name = { ... }`，语句以 `;` 结尾，`//` 和 `/* */` 是注释。
-属性以方括号形式挂在声明上：`[ Group="Burst"; SortPriority=10 ]`。
-在 `Properties` / `Inputs` 内部，`Group("Name") { ... }` 作用域会把这两个属性加盖到
-其中包含的每一个参数上 —— 参见 [dfs.md](dfs.md)。
+块使用 `Name = { ... }`，语句以 `;` 结尾，`//` 和 `/* */` 是注释。属性以方括号形式挂在声明上：`[ Group="Burst"; SortPriority=10 ]`。在 `Properties` / `Inputs` 内部，`Group("Name") { ... }` 作用域会把这两个属性加盖到其中包含的每一个参数上 —— 参见 [dfs.md](dfs.md)。
 
 <a id="what-is-deliberately-not-here"></a>
 
