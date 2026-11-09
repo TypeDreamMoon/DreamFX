@@ -1,8 +1,3 @@
----
-title: "DreamFX 诊断"
-description: "DreamFX 诊断"
----
-
 <a id="dreamfx-diagnostics"></a>
 
 # DreamFX 诊断
@@ -52,6 +47,7 @@ description: "DreamFX 诊断"
 | [DFX2026](DFX2xxx.md#dfx2026) | error | 未知的 Stage 参数 '%s'。应为阶段迭代、enabled、dispatch 或 particle-state 选项；请参阅 th... |
 | [DFX2027](DFX2xxx.md#dfx2027) | error | Group(...) 接受一个带引号的名称：Group(\"Name\") { ... }。 |
 | [DFX2028](DFX2xxx.md#dfx2028) | error | Group(...) 需要一个非空名称。 |
+| [DFX2030](DFX2xxx.md#dfx2030) | error | Patch '%s' 需要一个拓扑调用，例如 Grid(33, 9) 或 Tube(65, 17, Copies = 3)，后面紧跟其 HLSL 主体... |
 | [DFX3000](DFX3xxx.md#dfx3000) | error | (在运行时构建) |
 | [DFX3001](DFX3xxx.md#dfx3001) | error | (在运行时构建) |
 | [DFX3002](DFX3xxx.md#dfx3002) | error | 无法读取模块 '%s' 的输入架构：%s |
@@ -92,6 +88,15 @@ description: "DreamFX 诊断"
 | [DFX3055](DFX3xxx.md#dfx3055) | error | （在运行时构建） |
 | [DFX3056](DFX3xxx.md#dfx3056) | error | 原生父级具有不可用的版本或循环的父级链：%s。 |
 | [DFX3057](DFX3xxx.md#dfx3057) | error | 特性 '%s' 被声明为具有冲突的类型。 |
+| [DFX3058](DFX3xxx.md#dfx3058) | error | Patch '%s'：未知的拓扑 '%s'。应为 Grid(Columns, Rows)、Strip(Columns)、Ring(Columns, Rows)、Tube(... |
+| [DFX3059](DFX3xxx.md#dfx3059) | error | %s 需要一个名为 '%s' 的发射器，而 %s 已经使用了该名称。请重命名其中一个。 |
+| [DFX3060](DFX3xxx.md#dfx3060) | error | Material 接受带引号的材质资产路径，例如 Material = "/Game/FX/M_Shell.M_Shell"; |
+| [DFX3061](DFX3xxx.md#dfx3061) | error | 材质 '%s'：%s |
+| [DFX3062](DFX3xxx.md#dfx3062) | error | DynamicMesh '%s' 的输入 '%s' 使用了 patch 序言中已经声明的名称（U、V、I、J、NU、NV、K、NK、... |
+| [DFX3063](DFX3xxx.md#dfx3063) | error | DynamicMesh '%s' 没有 Patch，因此没有可绘制的内容。请添加一个，例如 `Patch Sheet = Grid(33, 9) { }`。 |
+| [DFX3064](DFX3xxx.md#dfx3064) | error | Patch '%s' 有 %lld 个顶点（%d x %d x %d 份拷贝）；一个 patch 最多容纳 %lld，因为生成的索引... |
+| [DFX3065](DFX3xxx.md#dfx3065) | error | Patch '%s' 写入了 '%s'，但 DynamicMesh '%s' 使用了 Normals = Auto，这会为每个顶... 对主体求值四次 |
+| [DFX3066](DFX3xxx.md#dfx3066) | error | DynamicMesh '%s' 需要一个普通名称（字母、数字、下划线）：它会成为用户参数、发射器名... |
 | [DFX4001](DFX4xxx.md#dfx4001) | error | 输入 '%s' 期望 %s，但写入了一个数字。 |
 | [DFX4002](DFX4xxx.md#dfx4002) | error | '%s' 的表达式：向量字面量必须有 2 到 4 个分量。 |
 | [DFX4003](DFX4xxx.md#dfx4003) | error | 输入 '%s' 是整数，但写入了 %s。窄化不是隐式的——如果截断是预期的，请写入 int(%s)... |
@@ -140,6 +145,7 @@ description: "DreamFX 诊断"
 | [DFX5034](DFX5xxx.md#dfx5034) | error | 发射器 '%s' 在两个模块调用上使用了 'as %s'。节点名称在每个发射器中必须唯一；请重命名其中一个。 |
 | [DFX5035](DFX5xxx.md#dfx5035) | error | '%s' 仍在 Niagara 脚本编辑器中打开。重建已取消以保护其可编辑副本。关... |
 | [DFX5036](DFX5xxx.md#dfx5036) | 警告 | OnEvent 源 '%s' 是一个 ID，本系统中没有任何发射器响应该 ID，因此此处理器永远不会触发。请将其指向... |
+| [DFX5037](DFX5xxx.md#dfx5037) | error | DreamFX 为此 DynamicMesh 生成的模块未能解析（%s 为文本内容）。这是 DreamFX 的缺陷 ... |
 | [DFX5093](DFX5xxx.md#dfx5093) | 错误 | 'MaterialParam' 是保留语法，在 v1 中未实现（计划第 7 节）。 |
 | [DFX5097](DFX5xxx.md#dfx5097) | 错误 | 目前只能生成 System 文档；此文件声明了一个 %s。 |
 | [DFX5098](DFX5xxx.md#dfx5098) | 错误 | 数据接口参数 '%s' 采用带引号的 JSON 对象作为其配置，即反编译器所写入的形式。 |
@@ -151,6 +157,7 @@ description: "DreamFX 诊断"
 | [DFX5105](DFX5xxx.md#dfx5105) | 错误 | 无法创建包 '%s'。 |
 | [DFX5106](DFX5xxx.md#dfx5106) | 错误 | 无法连接模块图。Niagara 架构拒绝了参数映射连接。 |
 | [DFX5107](DFX5xxx.md#dfx5107) | 错误 | '%s' 不再与 '%s' 处的模块资产匹配，并且此构建无法重新生成它。请在支持图的地方重新构建它... |
+| [DFX5109](DFX5xxx.md#dfx5109) | error | '%s' 引用了 '%s'，但该资产不存在。请在构建前创建该资产（基于 mi... 构建的渲染器 |
 | [DFX6001](DFX6xxx.md#dfx6001) | 错误 | （在运行时构建） |
 | [DFX6002](DFX6xxx.md#dfx6002) | 警告 | （在运行时构建） |
 | [DFX6003](DFX6xxx.md#dfx6003) | 错误 | （在运行时构建） |
@@ -196,3 +203,4 @@ description: "DreamFX 诊断"
 | [DFX8016](DFX8xxx.md#dfx8016) | 警告 | 发射器 '%s' 携带 %d 个此导出无法表示的模拟阶段（自定义阶段类或缺少 scr...） |
 | [DFX8017](DFX8xxx.md#dfx8017) | 警告 | 发射器 '%s' 使用不受支持的 Lightweight/Stateless 模式。将此发射器保留在 Niagara 中；DreamFX 无法重新... |
 | [DFX8018](DFX8xxx.md#dfx8018) | 错误 | '%s' 未保存：重新构建它会丢弃 %d 个此源无法表达的事实，而保存会销毁... |
+

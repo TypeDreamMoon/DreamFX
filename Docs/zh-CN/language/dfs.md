@@ -1,16 +1,10 @@
----
-title: "`.dfs` — 一种系统"
-description: "`.dfs` — 一种系统"
----
-
 <a id="dfs--a-system"></a>
 
 # `.dfs` — 一种系统
 
 产生一个 `UNiagaraSystem`。
 
-添加 `Parent="../Base.dfs"` 以继承另一个系统的源。有关合并、路径与重建规则，见
-[系统源继承](system-inheritance.md)。
+添加 `Parent="../Base.dfs"` 以继承另一个系统的源。有关合并、路径与重建规则，见[系统源继承](system-inheritance.md)。
 
 ```cpp
 System(Name="Effects/NS_Spark", Root="Game")
@@ -23,6 +17,8 @@ System(Name="Effects/NS_Spark", Root="Game")
 
     Emitter <Name> { ... }              // inline
     Emitter <Name> from "<path>" { ... } // copied from a .dfe, then overridden
+
+    DynamicMesh <Name> { ... }          // procedural geometry, lowered to emitters (dynamic-mesh.md)
 }
 ```
 
@@ -30,8 +26,7 @@ System(Name="Effects/NS_Spark", Root="Game")
 
 ## `Settings`
 
-由 schema 驱动：名称从活资产上读取，因此拼错会报出真实的可选列表
-（DFX3020）。常用项：
+由 schema 驱动：名称从活资产上读取，因此拼错会报出真实的可选列表（DFX3020）。常用项：
 
 ```cpp
 Settings = {
@@ -41,22 +36,18 @@ Settings = {
     UseFixedBounds = true;          // the system's "Fixed Bounds" override flag (bFixedBounds)
     FixedTickDelta     = true;      // substep at a fixed rate instead of once per frame
     FixedTickDeltaTime = 0.01667;   // ... of 60Hz. Changes simulation, not just smoothness
+    Determinism        = true;      // the system's own seed switch, separate from each emitter's
+    RandomSeed         = 1234;
+    InitialOwnerVelocityFromActor = false;   // engine default is true
     ModulePaths = ["/Niagara/Modules", "/Game/FX/Modules"];
 }
 ```
 
-`ModulePaths` 是 DreamFX 自有的，而非 Niagara 的：它为解析模块短名添加搜索根
-（L4）。引擎默认项（`/Niagara/Modules`、`/Niagara/DynamicInputs`、`/Niagara/Functions`）仍保留在
-列表中，因此声明自己的文件夹是追加到它们之上，而不是替换它们。
+`ModulePaths` 是 DreamFX 自有的，而非 Niagara 的：它为解析模块短名添加搜索根（L4）。引擎默认项（`/Niagara/Modules`、`/Niagara/DynamicInputs`、`/Niagara/Functions`）仍保留在列表中，因此声明自己的文件夹是追加到它们之上，而不是替换它们。
 
-重建会将省略的受支持系统与发射器设置重置为全新资产的引擎默认值，
-然后再应用源中声明的设置。因此移除某个受支持的设置会清除它此前的
-覆盖值；此重置涵盖的是生成器映射的设置，而非无关的资产字段。
+重建会将省略的受支持系统与发射器设置重置为全新资产的引擎默认值，然后再应用源中声明的设置。因此移除某个受支持的设置会清除它此前的覆盖值；此重置涵盖的是生成器映射的设置，而非无关的资产字段。
 
-声明的 `FixedBounds` 盒会打开系统的覆盖标志，因为动态边界下的盒是
-不起作用的。写 `UseFixedBounds = false;` 可在边界保持动态的同时保留已编写的盒；
-反编译器对持有盒但标志关闭的资产正是这样写出的，因此往返之后
-两者都得以保留。
+声明的 `FixedBounds` 盒会打开系统的覆盖标志，因为动态边界下的盒是不起作用的。写 `UseFixedBounds = false;` 可在边界保持动态的同时保留已编写的盒；反编译器对持有盒但标志关闭的资产正是这样写出的，因此往返之后两者都得以保留。
 
 <a id="properties--user-parameters"></a>
 
@@ -68,13 +59,14 @@ Properties = {
     float            SparkSpeed = 450.0;
     Color            TintA      = (1.0, 0.72, 0.25, 1.0);
     Vector           HitNormal  = (0, 0, 1)              [ Description="Impact normal from blueprint" ];
-    Texture2D        NoiseTex   = "Plugin.MoonToon:Textures/T_Noise01";
+    Texture          NoiseTex   = "{\"Texture\":\"/MoonToon/Textures/T_Noise01.T_Noise01\"}";
     DI<SkeletalMesh> TargetMesh;
 }
 ```
 
-每一项都会成为 `User.<Name>`，可在蓝图中通过 `SetNiagaraVariable*` 设值。该名称是跨重建的稳定
-键（plan 4.5），因此重命名会打断每一个引用它的蓝图。
+裸数据接口名是 `DI<Name>` 的简写：上面的 `Texture` 是 `DI<Texture>`，即 Niagara 的纹理数据接口，因此它的值是那个接口的配置——`{"Texture":"<object path>"}`——而不是资产路径。不存在 `Texture2D` 类型；它报告 DFX4021。
+
+每一项都会成为 `User.<Name>`，可在蓝图中通过 `SetNiagaraVariable*` 设值。该名称是跨重建的稳定键（plan 4.5），因此重命名会打断每一个引用它的蓝图。
 
 参数也可通过 `Group("Name") { ... }` 作用域来组织，与 DreamShader 一致：
 
@@ -91,22 +83,11 @@ Properties = {
 }
 ```
 
-作用域内的每个参数都继承组名，而 `SortPriority` 按
-声明顺序加盖——第 10 步，一个贯穿整个块的计数器，因此组与嵌套
-按一条连续序列为成员编号。嵌套与 `|`（Unreal 的子类别
-语法）组合：`Group("Outer") { Group("Inner") { … } }` 将成员命名为 `Outer|Inner`。参数自身显式的
-`[ Group=… ]` 或 `[ SortPriority=… ]` 优先，且不占用自动
-槽位；松散的顶层参数两者都不带。关键字不区分大小写。
+作用域内的每个参数都继承组名，而 `SortPriority` 按声明顺序加盖——第 10 步，一个贯穿整个块的计数器，因此组与嵌套按一条连续序列为成员编号。嵌套与 `|`（Unreal 的子类别语法）组合：`Group("Outer") { Group("Inner") { … } }` 将成员命名为 `Outer|Inner`。参数自身显式的 `[ Group=… ]` 或 `[ SortPriority=… ]` 优先，且不占用自动槽位；松散的顶层参数两者都不带。关键字不区分大小写。
 
-三项诊断守护该形式：DFX2027（名称必须是带引号的字符串）、DFX2028（必须
-非空），以及 DFX2029（参数块内不得有其他形式打开花括号）。
+三项诊断守护该形式：DFX2027（名称必须是带引号的字符串）、DFX2028（必须非空），以及 DFX2029（参数块内不得有其他形式打开花括号）。
 
-`Description` 会到达资产，`Group` 和 `SortPriority` 亦然：适配器会从
-计划重建系统的用户参数层级（`UNiagaraSystemEditorData::UserParameterHierarchy`），
-因此细节面板按源中布局的方式对参数分组和排序。UE 5.8 的
-逐变量 `CategoryName` / `EditorSortPriority` 元数据在引擎侧已废弃——
-层级才是参数面板实际读取的内容。计划是关于组织的全部真相：
-在编辑器内手工做出的排列不会在重建后保留。
+`Description` 会到达资产，`Group` 和 `SortPriority` 亦然：适配器会从计划重建系统的用户参数层级（`UNiagaraSystemEditorData::UserParameterHierarchy`），因此细节面板按源中布局的方式对参数分组和排序。UE 5.8 的逐变量 `CategoryName` / `EditorSortPriority` 元数据在引擎侧已废弃—— 层级才是参数面板实际读取的内容。计划是关于组织的全部真相：在编辑器内手工做出的排列不会在重建后保留。
 
 数据接口参数携带其配置，即导出器写出的带引号 JSON 块：
 
@@ -117,21 +98,15 @@ Properties = {
 }
 ```
 
-直到 2026-08-12，这只支持声明（plan 3.5，DFX5098「在运行时喂给它」）。那是一次
-有意的范围削减，而它随时间变得很糟：碰撞源或属性读取器**本身就是**它的
-配置，因此重建的镜像会默认构造特效用来查询世界的那些对象——
-烟出来了，而它与什么发生碰撞却没有。DFX5098 现在表示该值是
-形状不对，而不是它会被忽略。
+直到 2026-08-12，这只支持声明（plan 3.5，DFX5098「在运行时喂给它」）。那是一次有意的范围削减，而它随时间变得很糟：碰撞源或属性读取器**本身就是**它的配置，因此重建的镜像会默认构造特效用来查询世界的那些对象—— 烟出来了，而它与什么发生碰撞却没有。DFX5098 现在表示该值是形状不对，而不是它会被忽略。
 
-没有值的声明仍然是一个留待运行时填充的槽位，且仍是这样。`curve { }` 仍然是
-曲线接口的可读写法——见 [values.md](values.md)。
+没有值的声明仍然是一个留待运行时填充的槽位，且仍是这样。`curve { }` 仍然是曲线接口的可读写法——见 [values.md](values.md)。
 
 <a id="stacks"></a>
 
 ## 栈
 
-六个栈，两个在系统作用域，四个属于每个发射器（L1），外加一个用 `OnEvent` 声明的
-逐发射器事件栈，以及任意多个用 `Stage` 声明的模拟阶段栈（两者见下）：
+六个栈，两个在系统作用域，四个属于每个发射器（L1），外加一个用 `OnEvent` 声明的逐发射器事件栈，以及任意多个用 `Stage` 声明的模拟阶段栈（两者见下）：
 
 ```
 SystemSpawn      SystemUpdate           <- top level of the .dfs
@@ -150,17 +125,11 @@ ParticleUpdate = {
 }
 ```
 
-**连续的赋值会折叠为一个 Set Parameters 模块**，而模块调用会打断这一串。
-正是这条规则让往返保持对称：一个 Set Parameters 模块导出为一段
-赋值。
+**连续的赋值会折叠为一个 Set Parameters 模块**，而模块调用会打断这一串。正是这条规则让往返保持对称：一个 Set Parameters 模块导出为一段赋值。
 
-未声明的栈会保持原样，构建会说明它保留了什么（DFX5003）。这对
-`SystemUpdate` 很重要，新系统会在其中获得一个 `SystemState`——若清空所有未声明的栈，
-会让每个没有显式 `SystemUpdate` 的 `.dfs` 产出一个永不运行的系统。要接管一个栈
-并将其清空，就把它声明为空：`SystemUpdate = { }`。
+未声明的栈会保持原样，构建会说明它保留了什么（DFX5003）。这对 `SystemUpdate` 很重要，新系统会在其中获得一个 `SystemState`——若清空所有未声明的栈，会让每个没有显式 `SystemUpdate` 的 `.dfs` 产出一个永不运行的系统。要接管一个栈并将其清空，就把它声明为空：`SystemUpdate = { }`。
 
-发射器的四个栈不受此影响：DreamFX 构建发射器时不带默认模块，因此
-它们无论如何一开始都是空的。
+发射器的四个栈不受此影响：DreamFX 构建发射器时不带默认模块，因此它们无论如何一开始都是空的。
 
 <a id="module-calls"></a>
 
@@ -174,18 +143,11 @@ disabled GravityForce(Gravity = (0, 0, -980));     // in the stack, not executed
 Grid3D_ResampleFloat() as Grid3D_ResampleFloat003; // pin the node's name (see below)
 ```
 
-`as <name>` 固定函数调用**节点**的名称。一旦有任何东西链接
-`Output.<node>.<value>`，这就很关键——那些链接按节点的显示名解析，引擎按添加顺序为新
-节点编号，而一个编号承载了多年编辑历史（一个 `003`，其
-兄弟节点早已删除）的原始资产重建后会得到不同的编号，使每条输出链接悬空
-为「写入前读取」。当节点名称并非简单地等于模块
-资产名时，反编译器会写出 `as`；手写源很少需要它。名称在每个发射器内唯一（DFX5034）。
+`as <name>` 固定函数调用**节点**的名称。一旦有任何东西链接 `Output.<node>.<value>`，这就很关键——那些链接按节点的显示名解析，引擎按添加顺序为新节点编号，而一个编号承载了多年编辑历史（一个 `003`，其兄弟节点早已删除）的原始资产重建后会得到不同的编号，使每条输出链接悬空为「写入前读取」。当节点名称并非简单地等于模块资产名时，反编译器会写出 `as`；手写源很少需要它。名称在每个发射器内唯一（DFX5034）。
 
-参数始终具名（DFX2008）。输入名称会被规范化——Niagara 的 `Loop Duration` 写作
-`LoopDuration`。
+参数始终具名（DFX2008）。输入名称会被规范化——Niagara 的 `Loop Duration` 写作 `LoopDuration`。
 
-`disabled` 把模块暂时搁置而不删除：它留在栈中、保留其输入，且不
-运行。这就是 Niagara 自有的「保留但关闭」状态。它也可以作为赋值的前缀：
+`disabled` 把模块暂时搁置而不删除：它留在栈中、保留其输入，且不运行。这就是 Niagara 自有的「保留但关闭」状态。它也可以作为赋值的前缀：
 
 ```cpp
 Color Particles.Color = (1, 1, 1, 1);
@@ -193,13 +155,9 @@ disabled Color Particles.Color = (1, 0, 0, 1);
 float Particles.CustomValue = 2.0;
 ```
 
-连续赋值只有在启用状态一致时才会折叠。此示例创建三个 Set
-Parameters 节点；中间节点保持禁用，两侧节点保持启用。
-反编译器会保留该状态。`Defaults` 中的声明不能被禁用（DFX2024），因为
-默认值是参数元数据，而不是被执行的栈节点。
+连续赋值只有在启用状态一致时才会折叠。此示例创建三个 Set Parameters 节点；中间节点保持禁用，两侧节点保持启用。反编译器会保留该状态。`Defaults` 中的声明不能被禁用（DFX2024），因为默认值是参数元数据，而不是被执行的栈节点。
 
-**静态开关会闸控其他输入，而在模块源中，写入顺序即源顺序。** 一个只有在某个开关设置后才
-存在的输入，必须写在它之后：
+**静态开关会闸控其他输入，而在模块源中，写入顺序即源顺序。** 一个只有在某个开关设置后才存在的输入，必须写在它之后：
 
 ```cpp
 EmitterState(
@@ -209,8 +167,7 @@ EmitterState(
 );
 ```
 
-在**动态输入**上规则被放宽：开关会被提前，无论以什么顺序出现都先写入，因此
-两种情况都能工作。
+在**动态输入**上规则被放宽：开关会被提前，无论以什么顺序出现都先写入，因此两种情况都能工作。
 
 ```cpp
 VelocityStrength = RandomRangeFloat(
@@ -222,9 +179,7 @@ VelocityStrength = RandomRangeFloat(
 
 `dfx schema <Module> -Stack <Stack>` 打印出构建看到的签名，包含静态开关。
 
-`@1.2` 记录源是针对哪个版本编写的，在模块节点上**选择**该版本，
-并在资产不再暴露它时报错（DFX3009）。选择是图层面的操作，因此
-在任何引擎上都能工作。
+`@1.2` 记录源是针对哪个版本编写的，在模块节点上**选择**该版本，并在资产不再暴露它时报错（DFX3009）。选择是图层面的操作，因此在任何引擎上都能工作。
 
 <a id="assignments"></a>
 
@@ -236,8 +191,7 @@ Color Particles.Color      = hlsl { ... }; // a type, when the value carries non
 Emitter.MyCounter          = 0;
 ```
 
-目标带命名空间限定（DFX4025）。类型来自值；`hlsl` 块、动态
-输入和内联表达式都没有类型，因此这些需要标注（DFX4022）。
+目标带命名空间限定（DFX4025）。类型来自值；`hlsl` 块、动态输入和内联表达式都没有类型，因此这些需要标注（DFX4022）。
 
 <a id="onevent--reacting-to-another-emitters-events"></a>
 
@@ -385,8 +339,7 @@ MeshRenderer Body
 
 `Bind` 与属性赋值是分开的，因为属性绑定并非普通字段——绑定结构体缓存了一个显示名、一个数据集名和若干 source-mode 标志，只有它自己的 ``SetValue`` 会重新计算这些内容，因此直接写入序列化字段会留下半个绑定。
 
-网格条目可以从用户参数而不是资产中取网格——即一个实现 Niagara 可渲染网格接口的数据接口，例如由模拟写出的 ``DI<DynamicMesh>``。在 ``MeshBindings`` 中列出绑定，与 ``Meshes`` 平行；已绑定条目的 ``Meshes`` 槽位可以是
-空字符串：
+网格条目可以从用户参数而不是资产中取网格——即一个实现 Niagara 可渲染网格接口的数据接口，例如由模拟写出的 ``DI<DynamicMesh>``。在 ``MeshBindings`` 中列出绑定，与 ``Meshes`` 平行；已绑定条目的 ``Meshes`` 槽位可以是空字符串：
 
 ```cpp
 Properties = {
@@ -399,19 +352,27 @@ MeshRenderer Sheet {
 }
 ```
 
-每个名称都必须是系统的用户参数（先在 ``Properties`` 中声明它）。绑定的
-类型在应用 renderer 时从该参数读取，因为 Niagara 类型定义是
-进程本地的，无法放在源中携带。空字符串会清除该条目的绑定。
+每个名称都必须是系统的用户参数（先在 ``Properties`` 中声明它）。绑定的类型在应用 renderer 时从该参数读取，因为 Niagara 类型定义是进程本地的，无法放在源中携带。空字符串会清除该条目的绑定。
 
-其他绑定结构，包括 Sprite 或 Ribbon renderer 的 ``MaterialUserParamBinding``，在导出时以带引号的 JSON 属性值形式承载。用户参数绑定只携带其名称，
-例如 ``"{\"parameter\":{\"name\":\"User.Material\"}}"``；固定的参数类型由 renderer 提供。
-这样避免了序列化 Niagara 的进程本地类型索引。类型不符合预期的绑定会报告
-一个导出缺口。这些绑定与属性 ``Bind`` 语句是分开的。
+其他绑定结构，包括 Sprite 或 Ribbon renderer 的 ``MaterialUserParamBinding``，在导出时以带引号的 JSON 属性值形式承载。用户参数绑定只携带其名称，例如 ``"{\"parameter\":{\"name\":\"User.Material\"}}"``；固定的参数类型由 renderer 提供。这样避免了序列化 Niagara 的进程本地类型索引。类型不符合预期的绑定会报告一个导出缺口。这些绑定与属性 ``Bind`` 语句是分开的。
 
-**声明顺序就是 renderer 顺序**，而且没有其他寻址方式。调换两个
-renderer 块的位置会重画这个特效。
+**声明顺序就是 renderer 顺序**，而且没有其他寻址方式。调换两个 renderer 块的位置会重画这个特效。
 
-在 Sprite、Ribbon 或 Decal renderer 上省略 ``Material`` 会套用引擎默认值（`DFX5004`）。
+在 Sprite、Ribbon 或 Decal renderer 上省略 `Material` 会套用引擎默认值（DFX5004）。
+
+<a id="dynamicmesh--procedural-geometry"></a>
+
+## `DynamicMesh` — 程序化几何体
+
+```cpp
+DynamicMesh Shell
+{
+    Settings = { Material = "/Game/FX/M_Shell.M_Shell"; Normals = Auto; }
+    Patch Ball = Sphere(65, 33) { Position = Dir * (100.0 + 20.0 * sin(Theta * 6.0 + T)); }
+}
+```
+
+一种网格，其顶点由 GPU 模拟每帧计算：拓扑是四边形的网格（`Grid`、`Strip`、`Ring`、`Tube`、`Sphere`，每个都带有副本），并且每个 patch 有一个 HLSL 程序，写入每个顶点的位置、颜色、UV 和法线。构建过程会把它降为一个 `DI<DynamicMesh>` 用户参数、每个 patch 一个 GPU 发射器、生成的模块以及一个绘制该网格的发射器，并在过程中绕开引擎的 dynamic mesh 缺陷。该块的全部语言都在 [dynamic-mesh.md](dynamic-mesh.md) 中。
 
 <a id="referencing-a-dfe"></a>
 

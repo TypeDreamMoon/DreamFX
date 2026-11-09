@@ -1,14 +1,8 @@
----
-title: "DFX5xxx --- 生成与资产写入"
-description: "DFX5xxx --- 生成与资产写入"
----
-
 <a id="dfx5xxx-----generation-and-asset-writing"></a>
 
 # DFX5xxx --- 生成与资产写入
 
-> 生成标记之间的块由 `.skill/gen-diagnostics.ps1` 写入。
-> 标记以下的所有内容均为手工编写，并在重新生成后保留。
+> 生成标记之间的块由 `.skill/gen-diagnostics.ps1` 写入。标记以下的所有内容均为手工编写，并在重新生成后保留。
 
 <a id="dfx5001"></a>
 
@@ -23,7 +17,7 @@ description: "DFX5xxx --- 生成与资产写入"
 Stack '%s' has no Niagara script usage mapping.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1355`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1356`
 <!-- generated:end DFX5001 -->
 
 **原因。** 一种栈类型背后没有对应的 Niagara 脚本 usage。解析器能产出的每一种栈类型今天都有映射——六个固定栈、`OnEvent` 和 `Stage`——所以走到这里意味着有人往枚举里加了新的栈类型，却没有同时扩展 `ScriptUsageForStack`。
@@ -43,7 +37,7 @@ Stack '%s' has no Niagara script usage mapping.
 This system declares no emitters, so it will produce nothing.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2479`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2538`
 <!-- generated:end DFX5002 -->
 
 **原因。** 没有发射器的系统能编译，但什么都不产生。
@@ -63,7 +57,7 @@ This system declares no emitters, so it will produce nothing.
 '%s' is not declared in this source, so its existing modules are left as-is: %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4064`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4123`
 <!-- generated:end DFX5003 -->
 
 **原因。** 声明一个栈意味着接管它；这份源码从未提及的栈会保留它原有的内容。`CreateNiagaraSystem` 会把一个 `SystemState` 放入 `SystemUpdate`，如果将其整体清除，会让每一个没有显式 `.dfs` 的 `SystemUpdate` 产出一个永远不运行的系统。设为提示级别，是为了让这种差异可见而不是悄无声息。
@@ -83,7 +77,7 @@ This system declares no emitters, so it will produce nothing.
 No Material was set, so the engine default was applied: %s. Write 'Material = \"...\";' to choose your own.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4323`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4382`
 <!-- generated:end DFX5004 -->
 
 **原因。** 没有 `Material` 的渲染器会拿到引擎默认值，这也是为什么一个没有贴图的特效仍然能绘制出来。
@@ -103,7 +97,7 @@ No Material was set, so the engine default was applied: %s. Write 'Material = \"
 Emitter '%s' has no record in the last build's plan.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4106`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4165`
 <!-- generated:end DFX5015 -->
 
 **原因。** _尚未编写。_
@@ -123,7 +117,7 @@ Emitter '%s' has no record in the last build's plan.
 The last build of this stack recorded %d module node(s) for %d module(s), so its nodes cannot be addressed.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2919`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2978`
 <!-- generated:end DFX5020 -->
 
 **原因。** _尚未编写。_
@@ -143,7 +137,7 @@ The last build of this stack recorded %d module node(s) for %d module(s), so its
 Could not read native parent defaults: %s.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2255`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2334`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2314`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2393`
 <!-- generated:end DFX5027 -->
 
 **原因。** 显式默认值改变了原生父级的参数类型，或者 Niagara 无法应用发射器声明或继承的默认值。
@@ -183,7 +177,7 @@ SavePackage failed for '%s'.
 Emitter '%s' declares more than one OnEvent block. Only one event handler per emitter is representable; split the extra handlers into their own emitters.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2404`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2463`
 <!-- generated:end DFX5031 -->
 
 **原因。** 一个发射器块声明了两个或更多 `OnEvent` 块。
@@ -205,7 +199,7 @@ DreamFX 通过外部编辑 API 的普通栈轨道访问事件栈，而那些轨�
 Emitter '%s' declares two Stage blocks named '%s'. Stages are identified by name; rename one.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2382`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2441`
 <!-- generated:end DFX5032 -->
 
 **原因。** 一个发射器声明了两个同名的 `Stage` 块。写入侧按名字「创建或复用」stage（这也是引擎 UI 自己对 stage 的身份认定），所以两个块会落到同一个 stage 上，而它会静默地只保留最后写入的那个栈。同一段代码也承载构建期由适配器报告的 stage 失败——一个从未闭合的切片、资产上某个类不是引擎通用 stage 的 stage。
@@ -225,7 +219,7 @@ Emitter '%s' declares two Stage blocks named '%s'. Stages are identified by name
 Emitter '%s' declares Stage blocks but simulates on the CPU. Simulation stages are a GPU feature: set `SimTarget = GPU` in the emitter's Settings.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4495`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4576`
 <!-- generated:end DFX5033 -->
 
 **原因。** 一个发射器声明了 `Stage` 块，却在 CPU 上模拟。模拟阶段是 GPU 计算特性；CPU 发射器无法运行它，而 Niagara 自己的抱怨会晚一步以一条不指向任何源码行的编译错误出现。这项检查读取的是活动发射器而不是本文件的 `Settings`，因为一个 `from` 发射器可能是 GPU 的，而 `.dfs` 里并没有写。
@@ -245,7 +239,7 @@ Emitter '%s' declares Stage blocks but simulates on the CPU. Simulation stages a
 Emitter '%s' uses 'as %s' on two module calls. Node names are unique per emitter; rename one.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2459`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2518`
 <!-- generated:end DFX5034 -->
 
 **原因。** 一个发射器中的两次模块调用带有相同的 `as <name>` 后缀。这个后缀命名的是函数调用节点，`Output.<node>.<value>` 链接按这个名字解析，而节点名在一个发射器图内是唯一的——两个占用者会让所有这类链接解析到遍历时最先遇到的任意一个节点。
@@ -285,22 +279,34 @@ Emitter '%s' uses 'as %s' on two module calls. Node names are unique per emitter
 OnEvent source '%s' is an id no emitter in this system answers to, so this handler never fires. Point it at the emitter that raises the event, or delete the handler.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4404`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4485`
 <!-- generated:end DFX5036 -->
 
 **原因。** 某个 `OnEvent` 头的 `Source` 是一个本系统中没有任何发射器响应的 id，它被写成了反编译器写无法解析的 id 的那种形式：`` `<unresolved GUID>` ``。有两种情况会产生它。把一个处理器带进复制的系统时，它会保留在原系统中的 id——复制时没有任何东西会重新映射它，于是多个系统最终共用一个过期的 id。或者源发射器被删掉了，而处理器留了下来。
 
-处理器会带着该 id 被写回，所以往返是忠实的，但它永远不会触发：
-运行时会根据 id 的**字符串形式**构建事件处理器查找表，然后按**名字**找到事件集
-（`NiagaraEmitterInstanceImpl.cpp:418-419`，查找位于 `:1307`），而没有任何发射器会响应
-a guid。资产正处于完全相同的状态——这是关于资产的事实，而不是关于文本的。
+处理器会带着该 id 被写回，所以往返是忠实的，但它永远不会触发：运行时会根据 id 的**字符串形式**构建事件处理器查找表，然后按**名字**找到事件集（`NiagaraEmitterInstanceImpl.cpp:418-419`，查找位于 `:1307`），而没有任何发射器会响应 a guid。资产正处于完全相同的状态——这是关于资产的事实，而不是关于文本的。
 
-**修复。** 判断这个系统中哪个发射器本来应该触发 `Event`，并在 `Source` 中写出它的名字。
-源可以出现在文档中接收者之前或之后：处理器是在所有
-发射器都存在之后才添加的。如果已经没有东西再触发那个事件，就删除该处理器以及
-它的栈所携带的模块——这会让资产丢掉一些事实，所以必须
-告诉构建安全门（`-Force`），它的报告会列出丢掉了什么。之后重新构建：警告会一直存在，直到 `Source`
-指向一个活着的发射器。
+**修复。** 判断这个系统中哪个发射器本来应该触发 `Event`，并在 `Source` 中写出它的名字。源可以出现在文档中接收者之前或之后：处理器是在所有发射器都存在之后才添加的。如果已经没有东西再触发那个事件，就删除该处理器以及它的栈所携带的模块——这会让资产丢掉一些事实，所以必须告诉构建安全门（`-Force`），它的报告会列出丢掉了什么。之后重新构建：警告会一直存在，直到 `Source` 指向一个活着的发射器。
+
+<a id="dfx5037"></a>
+
+## DFX5037
+
+<!-- generated:begin DFX5037 -->
+**严重级别** 错误
+
+**消息：**
+
+```
+The module DreamFX generated for this DynamicMesh did not parse (%s is the text). This is a DreamFX defect -- report it with the .dfs:\n%s
+```
+
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:946`
+<!-- generated:end DFX5037 -->
+
+**原因。** DreamFX 为 `DynamicMesh` 块生成的 `.dfm` 文本无法解析。该文本由生成器产生，因此这是 DreamFX 的缺陷，而不是源中的错误；消息中会附带解析器的输出以及 `Saved/DreamFX/DynamicMesh/` 下生成文本的路径。
+
+**修复。** 上报时请附上 `.dfs` 以及消息中给出的生成文件。
 
 <a id="dfx5093"></a>
 
@@ -315,7 +321,7 @@ a guid。资产正处于完全相同的状态——这是关于资产的事实�
 'MaterialParam' is reserved syntax and is not implemented in v1 (plan section 7).
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1777`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1778`
 <!-- generated:end DFX5093 -->
 
 **原因。** `MaterialParam` 是保留语法（L8），v1 没有实现。
@@ -335,7 +341,7 @@ a guid。资产正处于完全相同的状态——这是关于资产的事实�
 Only System documents can be generated right now; this file declares a %s.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5192`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5292`
 <!-- generated:end DFX5097 -->
 
 **原因。** 只有 `.dfs` 和 `.dfm` 会生成资产。`.dfe` 按拷贝合并进它的宿主（R3），自身没有可生成的东西。
@@ -355,7 +361,7 @@ Only System documents can be generated right now; this file declares a %s.
 Data interface parameter '%s' takes its configuration as a quoted JSON object, the form the decompiler writes.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2037`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2096`
 <!-- generated:end DFX5098 -->
 
 **原因。** 一个 `DI<T>` user 参数的配置是一个带引号的 JSON 对象——与模块的数据接口输入是同一种逐字形式，也是导出器写出的形式。这里放别的东西，应用器就读不了。配置格式正确但引擎拒绝应用时，代码也会在 DFX5098 下报告，这通常意味着 blob 里的某个属性名在那个接口类上已经不存在了。
@@ -397,7 +403,7 @@ Data interface parameter '%s' takes its configuration as a quoted JSON object, t
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:716`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXDynamicMesh.cpp:228`、`Source/DreamFXEditor/Private/Generation/DreamFXModuleGenerator.cpp:716`
 <!-- generated:end DFX5101 -->
 
 **原因。** `.dfm` 上的 `Root="..."` 没有指向一个已挂载的内容根。
@@ -524,11 +530,11 @@ Could not wire the module graph. The Niagara schema rejected a parameter map con
 
 **修复。** 去一台后端跑得起来的引擎上重建这个模块，并提交更新后的资产。消息后半段点名的是没通过的那项检查——如果你本来预期这台引擎能生成，那就是要修的地方。
 
-
 <a id="dfx5109"></a>
 
 ## DFX5109
 
+<!-- generated:begin DFX5109 -->
 **严重级别** 错误
 
 **消息**
@@ -537,8 +543,10 @@ Could not wire the module graph. The Niagara schema rejected a parameter map con
 '%s' references '%s', which does not exist. Create the asset before building (a renderer built against a missing asset renders nothing), or fix the path.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp`（渲染器规划）
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1887`（渲染器规划）
+<!-- generated:end DFX5109 -->
 
-**原因。** 某个渲染器属性（`Meshes`、`OverrideMaterials`、`Material`、...）指向的资产路径所对应的包不存在。值转换器会把这样的路径转成空引用而不报错，所以渲染器以前会「成功」构建却什么也不画——而且一旦资产出现，增量构建又会看到源码没变而什么都不做。
+**原因。** _尚未编写。_
 
-**修复。** 先创建资产（对于生成的网格体，在构建系统之前先运行生成器脚本），或者修正路径。
+**修复。** _尚未编写。_
+

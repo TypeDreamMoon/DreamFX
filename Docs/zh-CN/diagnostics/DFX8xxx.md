@@ -1,14 +1,8 @@
----
-title: "DFX8xxx —— 反编译器"
-description: "DFX8xxx —— 反编译器"
----
-
 <a id="dfx8xxx-----decompiler"></a>
 
 # DFX8xxx —— 反编译器
 
-> 生成标记之间的内容由 `.skill/gen-diagnostics.ps1` 写入。
-> 标记以下的全部内容为手写，重新生成后依然保留。
+> 生成标记之间的内容由 `.skill/gen-diagnostics.ps1` 写入。标记以下的全部内容为手写，重新生成后依然保留。
 
 <a id="dfx8000"></a>
 
@@ -229,24 +223,16 @@ Cannot adopt '%s': source destination or another source already exists at '%s'. 
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4757`
+**触发位置：** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4838`
 <!-- generated:end DFX8013 -->
 
-**原因.** 这个文件住在 *Decompiled Output Directory*（默认 `DFX/Decompiled`）里，但它的
-`Name=` 解析出的资产位于 `Decompiled/` 内容命名空间之外。构建它会盖掉
-它当初被导出的那个资产 —— 而那通常是作者只打算读一读的第三方内容。
+**原因.** 这个文件住在 *Decompiled Output Directory*（默认 `DFX/Decompiled`）里，但它的 `Name=` 解析出的资产位于 `Decompiled/` 内容命名空间之外。构建它会盖掉它当初被导出的那个资产 —— 而那通常是作者只打算读一读的第三方内容。
 
-几乎每一次都是插件开始给导出「换家」之前写下的导出：那些文件命名的是
-原资产，当时是靠把整棵反编译树排除在构建之外来兜底的。现在这棵树是
-普通源码，所以这项检查搬到了文件自己身上。
+几乎每一次都是插件开始给导出「换家」之前写下的导出：那些文件命名的是原资产，当时是靠把整棵反编译树排除在构建之外来兜底的。现在这棵树是普通源码，所以这项检查搬到了文件自己身上。
 
-**修复.** 重新导出该资产（右键 > *Export .dfs*，或 `dfx decompile-all -Path=...`）。新文件
-命名 `Decompiled/<original directory>/<asset>`，在原件旁边重建一个镜像 —— 这正是它可以安全地
-编辑和保存的原因。
+**修复.** 重新导出该资产（右键 > *Export .dfs*，或 `dfx decompile-all -Path=...`）。新文件命名 `Decompiled/<original directory>/<asset>`，在原件旁边重建一个镜像 —— 这正是它可以安全地编辑和保存的原因。
 
-如果你的本意确实是让这段文本成为该资产的真相来源，那件事叫 *Adopt* 而不是 *Export*：
-把文件从反编译树里挪进某个 `DFX/` 目录，名字保持不变。Adopt 写出的
-正是这个安排，并且在导出会丢掉语言还表达不了的东西时拒绝执行（DFX8010）。
+如果你的本意确实是让这段文本成为该资产的真相来源，那件事叫 *Adopt* 而不是 *Export*：把文件从反编译树里挪进某个 `DFX/` 目录，名字保持不变。Adopt 写出的正是这个安排，并且在导出会丢掉语言还表达不了的东西时拒绝执行（DFX8010）。
 
 <a id="dfx8014"></a>
 
@@ -344,7 +330,7 @@ emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in N
 '%s' was not saved: rebuilding it would drop %d fact(s) this source cannot express, and a save would destroy them. They are listed above, and the asset still holds every one of them. -Force writes anyway; full lists in %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:543`, `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:549`, `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4963`
+**触发位置：** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:569`、`Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:575`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5044`
 <!-- generated:end DFX8018 -->
 
 **原因.** 重建会让资产持有的内容少于现在，因此保存被拒绝。每一条会丢失的事实会报一行，然后这一条作为汇总；事实列表本身写入 `Saved/DreamFX/BuildSafety/<asset>.{before,after,lost}.facts`，因为控制台会截断长事实，而且在一次 `-Force` 保存之后，资产根本不再持有 `before` 状态。
@@ -362,3 +348,4 @@ emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in N
 被拒绝的构建既不会写入资产，也不会写入其来源标记，所以下一次普通构建不会因为是最新而被跳过。在编辑器会话中，被拒绝的包还会从磁盘重新加载：重建已经被应用到内存中的资产上，若将其留在那里，*全部保存*、自动保存或打开的 Niagara 编辑器就会写入正是这道门所拒绝的内容。在命令行上，进程结束，不保留任何内容。
 
 什么都不丢失的重建不会记录任何内容，而尚无资产的目标永远不会被拒绝：第一次生成没有更早的内容可替换。
+
