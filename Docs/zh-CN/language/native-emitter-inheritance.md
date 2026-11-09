@@ -1,8 +1,3 @@
----
-title: "原生发射器继承"
-description: "原生发射器继承"
----
-
 <a id="native-emitter-inheritance"></a>
 
 # 原生发射器继承

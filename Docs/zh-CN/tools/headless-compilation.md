@@ -1,8 +1,3 @@
----
-title: "无头 Niagara 编译"
-description: "无头 Niagara 编译"
----
-
 <a id="headless-niagara-compilation"></a>
 
 # 无头 Niagara 编译

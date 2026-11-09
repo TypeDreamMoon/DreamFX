@@ -1,8 +1,3 @@
----
-title: "资产比较与导出覆盖范围"
-description: "资产比较与导出覆盖范围"
----
-
 <a id="asset-comparison-and-export-coverage"></a>
 
 # 资产比较与导出覆盖范围

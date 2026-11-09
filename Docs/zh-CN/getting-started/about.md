@@ -1,6 +1,6 @@
 ---
-title: "DreamFX 是什么"
-description: "它做什么、不做什么，以及贯穿始终的几条立场——文本是唯一真相、缺口必须显形、菜单不是第二套实现。"
+title: DreamFX 是什么
+description: 它做什么、不做什么，以及贯穿始终的几条立场——文本是唯一真相、缺口必须显形、菜单不是第二套实现。
 ---
 
 DreamFX 把文本编译成标准 Niagara 资产，并把标准 Niagara 资产反编译回文本。这就是全部范围——它不是新的粒子运行时，也不替代 Niagara。它生成的产物是普通的 `UNiagaraSystem` / `UNiagaraEmitter` / `UNiagaraScript`：任何引擎都能加载它，任何 `.dfs` 都能引用它，它能被 cook、能运行，与手工连出来的完全一样。

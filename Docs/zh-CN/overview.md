@@ -1,19 +1,13 @@
 ---
-title: "概览"
-description: "DreamFXLang 是 Unreal Niagara 特效的文本优先语言，由 DreamFX 插件编译成标准 Niagara 资产——并能再反编译回来。"
+title: 概览
+description: DreamFXLang 是 Unreal Niagara 特效的文本优先语言，由 DreamFX 插件编译成标准 Niagara 资产——并能再反编译回来。
 ---
 
-DreamFXLang 是 Unreal Engine Niagara 的文本优先创作语言。你编写 `.dfs`、`.dfe`
-和 `.dfm` 文件，**DreamFX** 插件将它们编译成标准资产——
-`UNiagaraSystem`、`UNiagaraEmitter`、`UNiagaraScript`——关卡、蓝图或 Sequencer
-引用它们的方式与引用任何其他资产完全一样。
+DreamFXLang 是 Unreal Engine Niagara 的文本优先创作语言。你编写 `.dfs`、`.dfe` 和 `.dfm` 文件，**DreamFX** 插件将它们编译成标准资产—— `UNiagaraSystem`、`UNiagaraEmitter`、`UNiagaraScript`——关卡、蓝图或 Sequencer 引用它们的方式与引用任何其他资产完全一样。
 
-源文件才是你维护的东西。`.uasset` 是构建产物：随时可以丢弃并
-重新生成，绝不手工编辑。
+源文件才是你维护的东西。`.uasset` 是构建产物：随时可以丢弃并重新生成，绝不手工编辑。
 
-反方向同样成立：**任何**现有 Niagara 系统都能反编译回 `.dfs`。
-这不是便利导出，而是一份契约——语言无法表达的任何内容都会
-作为显式缺口写进文件头，绝不静默丢弃。
+反方向同样成立：**任何**现有 Niagara 系统都能反编译回 `.dfs`。这不是便利导出，而是一份契约——语言无法表达的任何内容都会作为显式缺口写进文件头，绝不静默丢弃。
 
 | | |
 | --- | --- |
@@ -31,7 +25,7 @@ DreamFXLang 是 Unreal Engine Niagara 的文本优先创作语言。你编写 `.
 
 | 扩展名 | 声明 | 产物 |
 | --- | --- | --- |
-| `.dfs` | `System` | 一个 `UNiagaraSystem` |
+| `.dfs` | `System` | a `UNiagaraSystem` |
 | `.dfe` | `Emitter` | 自身不产任何东西——由 `from` 合并进 `.dfs` |
 | `.dfm` | `Module` / `DynamicInput` | 一个 `UNiagaraScript`（通过反射后端在安装版引擎上同样可用） |
 
@@ -44,9 +38,7 @@ DreamFXLang 是 Unreal Engine Niagara 的文本优先创作语言。你编写 `.
 }
 ```
 
-`Kind` 必须与文件扩展名一致（[DFX2021](diagnostics/DFX2xxx.md#dfx2021)）。`Root` 是
-`Game`、空（同义）或 `Plugin.<PluginName>`；`Name` 是相对那个
-根的内容目录的资产路径。见[文件模型](language/README.md)。
+`Kind` 必须与文件扩展名一致（[DFX2021](diagnostics/DFX2xxx.md#dfx2021)）。`Root` 是 `Game`、空（同义）或 `Plugin.<PluginName>`；`Name` 是相对那个根的内容目录的资产路径。见[文件模型](language/README.md)。
 
 <a id="a-minimal-system"></a>
 
@@ -95,31 +87,23 @@ System(Name="Effects/NS_Hello", Root="Game")
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
 ```
 
-这会写出 `/Game/Effects/NS_Hello`，全程无需编辑器参与。编辑器打开时，保存源文件
-即重建——把生成的资产在 Niagara 编辑器中开着，它就是这套工作流的实时预览。
+这会写出 `/Game/Effects/NS_Hello`，全程无需编辑器参与。编辑器打开时，保存源文件即重建——把生成的资产在 Niagara 编辑器中开着，它就是这套工作流的实时预览。
 
 > **注意：**
 >
-> 写包的命令（`build`、`corpus`、`mirror-diff`、`decompile-all`）要求**关闭编辑器**。
-> 两个进程保存同一批包会静默竞争，谁后保存谁赢。
-> 见[日常循环](getting-started/workflow.md)。
+> 写包的命令（`build`、`corpus`、`mirror-diff`、`decompile-all`）要求**关闭编辑器**。两个进程保存同一批包会静默竞争，谁后保存谁赢。见[日常循环](getting-started/workflow.md)。
 
 <a id="what-the-language-covers"></a>
 
 ## 语言覆盖到哪里
 
 - **用户参数**，包括带 JSON 配置的数据接口参数（`DI<X>`）；
-- **六个栈**：`SystemSpawn` / `SystemUpdate` / `EmitterSpawn` / `EmitterUpdate` /
-  `ParticleSpawn` / `ParticleUpdate`；
+- **六个栈**：`SystemSpawn` / `SystemUpdate` / `EmitterSpawn` / `EmitterUpdate` / `ParticleSpawn` / `ParticleUpdate`；
 - **事件处理器** `OnEvent(...)` 和**具名模拟阶段** `Stage <Name>(...)`；
 - **渲染器**，带 schema 驱动属性和 `Bind`；
-- 全部值形态：字面量、链接、枚举、嵌套动态输入、`hlsl { }`、带
-  切线模式的 `curve { }`，以及所有位置的静态开关。
+- 全部值形态：字面量、链接、枚举、嵌套动态输入、`hlsl { }`、带切线模式的 `curve { }`，以及所有位置的静态开关。
 
-不覆盖的，无论出于设计还是尚未实现：Scratch Pad、模块内部图 lowering、GPU/CPU 分支
-条件和 Scalability 条件。原生发射器继承通过
-[`inherits`](language/native-emitter-inheritance.md) 支持；`from` 则改为拷贝和合并源文件。
-剩余边界见[限制](diagnostics/limitations.md)。
+不覆盖的，无论出于设计还是尚未实现：Scratch Pad、模块内部图 lowering、GPU/CPU 分支条件和 Scalability 条件。原生发射器继承通过 [`inherits`](language/native-emitter-inheritance.md) 支持；`from` 则改为拷贝和合并源文件。剩余边界见[限制](diagnostics/limitations.md)。
 
 <a id="round-trip-verified-four-ways"></a>
 
