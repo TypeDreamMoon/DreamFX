@@ -17,7 +17,7 @@
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4716`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4721`
 <!-- generated:end DFX6001 -->
 
 **原因。** 一条 Niagara 编译错误，被映射回抛出它的那个模块所在的源码行。
@@ -37,7 +37,7 @@
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4750`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4755`
 <!-- generated:end DFX6002 -->
 
 **原因。** 一条 Niagara 编译警告，映射回源码。
@@ -57,7 +57,7 @@
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4791`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4796`
 <!-- generated:end DFX6003 -->
 
 **原因。** 错误级别的 Niagara 栈问题 —— 最常见的是未满足的模块依赖。栈问题只有在 Slate 存在的地方才读得到，所以它们出现在编辑器和语料套件里，headless 构建里看不到（`GetStackIssues` 不是 headless 安全的）。
@@ -77,7 +77,7 @@
 (built at runtime)
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4795`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4800`
 <!-- generated:end DFX6004 -->
 
 **原因。** 警告级别的 Niagara 栈问题。被弃用的模块在这里报。
@@ -97,7 +97,7 @@
 Niagara compilation of '%s' did not succeed (status %s).
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5063`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5114`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5670`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5068`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5119`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5675`
 <!-- generated:end DFX6005 -->
 
 **原因。** 系统的编译没有到达成功状态。具体错误以 DFX6001 报在这条之前。
@@ -137,7 +137,7 @@ Niagara could not compile the body of '%s':\n%s
 Nothing in this source writes that parameter, so there is no graph parameter for a default to sit on and Niagara refuses the read. Check the asset before the effect: the decompiler drops any module input whose value matches a freshly probed module, and a value the author set that happens to equal the default is dropped with them -- NS_Spawn_Ground_Root reads Particles.MySize and builds clean once the suppressed writes are exported, so its text was missing a write its asset had. If the source really is the whole story, write the parameter before whatever reads it -- for an 'Emitter.<Module>.<Output>' name, move the module that produces it ahead of its readers -- or drop the read. Building on an engine with the MoonEngine additions makes the message go away by supplying the type's zero, which is not the same as making the effect work.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4743`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4748`
 <!-- generated:end DFX6007 -->
 
 **原因。** 挂在一条 DFX6001「读在写之前」上：**源码文本**里没有任何东西写这个参数，于是没有链接写入去创建它，也就没有一个图参数让默认值坐上去。
@@ -163,7 +163,7 @@ Nothing in this source writes that parameter, so there is no graph parameter for
 '%s' finished its compile with stale scripts: %s. The compiled VM was not rebuilt from the graphs this build wrote, so the asset would simulate something other than what the source says. This is a DreamFX pipeline defect -- report it with this source file.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5123`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5128`
 <!-- generated:end DFX6008 -->
 
 **原因。** 构建跑完了它的 Niagara 编译，随后引擎自己的同步性测试说：某个脚本存着的 VM 不是照这次构建留下的图编出来的。在构建强制最后一次编译的前提下这本该不可能，这正是它是错误的原因：要么有写入路径在编译发起之后改了图，要么那次强制在什么地方丢了。这项检查存在，是因为这类资产真的出过货 —— `NE_C` 的 `NS_Spawn_Teleport_Root` 顶着正确图的 compile id，背着一份「所有开关都是 Unset」时代的字节码，把错误的分支模拟了好几天，而每一项文本级检查都与源码一致（2026-08-11）。

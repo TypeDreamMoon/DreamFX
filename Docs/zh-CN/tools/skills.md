@@ -12,6 +12,24 @@ description: 插件自带的四个技能，以及编码代理在编写 DreamFXLa
 | `dream-fx-diagnose` | 接收一个 `DFXnnnn`，查找成因、解释它、修复源码 |
 | `dream-fx-decompile` | 将现有 Niagara 系统导出为源码，或回答“这个项目的 VFX 有多少可以表达” |
 
+首先让任何 agent 指向仓库根目录的 [`AGENTS.md`](https://github.com/TypeDreamMoon/DreamFX/blob/main/AGENTS.md)。它是纯 Markdown，因此适用于任何工具：创作循环、命令，以及 agent 最常违反的规则，另外还有一节讲如何修改插件。
+
+<a id="give-the-guide-to-the-agent-in-your-project"></a>
+
+## 在你的项目中把指南交给 agent
+
+agent 会读取它所在文件夹根目录的说明文件。在游戏项目中，那是项目根目录，而不是 `Plugins/DreamFX/`，因此它不会自己找到插件的 `AGENTS.md`。把这一行添加到你的项目的说明文件中（例如项目根目录下的 `AGENTS.md`）：
+
+```text
+Before writing or fixing any DreamFX source, read Plugins/DreamFX/AGENTS.md and follow its Authoring section.
+```
+
+在 Claude Code 中，你也可以改为导入该文件。把这一行添加到项目的 `CLAUDE.md`：
+
+```text
+@Plugins/DreamFX/AGENTS.md
+```
+
 <a id="the-step-everyone-skips"></a>
 
 ## 每个人都会跳过的一步
@@ -61,6 +79,20 @@ description: 插件自带的四个技能，以及编码代理在编写 DreamFXLa
 2. 使引擎可解析（`UE_ENGINE_ROOT` 或已注册的 `EngineAssociation`）；
 3. **写包的命令需要关闭编辑器** —— 确保代理知道这一点；
 4. 将 `.skill/` 中的四个 `SKILL.md` 文件放入你代理的技能目录。
+
+对于 Claude Code，`pwsh -File Plugins/DreamFX/.skill/sync-skills.ps1` 会把它们复制到项目的 `.claude/skills/` 中并修正其中的链接；`-Check` 会报告过期的副本。
+
+<a id="when-the-agent-gets-it-wrong"></a>
+
+## 当 agent 出错时
+
+如果 agent 编写的源码无法构建、看起来不对，或使用了不存在的模块或语法，请用 **AI wrote it wrong** 表单提交 issue。它会要求你提供提示词、源码以及以下命令的输出：
+
+```powershell
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 info
+```
+
+该命令会打印插件、引擎和操作系统版本，而不会启动引擎，也不会打印任何路径。
 
 <a id="why-this-language-suits-agents"></a>
 

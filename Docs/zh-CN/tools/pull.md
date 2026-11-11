@@ -19,8 +19,8 @@
 ## 1. 用法
 
 ```powershell
-$dfx = 'C:\CrossingVoid\Plugins\DreamFX\.skill\dfx.ps1'
-$eng = 'D:\UnrealEngine-5.8.2'
+$dfx = '<ProjectDir>\Plugins\DreamFX\.skill\dfx.ps1'
+$eng = '<EngineDir>'
 
 # Dry run: report proposed line edits without writing any source bytes (the default).
 pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Engine $eng
@@ -300,7 +300,7 @@ $ dfx pull <source> -Asset <original asset>          # dry run
 
 $ dfx pull <source> -Asset <original asset> -Apply
   pull: wrote 1 literal(s) into '...NS_Effects1_Mesh.dfs'. The file it was is at
-        'C:/CrossingVoid/Saved/DreamFX/Pull/Saved/pull-probe/NS_Effects1_Mesh.dfs'.
+        '<ProjectDir>/Saved/DreamFX/Pull/Saved/pull-probe/NS_Effects1_Mesh.dfs'.
   NS_Effects1_Mesh.dfs(106,27): info DFX7116: pull: Sprite_Atlas_Size.MeshYaw: 0.0 -> -90.0
   === DreamFX pull: 14 value(s) compared, 1 written, 5 not declared, 1 not writable, 0 stack(s) not addressed | applied ===
 
@@ -384,7 +384,7 @@ $ dfx lint -All
   dfx: OK (exit 0)                      # 89 pre-existing content lint warnings
 $ dfx corpus
   dfx: corpus OK (55 passed)            # same baseline as the safety-gate pass
-$ Build.bat CrossingVoidEditor Win64 Development -MaxParallelActions=2 -WaitMutex
+$ Build.bat <Project>Editor Win64 Development -MaxParallelActions=2 -WaitMutex
   Result: Succeeded                     # only the existing DreamFXCorpusTest.cpp:572 C4996 remains
 ```
 
@@ -431,15 +431,15 @@ $ Build.bat CrossingVoidEditor Win64 Development -MaxParallelActions=2 -WaitMute
 
 ```powershell
 # 0) Ensure no UnrealEditor is running; each command starts one editor process.
-$dfx = 'C:\CrossingVoid\Plugins\DreamFX\.skill\dfx.ps1'
-$eng = 'D:\UnrealEngine-5.8.2'
+$dfx = '<ProjectDir>\Plugins\DreamFX\.skill\dfx.ps1'
+$eng = '<EngineDir>'
 
 # All four cases; logs go to Saved/pull-probe/runs/.
-pwsh -File C:\CrossingVoid\Saved\pull-probe\run-pull-cases.ps1
+pwsh -File <ProjectDir>\Saved\pull-probe\run-pull-cases.ps1
 
 # Gates
 pwsh -File $dfx lint -All -Engine $eng
 pwsh -File $dfx corpus -Engine $eng
-& 'D:\UnrealEngine-5.8.2\Engine\Build\BatchFiles\Build.bat' CrossingVoidEditor Win64 Development `
-    -Project='C:\CrossingVoid\CrossingVoid.uproject' -MaxParallelActions=2 -WaitMutex
+& '<EngineDir>\Engine\Build\BatchFiles\Build.bat' <Project>Editor Win64 Development `
+    -Project='<ProjectDir>\<Project>.uproject' -MaxParallelActions=2 -WaitMutex
 ```

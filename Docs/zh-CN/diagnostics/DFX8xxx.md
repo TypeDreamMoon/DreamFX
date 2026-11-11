@@ -17,7 +17,7 @@
 Cannot decompile a null system.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2316`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2321`
 <!-- generated:end DFX8000 -->
 
 **原因。** 资产路径解析不到任何东西，或者解析到的不是一个 Niagara System。
@@ -37,7 +37,7 @@ Cannot decompile a null system.
 Could not read emitters: %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2513`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2518`
 <!-- generated:end DFX8001 -->
 
 **原因。** 该系统的发射器读不出来。
@@ -57,7 +57,7 @@ Could not read emitters: %s
 Skipping emitter '%s': %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2542`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2547`
 <!-- generated:end DFX8002 -->
 
 **原因。** 某一个发射器导不出来，系统的其余部分仍然导出了。
@@ -77,7 +77,7 @@ Skipping emitter '%s': %s
 Cannot decompile a null emitter.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2687`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2692`
 <!-- generated:end DFX8003 -->
 
 **原因。** 触发 Export .dfe 入口时什么都没选中，或者选中的资产加载失败。
@@ -97,7 +97,7 @@ Cannot decompile a null emitter.
 Could not create a host system to read the emitter through: %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2699`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2704`
 <!-- generated:end DFX8004 -->
 
 **原因。** 读取发射器需要一个拥有它的系统：Niagara 外部编辑 API 中的每个读取器都通过系统来寻址。`/Temp/DreamFX` 下那个一次性宿主没能创建出来。
@@ -117,7 +117,7 @@ Could not create a host system to read the emitter through: %s
 Could not copy emitter '%s' into a host system: %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2726`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2731`
 <!-- generated:end DFX8005 -->
 
 **原因。** 发射器无法拷贝进宿主系统。Niagara 的 `AddEmitter` 把它作为模板拒绝了。
@@ -137,7 +137,7 @@ Could not copy emitter '%s' into a host system: %s
 Could not read emitter '%s': %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2747`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2752`
 <!-- generated:end DFX8006 -->
 
 **原因。** 发射器已拷贝进宿主，但它的拓扑读不回来。
@@ -223,7 +223,7 @@ Cannot adopt '%s': source destination or another source already exists at '%s'. 
 This file sits in the decompiled output directory but Name=\"%s\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4838`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4843`
 <!-- generated:end DFX8013 -->
 
 **原因。** 这个文件住在 *Decompiled Output Directory*（默认 `DFX/Decompiled`）里，但它的 `Name=` 解析出的资产位于 `Decompiled/` 内容命名空间之外。构建它会盖掉它当初被导出的那个资产 —— 而那通常是作者只打算读一读的第三方内容。
@@ -247,7 +247,7 @@ This file sits in the decompiled output directory but Name=\"%s\" builds '%s', o
 Emitter '%s' inherits from '%s'. The export flattens the inheritance: the merged stack is carried in full, but the rebuilt emitter no longer follows the parent, so later parent edits will change the original and not the mirror.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1077`、`Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1676`、`Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2173`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1082`、`Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1681`、`Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2178`
 <!-- generated:end DFX8014 -->
 
 **原因。** 导出无法保留发射器原生继承的每一个方面。系统 `.dfs` 导出现在会保留 `inherits "<parent asset>" version "<GUID>"`，并省略与所选父版本完全相同的受支持内容。这条警告指出一项仍然存在的局限：被改动的堆栈或渲染器组会变成完整覆盖；事件处理器与 stage 是快照；继承来的默认值、处理器或整个渲染器/stage 组无法在源码中移除；或者父关联、版本或基线无法可靠读出。它还会报告父资产不再是可继承的独立资产、无效的父链，以及父或子资产上未合并的改动。独立 `.dfe` 导出仍然会把父关系摊平成快照。
@@ -267,7 +267,7 @@ Emitter '%s' inherits from '%s'. The export flattens the inheritance: the merged
 Emitter '%s' carries %d event handler(s) this export cannot represent%s. The rebuilt emitter will receive no events -- an event-spawned emitter comes back permanently empty. The gap header names each handler's source emitter and event.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1125`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1130`
 <!-- generated:end DFX8015 -->
 
 **原因。** 该发射器携带导出没有文本形式的事件处理器。事件处理器本身**是支持的** —— 它们导出为 `OnEvent(...)` 块 —— 所以现在仅在两种更窄的情况下触发：
@@ -290,7 +290,7 @@ Emitter '%s' carries %d event handler(s) this export cannot represent%s. The reb
 Emitter '%s' carries %d simulation stage(s) this export cannot represent (custom stage class or missing script). The gap header names each one.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1172`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:1177`
 <!-- generated:end DFX8016 -->
 
 **原因。** 该发射器携带导出没有文本形式的模拟阶段。普通阶段导出为 `Stage name(...)` 块，不会触发这条；剩下的是那些类不是引擎 `UNiagaraSimulationStageGeneric` 的阶段（自定义 C++ 阶段），或者脚本对象在资产上缺失的阶段。缺口头会逐个点名，于是这次丢失会一路留到代码审查，而不是只活在一份 commandlet 日志里。
@@ -310,7 +310,7 @@ Emitter '%s' carries %d simulation stage(s) this export cannot represent (custom
 emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in Niagara; DreamFX cannot rebuild its stateless modules and renderers.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2529`
+**触发位置** `Source/DreamFXEditor/Private/Decompiler/DreamFXDecompiler.cpp:2534`
 <!-- generated:end DFX8017 -->
 
 **原因。** 某发射器句柄使用了 Niagara 的 Lightweight/Stateless 模式。DreamFX 目前还无法表达其无状态模块和渲染器。导出会记录覆盖缺口并省略该发射器，而不是将一个空的标准发射器当作完整导出呈现。采纳会在重建资产之前拒绝带有此缺口的导出。
@@ -330,7 +330,7 @@ emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in N
 '%s' was not saved: rebuilding it would drop %d fact(s) this source cannot express, and a save would destroy them. They are listed above, and the asset still holds every one of them. -Force writes anyway; full lists in %s
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:569`、`Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:575`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5044`
+**触发位置** `Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:569`、`Source/DreamFXEditor/Private/Diff/DreamFXBuildSafetyGate.cpp:575`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:5049`
 <!-- generated:end DFX8018 -->
 
 **原因。** 重建会让资产持有的内容少于现在，因此保存被拒绝。每一条会丢失的事实会报一行，然后这一条作为汇总；事实列表本身写入 `Saved/DreamFX/BuildSafety/<asset>.{before,after,lost}.facts`，因为控制台会截断长事实，而且在一次 `-Force` 保存之后，资产根本不再持有 `before` 状态。

@@ -25,7 +25,7 @@
 ## 1. 覆盖检查（`coverage`）
 
 ```powershell
-pwsh -File .skill/dfx.ps1 coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine D:\UnrealEngine-5.8.2
+pwsh -File .skill/dfx.ps1 coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine <EngineDir>
 ```
 
 **扫描 59 个系统，导出 59 个，零失败。** 报告的缺口：六个资产，17 处。下方的资产和发射器标识符保留其原始拼写。
@@ -52,8 +52,8 @@ pwsh -File .skill/dfx.ps1 coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/Asset
 ## 2. 反编译证据
 
 ```powershell
-pwsh -File .skill/dfx.ps1 decompile-all -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine D:\UnrealEngine-5.8.2
-# 59 written, 0 failed, under C:\CrossingVoid\DFX\Decompiled\**
+pwsh -File .skill/dfx.ps1 decompile-all -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine <EngineDir>
+# 59 written, 0 failed, under <ProjectDir>\DFX\Decompiled\**
 ```
 
 对 59 个 `.dfs` 导出的静态清点；计数为**匹配行数 / 匹配文件数**：
@@ -576,8 +576,8 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 
 ### 环境
 
-- 项目 `C:\CrossingVoid`；引擎 `D:\UnrealEngine-5.8.2`，并带有 DreamFX 引擎补丁。
-- 插件 `C:\CrossingVoid\Plugins\DreamFX` 位于 `359b3b3`，分支为 `pr/engine-patch-and-writeback`。
+- 项目 `<ProjectDir>`；引擎 `<EngineDir>`（5.8.2），并带有 DreamFX 引擎补丁。
+- 插件 `<ProjectDir>\Plugins\DreamFX` 位于 `359b3b3`，分支为 `pr/engine-patch-and-writeback`。
 - **复现前确保没有 UnrealEditor 正在运行。** 本研究开始时没有正在运行的实例。
 
 <a id="commands-in-execution-order"></a>
@@ -585,18 +585,18 @@ MIRR   compiled 刀光纹理   ParticleSpawnScriptInterpolated di 'Emitter.Float
 ### 命令，按执行顺序
 
 ```powershell
-$dfx = 'C:\CrossingVoid\Plugins\DreamFX\.skill\dfx.ps1'
-$eng = 'D:\UnrealEngine-5.8.2'
+$dfx = '<ProjectDir>\Plugins\DreamFX\.skill\dfx.ps1'
+$eng = '<EngineDir>'
 
 # 1) Coverage: 59 systems, 59 exports, 0 failures, 17 gaps.
 pwsh -File $dfx coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine $eng
 
-# 2) Full export: 59 written, 0 failed, to C:\CrossingVoid\DFX\Decompiled\**.
+# 2) Full export: 59 written, 0 failed, to <ProjectDir>\DFX\Decompiled\**.
 pwsh -File $dfx decompile-all -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine $eng
 
 # 3) Fixed-point sample: one build per source; write only Decompiled/ mirrors, never originals.
 #    See Saved\dfx-writeback-study\run-builds.ps1.
-pwsh -File C:\CrossingVoid\Saved\dfx-writeback-study\run-builds.ps1
+pwsh -File <ProjectDir>\Saved\dfx-writeback-study\run-builds.ps1
 #    S1 NS_Atlas2D_Mesh OK; S2 NS_Effects1_Mesh OK; S3 TR刀光_System OK;
 #    S4 NS_ScanScene failed with 21 errors; S5 破空灰尘 OK.
 
@@ -616,10 +616,10 @@ pwsh -File $dfx decompile /Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh
 
 | 内容 | 位置 |
 |---|---|
-| 导出文件，项目侧，通过 `DFX/Decompiled/` 忽略 | `C:\CrossingVoid\DFX\Decompiled\**`，共 59 个 `.dfs` 文件 |
-| 导出副本与完整原始输出 | `C:\CrossingVoid\Saved\dfx-writeback-study\`：`decompiled\`、`raw-*.txt`、`build-S*.txt` |
-| 原始/镜像事实文件，共五对 | `C:\CrossingVoid\Saved\DreamFX\*.{original,mirror}.facts` |
-| 被忽略的镜像资产 | `C:\CrossingVoid\Content\Decompiled\**`、`C:\CrossingVoid\Plugins\AtlasFX\Content\Decompiled\**` |
+| 导出文件，项目侧，通过 `DFX/Decompiled/` 忽略 | `<ProjectDir>\DFX\Decompiled\**`，共 59 个 `.dfs` 文件 |
+| 导出副本与完整原始输出 | `<ProjectDir>\Saved\dfx-writeback-study\`: `decompiled\`, `raw-*.txt`, `build-S*.txt` |
+| 原始/镜像事实文件，共五对 | `<ProjectDir>\Saved\DreamFX\*.{original,mirror}.facts` |
+| 被忽略的镜像资产 | `<ProjectDir>\Content\Decompiled\**`, `<ProjectDir>\Plugins\AtlasFX\Content\Decompiled\**` |
 | `-NoDefaults` 对比导出 | `Saved\dfx-writeback-study\NS_Effects1_Mesh.NoDefaults.dfs`、`NS_Atlas2D_Mesh.NoDefaults.dfs` |
 
 <a id="change-audit-for-the-original-study"></a>
@@ -629,4 +629,4 @@ pwsh -File $dfx decompile /Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh
 - **未更改任何原始资产。** 构建只写入了 `Decompiled/` 中的镜像。唯一的额外非文本导出副作用是 R3 嵌入式脚本提取到 `/Game/Decompiled/…/Scripts/NS_ScanScene_*.uasset`，同样位于 `Decompiled/` 之下。
 - 该项目中已存在被修改的 `Plugins/AtlasFX/Content/Templates/NS_Atlas2D_*.uasset` 文件（mtime 17:47）以及 `Content/GameActor2D/Misaka/Material/DefAtk/FX_Defatk.uasset`（mtime 18:07），早于本研究 20:20 的开始时间。这些是先前已存在的更改。
 - 在撰写本报告之前，该插件的 `git status` 是干净的。
-- `D:\UnrealEngine-5.8.2` 未发生更改。
+- `<EngineDir>` 未发生更改。

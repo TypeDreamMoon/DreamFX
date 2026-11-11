@@ -1,4 +1,4 @@
-#dreamdocs-align 1	source=Docs/tools/skills.md	rev=37dd25b1940d	model=deepseek-flash	page=3b4692527f64
+#dreamdocs-align 1	source=Docs/tools/skills.md	rev=15f17c4697f6	model=deepseek-v4.1-flash	page=7a0faeec89fd
 meta:title	df0dd7b340a7	216d98d8	m
 meta:description	0806b3a5b212	5c6e2cf7	m
 p	52ba6c0ff095	49c30576	m
@@ -7,6 +7,10 @@ row2	5af0a808d679	54b65ea7	m
 row2	be1ffa449b3a	266f0608	m
 row2	f1d44e371990	fb4e73f2	m
 row2	27bb083596b2	e1612aaf	m
+p	4c6a2eeaee0f	12c18d42	m
+h2	f778e9e3f002	0382453e	m
+p	252f9d544cd8	77047d6f	m
+p	a2c77657bda5	5c218f84	m
 h2	609848714a4b	979ad742	m
 p	3c2e40539d49	09363902	m
 h3	d840bce17b5f	300dd314	m
@@ -28,6 +32,10 @@ li	7c9e473375e5	0e8fa21d	m
 li	c9f7df294cde	4a3b467d	m
 li	8fa87e2f1779	7110ce45	m
 li	856cfd615cd9	cff2e24f	m
+p	1ffa2575d7fd	88ea3edc	m
+h2	be2817e5f385	eadbd02e	m
+p	37b210f12ae0	aa3a1d95	m
+p	8820c02a402d	892cde3d	m
 h2	7e1c21e90fee	5ea56e44	m
 p	11da066ec172	b546b2f1	m
 li	b8fb71b722d2	bd7e67ea	m
