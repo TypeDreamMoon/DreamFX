@@ -28,7 +28,7 @@ gate and open the host editor -- the working project never sees it.
 ## Layout
 
 ```
-DreamFXTestHost/                       (default I:\UnrealProject_Moon\DEV_58\DreamFXTestHost)
+DreamFXTestHost/                       (-Root, or DREAMFX_TEST_HOST)
   DreamFXTestHost.uproject             from Template/
   Config/DefaultEngine.ini             from Template/
   Config/DefaultGame.ini               from Template/
@@ -45,7 +45,11 @@ template's `.Build.cs` or `.Target.cs` files up.
 
 ## Creating it
 
+The script has no machine-specific defaults. Say where the host goes, once per shell or in your profile,
+or pass `-Root` every time:
+
 ```powershell
+$env:DREAMFX_TEST_HOST = '<HostDir>'     # the host directory; not on drive C
 pwsh -NoProfile -File Tools\TestHost\New-DreamFXTestHost.ps1 -Detach -WhatIf   # see what it would do
 pwsh -NoProfile -File Tools\TestHost\New-DreamFXTestHost.ps1 -Detach
 ```
@@ -56,10 +60,10 @@ moved to the branch's tip on every run of the script; a dirty one is left where 
 
 | Parameter | Default | |
 | --- | --- | --- |
-| `-Root` | `I:\UnrealProject_Moon\DEV_58\DreamFXTestHost` | The host directory. Refused on drive C unless `-AllowSystemDrive`. |
-| `-RepoPath` | `I:\UnrealProject_Moon\DEV_58\DevTest\Plugins\DreamFX` | Any working tree of the repository. |
+| `-Root` | `$env:DREAMFX_TEST_HOST`; required when that is not set | The host directory. Refused on drive C unless `-AllowSystemDrive`. |
+| `-RepoPath` | `$env:DREAMFX_TEST_REPO`, else the working tree holding the script | Any working tree of the repository. |
 | `-Branch` | `main` | What the worktree must have (or is created with). |
-| `-EngineRoot` | looked up from the `.uproject`'s engine association | |
+| `-EngineRoot` | `$env:UE_ENGINE_ROOT`, else looked up from the `.uproject`'s engine association | Without either, the script stops and asks for it. |
 | `-Force` | off | Replace files that differ from the template; each old one is kept as `<name>.bak-<timestamp>`. |
 | `-KeepCurrentHead` | off | Accept an existing worktree on another branch or a detached commit (a PR head, a revert experiment). |
 | `-Detach` | off | Follow `-Branch` with a detached HEAD. |
