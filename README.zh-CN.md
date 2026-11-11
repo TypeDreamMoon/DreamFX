@@ -171,7 +171,7 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 | :-- | :-- |
 | **编辑器集成** | *Tools* 菜单、Content Browser 右键(build / 反编译 / Adopt / 导出 `.dfe`)、Niagara 编辑器工具栏、关卡工具栏——全走同一条管线,`-NoDreamFXEditor` 一键关闭 |
 | **file watcher** | 存盘即重建,且是[增量](Docs/tools/incremental-builds.md)的,只写差异;打开生成资产即实时预览 |
-| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus` |
+| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus · info` |
 | **`ci.ps1`** | lint → build → verify → corpus 一条命令,关编辑器跑 |
 | **溯源戳** | 每个生成资产带源 hash + 生成器版本 + 模块版本 GUID;`verify` 报手改、过期、版本漂移三种 |
 
@@ -179,6 +179,14 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 
 插件自带四个 agent 技能([`.skill/`](.skill/)):`dream-fx-create` / `dream-fx-verify` /
 `dream-fx-diagnose` / `dream-fx-decompile`——编码代理可以全程 headless 地创作、构建、排错、迁移特效。
+
+## 参与贡献
+
+欢迎报告问题、提案、修文档和提 PR，先读 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
+报 bug 请用 [Issue 表单](https://github.com/TypeDreamMoon/DreamFX/issues/new/choose)，并附上
+`pwsh -File Plugins/DreamFX/.skill/dfx.ps1 info` 的输出；提问请去
+[Discussions](https://github.com/TypeDreamMoon/DreamFX/discussions)。
+用编程 agent？先让它读 [AGENTS.md](AGENTS.md)。
 
 ## 运行环境要求与能力边界
 

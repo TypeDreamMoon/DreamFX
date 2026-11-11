@@ -56,6 +56,12 @@ are maintained and reviewed in this plugin repository. Moving a source file does
 - [Limits and known issues](diagnostics/limitations.md).
 - [Release overview](changelog/index.md) and [plugin changelog](../CHANGELOG.md).
 
+## Contributing
+
+- [Contributing overview](contributing/index.md): repository layout, modules, the test host, the
+  gate, generated files, docs and releases.
+- [How to report and send changes](../CONTRIBUTING.md), and the [agent guide](../AGENTS.md).
+
 ## Maintenance
 
 Use ordinary Markdown, retain code and API identifiers, and link to other source documents with

@@ -182,7 +182,7 @@ the documentation site publishes generated English pages and reviewed Chinese tr
 | :-- | :-- |
 | **Editor integration** | *Tools* menu, Content Browser right-click (build / decompile / Adopt / export `.dfe`), Niagara editor toolbar, level toolbar — all on the same pipeline, `-NoDreamFXEditor` turns it off |
 | **File watcher** | save the source, the asset rebuilds — [incrementally](Docs/tools/incremental-builds.md), writing only the difference; open the generated asset for a live preview |
-| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus` |
+| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus · info` |
 | **`ci.ps1`** | lint → build → verify → corpus, one command, editor closed |
 | **Provenance stamps** | source hash + generator version + module version GUIDs on every generated asset; `verify` reports edited-by-hand, stale, and version-drifted assets |
 
@@ -191,6 +191,14 @@ the documentation site publishes generated English pages and reviewed Chinese tr
 Four agent skills ship with the plugin under [`.skill/`](.skill/): `dream-fx-create`,
 `dream-fx-verify`, `dream-fx-diagnose`, `dream-fx-decompile` — a coding agent can author, build,
 debug and migrate effects headlessly.
+
+## Contributing
+
+Bug reports, proposals, docs fixes and pull requests are welcome; start with [CONTRIBUTING.md](CONTRIBUTING.md).
+Report bugs through the [issue forms](https://github.com/TypeDreamMoon/DreamFX/issues/new/choose) with the
+output of `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 info`; ask questions in
+[Discussions](https://github.com/TypeDreamMoon/DreamFX/discussions).
+Using a coding agent? Point it at [AGENTS.md](AGENTS.md) first.
 
 ## Requirements and boundaries
 

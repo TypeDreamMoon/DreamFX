@@ -40,6 +40,44 @@ finally {
     Remove-Item -LiteralPath $launcherRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# `dfx.ps1 info`: engine version and kind come from files the engine ships, a field that cannot be
+# read is `unknown`, and the output never carries a path. These run before the git mock below.
+$engineFixture = Join-Path ([IO.Path]::GetTempPath()) ('dfx-engine-' + [guid]::NewGuid().ToString('N'))
+try {
+    $buildDir = New-Item -ItemType Directory -Path (Join-Path $engineFixture 'Engine/Build') -Force
+    Assert-Equal (Get-DreamFXEngineInfo -EngineRoot $engineFixture).Version 'unknown' 'No Build.version is unknown'
+    Assert-Equal (Get-DreamFXEngineInfo -EngineRoot $engineFixture).Kind 'unknown' 'Neither marker is unknown'
+    Set-Content -LiteralPath (Join-Path $buildDir 'Build.version') -Value '{ "MajorVersion": 5, "MinorVersion": 8, "PatchVersion": 1, "Changelist": 0 }' -Encoding UTF8
+    Assert-Equal (Get-DreamFXEngineInfo -EngineRoot $engineFixture).Version '5.8.1' 'Version is read from Build.version'
+    $null = New-Item -ItemType Directory -Path (Join-Path $engineFixture 'Engine/Source/Runtime') -Force
+    Assert-Equal (Get-DreamFXEngineInfo -EngineRoot $engineFixture).Kind 'source' 'Engine sources without InstalledBuild.txt are a source build'
+    Set-Content -LiteralPath (Join-Path $buildDir 'InstalledBuild.txt') -Value 'x' -Encoding UTF8
+    Assert-Equal (Get-DreamFXEngineInfo -EngineRoot $engineFixture).Kind 'launcher' 'InstalledBuild.txt marks an installed engine'
+    Set-Content -LiteralPath (Join-Path $buildDir 'Build.version') -Value 'not json' -Encoding UTF8
+    Assert-Equal (Get-DreamFXEngineInfo -EngineRoot $engineFixture).Version 'unknown' 'A corrupt Build.version is not an error'
+    Assert-Equal (Get-DreamFXEngineInfo -EngineRoot (Join-Path $engineFixture 'gone')).Version 'unknown' 'A missing engine is not an error'
+    Assert-Equal (Get-DreamFXCommit -RepoRoot $engineFixture) 'unknown' 'A directory outside any repository has no commit'
+}
+finally {
+    Remove-Item -LiteralPath $engineFixture -Recurse -Force -ErrorAction SilentlyContinue
+}
+# A plugin unpacked inside some other repository must not report that repository's commit.
+Assert-Equal (Get-DreamFXCommit -RepoRoot (Join-Path $repo 'Tests')) 'unknown' 'A subdirectory of a repository has no commit of its own'
+$commit = Get-DreamFXCommit -RepoRoot $repo
+if ($commit -notmatch '^([0-9a-f]{7,} \(.+\)( dirty)?|unknown)$') { throw "Commit field : unexpected '$commit'" }
+$lines = @(Format-DreamFXEnvironment -Fields ([ordered]@{ 'plugin.version' = '1.0.0'; 'os' = '' }))
+Assert-Equal ($lines -join '|') 'DreamFX environment|plugin.version : 1.0.0|os             : unknown' 'Keys share one column and an empty value is unknown'
+
+$info = @(& pwsh -NoProfile -File (Join-Path $repo '.skill/dfx.ps1') info -Engine (Join-Path $repo 'no-such-engine') 2>&1 | ForEach-Object { "$_" })
+Assert-Equal $LASTEXITCODE 0 'info exits 0 when the engine cannot be found'
+Assert-Equal $info[0] 'DreamFX environment' 'info title'
+$keys = @($info | Select-Object -Skip 1 | ForEach-Object { ($_ -split ' : ', 2)[0].Trim() })
+Assert-Equal ($keys -join ',') 'plugin.version,plugin.commit,engine.version,engine.kind,os,locale,shell' 'info keys and their order'
+Assert-Equal ($info | Where-Object { $_ -match 'engine\.version' }) 'engine.version : unknown' 'An unresolved engine is unknown'
+if (@($info | Where-Object { $_ -match '[A-Za-z]:[\\/]|(^|\s)/[^\s]+/|Users[\\/]' }).Count -gt 0) {
+    throw "info printed a path: $($info -join ' | ')"
+}
+
 # Execute the actual driver's asset-report branch with controlled snapshots and
 # external commands. No fake .uasset files are created and Remove-Item is intercepted.
 $tokens = $null
@@ -113,4 +151,4 @@ foreach ($mode in @(' M Content/RegressionSentinel.uasset', 'error')) {
     . $reportBlock
     Assert-Equal $script:removed.Count 0 "Preserve tracked/unknown asset ($mode)"
 }
-Write-Output 'Driver regressions passed (exit verdicts, preservation, first-build cleanup, Git failure).'
+Write-Output 'Driver regressions passed (exit verdicts, preservation, first-build cleanup, Git failure, info).'

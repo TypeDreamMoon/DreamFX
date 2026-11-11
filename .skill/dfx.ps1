@@ -60,6 +60,11 @@
     Write the ORIGINAL's values into the export that names the mirror. -Asset is how the two are
     addressed at once: the export's Name= can only ever point at one of them, and a build must keep
     pointing at the mirror while pull reads the original the values were tuned in.
+
+.EXAMPLE
+    ./dfx.ps1 info
+    Print the plugin, engine and OS versions for a bug report. Starts nothing and prints no paths,
+    so the output can be pasted into a public issue as it is.
 #>
 [CmdletBinding()]
 param(
@@ -68,8 +73,9 @@ param(
     # schema — print one module's input signature
     # list   — print every module (or, with -DynamicInputs, every dynamic input) on the search paths
     # pull   — write the asset's stored values back into the literals a text already has
+    # info   — print the plugin, engine and OS versions for a bug report; launches nothing
     [Parameter(Mandatory, Position = 0)]
-    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'asset-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'index', 'corpus', 'pull')]
+    [ValidateSet('build', 'verify', 'lint', 'decompile', 'decompile-all', 'mirror-diff', 'asset-diff', 'coverage', 'rename', 'graph', 'schema', 'list', 'index', 'corpus', 'pull', 'info')]
     [string]$Command,
 
     # build/verify: path to a .dfs (absolute, or relative to the working directory).
@@ -261,6 +267,52 @@ function Resolve-EngineRoot {
     if ($launcher) { return $launcher }
 
     throw "EngineAssociation '$association' is not registered. Pass -Engine <root> or set UE_ENGINE_ROOT."
+}
+
+# ---------------------------------------------------------------- info
+#
+# Answered before the engine lookup below, which throws when it finds nothing: info has to work on a
+# machine where nothing resolves, because that is often the machine a bug report comes from. Every
+# field it cannot determine reads `unknown`. It writes to the output stream (not the host), so it can
+# be piped to Set-Clipboard, and it never prints a path.
+
+if ($Command -eq 'info') {
+    $pluginRoot = Split-Path -Parent $PSScriptRoot
+    $descriptor = Join-Path $pluginRoot 'DreamFX.uplugin'
+    $pluginVersion = 'unknown'
+    try {
+        $versionName = (Get-Content -LiteralPath $descriptor -Raw -Encoding UTF8 | ConvertFrom-Json).VersionName
+        if ($versionName) { $pluginVersion = $versionName }
+    }
+    catch {
+        $pluginVersion = 'unknown'
+    }
+
+    # Start at the plugin, so an installed copy finds the project it is installed in wherever the
+    # command is run from. A standalone checkout with no project above it has no engine to report.
+    $engineInfo = [pscustomobject]@{ Version = 'unknown'; Kind = 'unknown' }
+    try {
+        $infoProject = Resolve-Uproject -Explicit $Project -StartAt $pluginRoot
+        $engineInfo = Get-DreamFXEngineInfo -EngineRoot (Resolve-EngineRoot -Explicit $Engine -UprojectPath $infoProject)
+    }
+    catch {
+        # Not found or not registered: both fields stay unknown.
+    }
+
+    $edition = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
+    $locale = try { (Get-UICulture).Name } catch { '' }
+
+    $fields = [ordered]@{
+        'plugin.version' = $pluginVersion
+        'plugin.commit'  = Get-DreamFXCommit -RepoRoot $pluginRoot
+        'engine.version' = $engineInfo.Version
+        'engine.kind'    = $engineInfo.Kind
+        'os'             = Get-DreamFXOsName
+        'locale'         = $locale
+        'shell'          = "$edition $($PSVersionTable.PSVersion)"
+    }
+    Format-DreamFXEnvironment -Fields $fields | Write-Output
+    exit 0
 }
 
 $uproject = Resolve-Uproject -Explicit $Project -StartAt $Target

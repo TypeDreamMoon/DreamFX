@@ -54,3 +54,92 @@ function Get-DreamFXLauncherEngineRoot {
     }
     return $null
 }
+
+# ---------------------------------------------------------------- info
+#
+# `dfx.ps1 info` prints what a bug report needs. Everything is read from files and git; nothing is
+# launched, and no absolute path is ever returned, because the output is meant to be pasted into a
+# public issue.
+
+function Get-DreamFXEngineInfo {
+    # Version from Engine/Build/Build.version; kind from InstalledBuild.txt, which only installed
+    # (launcher) engines ship. A tree with engine sources and no such file is a source build.
+    param([string]$EngineRoot)
+
+    $version = 'unknown'
+    $kind = 'unknown'
+    if ($EngineRoot -and (Test-Path -LiteralPath $EngineRoot)) {
+        $buildVersion = Join-Path $EngineRoot 'Engine/Build/Build.version'
+        if (Test-Path -LiteralPath $buildVersion) {
+            try {
+                $build = Get-Content -LiteralPath $buildVersion -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($null -ne $build.MajorVersion -and $null -ne $build.MinorVersion) {
+                    $version = '{0}.{1}.{2}' -f [int]$build.MajorVersion, [int]$build.MinorVersion, [int]$build.PatchVersion
+                }
+            }
+            catch {
+                $version = 'unknown'
+            }
+        }
+        if (Test-Path -LiteralPath (Join-Path $EngineRoot 'Engine/Build/InstalledBuild.txt')) { $kind = 'launcher' }
+        elseif (Test-Path -LiteralPath (Join-Path $EngineRoot 'Engine/Source/Runtime')) { $kind = 'source' }
+    }
+    [pscustomobject]@{ Version = $version; Kind = $kind }
+}
+
+function Get-DreamFXCommit {
+    # "<short hash> (<branch>)[ dirty]" for the repository whose top level is $RepoRoot, else unknown.
+    # A plugin unpacked from a zip into a project that is itself a repository sits below that
+    # repository's top level; reporting the project's commit there would be wrong, so it is unknown.
+    param([string]$RepoRoot)
+
+    if (-not $RepoRoot -or -not (Get-Command git -ErrorAction SilentlyContinue)) { return 'unknown' }
+    try {
+        $prefix = & git -C $RepoRoot rev-parse --show-prefix 2>$null
+        if ($LASTEXITCODE -ne 0 -or $prefix) { return 'unknown' }
+        $hash = & git -C $RepoRoot rev-parse --short HEAD 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $hash) { return 'unknown' }
+        $branch = & git -C $RepoRoot rev-parse --abbrev-ref HEAD 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = 'unknown' }
+        elseif ($branch -eq 'HEAD') { $branch = 'detached' }
+        $dirty = & git -C $RepoRoot status --porcelain --untracked-files=no 2>$null
+        $suffix = if ($LASTEXITCODE -eq 0 -and $dirty) { ' dirty' } else { '' }
+        return "$hash ($branch)$suffix"
+    }
+    catch {
+        return 'unknown'
+    }
+}
+
+function Get-DreamFXOsName {
+    try {
+        if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            $current = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+            $build = [int]$current.CurrentBuild
+            # ProductName still says "Windows 10" on Windows 11; the build number is what tells them apart.
+            $name = if ($build -ge 22000) { 'Windows 11' } else { 'Windows 10' }
+            $text = "$name $($current.EditionID) 10.0.$build"
+            if ($null -ne $current.UBR) { $text += ".$($current.UBR)" }
+            if ($current.DisplayVersion) { $text += " ($($current.DisplayVersion))" }
+            return $text
+        }
+        $description = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
+        if ($description) { return $description.Trim() }
+    }
+    catch {
+    }
+    return 'unknown'
+}
+
+function Format-DreamFXEnvironment {
+    # One "key : value" line per field, keys padded to one column, in the order given.
+    param([System.Collections.Specialized.OrderedDictionary]$Fields, [string]$Title = 'DreamFX environment')
+
+    $width = ($Fields.Keys | ForEach-Object { $_.Length } | Measure-Object -Maximum).Maximum
+    $lines = @($Title)
+    foreach ($key in $Fields.Keys) {
+        $value = if ([string]::IsNullOrWhiteSpace([string]$Fields[$key])) { 'unknown' } else { [string]$Fields[$key] }
+        $lines += ('{0} : {1}' -f $key.PadRight($width), $value)
+    }
+    return $lines
+}
