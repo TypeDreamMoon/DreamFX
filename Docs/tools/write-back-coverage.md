@@ -38,7 +38,7 @@
 ## 1. Coverage check (`coverage`)
 
 ```powershell
-pwsh -File .skill/dfx.ps1 coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine D:\UnrealEngine-5.8.2
+pwsh -File .skill/dfx.ps1 coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine <EngineDir>
 ```
 
 **59 systems scanned, 59 exported, zero failed.** Reported gaps: six assets, 17 occurrences.
@@ -74,8 +74,8 @@ Three qualifications affect the conclusion:
 ## 2. Decompilation evidence
 
 ```powershell
-pwsh -File .skill/dfx.ps1 decompile-all -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine D:\UnrealEngine-5.8.2
-# 59 written, 0 failed, under C:\CrossingVoid\DFX\Decompiled\**
+pwsh -File .skill/dfx.ps1 decompile-all -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine <EngineDir>
+# 59 written, 0 failed, under <ProjectDir>\DFX\Decompiled\**
 ```
 
 Static inventory of 59 `.dfs` exports; counts are **matching lines / matching files**:
@@ -788,25 +788,25 @@ newer value** without touching the file.
 
 ### Environment
 
-- Project `C:\CrossingVoid`; engine `D:\UnrealEngine-5.8.2` with the DreamFX engine patch.
-- Plugin `C:\CrossingVoid\Plugins\DreamFX` at `359b3b3`, branch `pr/engine-patch-and-writeback`.
+- Project `<ProjectDir>`; engine `<EngineDir>` (5.8.2) with the DreamFX engine patch.
+- Plugin `<ProjectDir>\Plugins\DreamFX` at `359b3b3`, branch `pr/engine-patch-and-writeback`.
 - **Ensure no UnrealEditor is running before reproducing.** None was running at the start of this study.
 
 ### Commands, in execution order
 
 ```powershell
-$dfx = 'C:\CrossingVoid\Plugins\DreamFX\.skill\dfx.ps1'
-$eng = 'D:\UnrealEngine-5.8.2'
+$dfx = '<ProjectDir>\Plugins\DreamFX\.skill\dfx.ps1'
+$eng = '<EngineDir>'
 
 # 1) Coverage: 59 systems, 59 exports, 0 failures, 17 gaps.
 pwsh -File $dfx coverage -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine $eng
 
-# 2) Full export: 59 written, 0 failed, to C:\CrossingVoid\DFX\Decompiled\**.
+# 2) Full export: 59 written, 0 failed, to <ProjectDir>\DFX\Decompiled\**.
 pwsh -File $dfx decompile-all -Path '/AtlasFX+/Game/GameActor2D+/Game/AssetMaterial' -Engine $eng
 
 # 3) Fixed-point sample: one build per source; write only Decompiled/ mirrors, never originals.
 #    See Saved\dfx-writeback-study\run-builds.ps1.
-pwsh -File C:\CrossingVoid\Saved\dfx-writeback-study\run-builds.ps1
+pwsh -File <ProjectDir>\Saved\dfx-writeback-study\run-builds.ps1
 #    S1 NS_Atlas2D_Mesh OK; S2 NS_Effects1_Mesh OK; S3 TR刀光_System OK;
 #    S4 NS_ScanScene failed with 21 errors; S5 破空灰尘 OK.
 
@@ -824,10 +824,10 @@ pwsh -File $dfx decompile /Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh
 
 | Content | Location |
 |---|---|
-| Exports, project-side, ignored via `DFX/Decompiled/` | `C:\CrossingVoid\DFX\Decompiled\**`, 59 `.dfs` files |
-| Export copies and complete raw output | `C:\CrossingVoid\Saved\dfx-writeback-study\`: `decompiled\`, `raw-*.txt`, `build-S*.txt` |
-| Original/mirror fact files, five pairs | `C:\CrossingVoid\Saved\DreamFX\*.{original,mirror}.facts` |
-| Ignored mirror assets | `C:\CrossingVoid\Content\Decompiled\**`, `C:\CrossingVoid\Plugins\AtlasFX\Content\Decompiled\**` |
+| Exports, project-side, ignored via `DFX/Decompiled/` | `<ProjectDir>\DFX\Decompiled\**`, 59 `.dfs` files |
+| Export copies and complete raw output | `<ProjectDir>\Saved\dfx-writeback-study\`: `decompiled\`, `raw-*.txt`, `build-S*.txt` |
+| Original/mirror fact files, five pairs | `<ProjectDir>\Saved\DreamFX\*.{original,mirror}.facts` |
+| Ignored mirror assets | `<ProjectDir>\Content\Decompiled\**`, `<ProjectDir>\Plugins\AtlasFX\Content\Decompiled\**` |
 | `-NoDefaults` comparison exports | `Saved\dfx-writeback-study\NS_Effects1_Mesh.NoDefaults.dfs`, `NS_Atlas2D_Mesh.NoDefaults.dfs` |
 
 ### Change audit for the original study
@@ -839,4 +839,4 @@ pwsh -File $dfx decompile /Game/GameActor2D/Misaka/Material/Sk1/NS_Effects1_Mesh
   files (mtime 17:47) and `Content/GameActor2D/Misaka/Material/DefAtk/FX_Defatk.uasset`
   (mtime 18:07), preceding the study's 20:20 start. These were pre-existing changes.
 - The plugin's `git status` was clean before this report was written.
-- `D:\UnrealEngine-5.8.2` was unchanged.
+- `<EngineDir>` was unchanged.

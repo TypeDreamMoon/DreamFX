@@ -74,11 +74,11 @@ to do). The script is the DreamGUI host's script with the names changed; see Dre
 ## Building and running
 
 ```powershell
-$Engine = 'F:\UnrealEngine\UE_Moon'
-$Proj   = 'I:\UnrealProject_Moon\DEV_58\DreamFXTestHost\DreamFXTestHost.uproject'
+$Engine = '<EngineDir>'
+$Proj   = '<HostDir>\DreamFXTestHost.uproject'
 
 & "$Engine\Engine\Build\BatchFiles\Build.bat" DreamFXTestHostEditor Win64 Development "-Project=$Proj" -WaitMutex -NoHotReloadFromIDE -NoEngineChanges
-pwsh -NoProfile -File I:\UnrealProject_Moon\DEV_58\DreamFXTestHost\Plugins\DreamFX\.skill\ci.ps1 -Project $Proj
+pwsh -NoProfile -File <HostDir>\Plugins\DreamFX\.skill\ci.ps1 -Project $Proj
 ```
 
 Every `.skill/dfx.ps1` command takes `-Project` the same way (and finds the host by itself when it is run
@@ -106,8 +106,8 @@ modules, if the engine is out of date; build the engine first in that case. Neve
 ## Trying a pull request
 
 ```powershell
-$Repo = 'I:\UnrealProject_Moon\DEV_58\DevTest\Plugins\DreamFX'
-$Wt   = 'I:\UnrealProject_Moon\DEV_58\DreamFXTestHost\Plugins\DreamFX'
+$Repo = '<RepoPath>'                   # any working tree of the repository
+$Wt   = '<HostDir>\Plugins\DreamFX'
 
 git -C $Repo fetch origin pull/<N>/head:refs/remotes/pr/<N>
 git -C $Wt switch --detach pr/<N>
