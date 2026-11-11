@@ -82,6 +82,7 @@ editor has open. Large sources are slow for a structural reason, not a fixable o
 | `rename <asset>:<old>:<new>` | rename an emitter safely — see below |
 | `schema <Module>` | print a module's real input signature; `-Stack` picks the stack |
 | `list` | every module the search paths expose; `-DynamicInputs` for dynamic inputs |
+| `info` | plugin, engine and OS versions for a bug report; starts nothing, prints no paths |
 
 ## The CI gate
 

@@ -171,7 +171,7 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 | :-- | :-- |
 | **编辑器集成** | *Tools* 菜单、Content Browser 右键(build / 反编译 / Adopt / 导出 `.dfe`)、Niagara 编辑器工具栏、关卡工具栏——全走同一条管线,`-NoDreamFXEditor` 一键关闭 |
 | **file watcher** | 存盘即重建,且是[增量](Docs/tools/incremental-builds.md)的,只写差异;打开生成资产即实时预览 |
-| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus` |
+| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus · info` |
 | **`ci.ps1`** | lint → build → verify → corpus 一条命令,关编辑器跑 |
 | **溯源戳** | 每个生成资产带源 hash + 生成器版本 + 模块版本 GUID;`verify` 报手改、过期、版本漂移三种 |
 

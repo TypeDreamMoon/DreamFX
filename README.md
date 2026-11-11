@@ -182,7 +182,7 @@ the documentation site publishes generated English pages and reviewed Chinese tr
 | :-- | :-- |
 | **Editor integration** | *Tools* menu, Content Browser right-click (build / decompile / Adopt / export `.dfe`), Niagara editor toolbar, level toolbar — all on the same pipeline, `-NoDreamFXEditor` turns it off |
 | **File watcher** | save the source, the asset rebuilds — [incrementally](Docs/tools/incremental-builds.md), writing only the difference; open the generated asset for a live preview |
-| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus` |
+| **`dfx.ps1`** | `build · verify · lint · decompile · decompile-all · mirror-diff · asset-diff · coverage · rename · schema · list · corpus · info` |
 | **`ci.ps1`** | lint → build → verify → corpus, one command, editor closed |
 | **Provenance stamps** | source hash + generator version + module version GUIDs on every generated asset; `verify` reports edited-by-hand, stale, and version-drifted assets |
 

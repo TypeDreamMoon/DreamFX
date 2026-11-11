@@ -20,6 +20,7 @@
 - **原版预编译 UE 5.8 上完整重建提速**：构建期间让系统保持「有待发编译请求」，引擎在构建自己的那次编译之前不再发起任何编译（原先每次编辑都重新发起，`NS_Magic_Explosion` 一次构建数百次）；写静态开关后只刷新该模块，不再重建整个编辑上下文；一批模块添加只在栈末刷新一次；清空栈改为一次从图上切掉（系统栈与模拟阶段/事件栈仍逐个移除）；改版本、改名、启用/禁用模块尽量保留编辑上下文，模块探测每次只建一个上下文。`NS_Magic_Explosion` 无头完整重建 110 秒 → 约 32 秒（含引擎启动），系统视图模型构建 412 → 163 次。`-RebuildOnSwitch`、`-RebuildPerAdd`、`-ClearPerModule`（`dfx.ps1 build` 同名开关）分别恢复旧行为。
 - 规划阶段每个进程复用同一个模块库：构建所需的模块探测在一次编辑器会话 / 一次 commandlet 运行里只做一次，不再每次构建都做。
 - `dfx.ps1 pull <源码>`：把资产中实际存储的值写回文本已声明的字面量（默认试运行，`-Apply` 写入，`-Structure` 写回可唯一定位的结构差异，`-Asset` 指定读取的资产）。只改动值所占的字符，保留注释、换行和文件编码；写前备份到 `Saved/DreamFX/Pull/`（`DFX7106`–`DFX7116`）（[#48](https://github.com/TypeDreamMoon/DreamFX/pull/48)）。
+- `dfx.ps1 info`：打印提交问题要用的环境信息（插件版本与提交、关联引擎的版本与类型、系统、界面语言、PowerShell 版本），每项一行 `键 : 值`，可直接贴进 issue。不启动引擎、不打印任何路径；读不到的项写 `unknown`，找不到工程或引擎时照常退出 0。
 - **在编辑器里写回源码**：Niagara 系统的右键菜单和 Niagara 编辑器工具栏的 DreamFX 菜单新增 *Write Back to Source*，把编辑器里调过的值（含未保存的）用 `pull` 写回它的 `.dfs`，注释和排版不动；结构差异按设置 *Pull Structural Edits*（`bPullStructuralEdits`，默认关）决定写入还是只报告。*Pull on Asset Save*（`bPullOnAssetSave`，默认关）在每次保存生成的系统资产时自动写回；DreamFX 自己的构建、Adopt、自动保存、Cook 和 PIE 中的保存不会触发。编辑器写回的文件不会被源码监视器当成改动再重建一次（按写入内容的哈希识别，之后再改照常重建）。
 - **Bridge `pull` 动作**：VS Code 扩展可以把当前缓冲区（可以未保存）发给编辑器，拿回写回后的文本自己应用；带文本时编辑器从不写文件，`apply` 只记录基线。命令行与编辑器共用同一份基线。详见 `Docs/tools/pull.md` §4e。
 - 系统 `Settings` 新增 `UseFixedBounds`（`bFixedBounds`）：声明 `FixedBounds` 时默认开启，可显式写 `false` 保留不生效的包围盒；反编译在需要时写出该项，往返保持一致。
