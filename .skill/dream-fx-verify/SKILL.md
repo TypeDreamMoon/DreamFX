@@ -53,7 +53,8 @@ built. Batch edits rather than looping per file.
 Close the editor before a build. Both processes write the same packages otherwise, and the one that
 saves second wins silently; the run warns when it sees an editor but cannot tell which project that
 editor has open. Large sources are slow for a structural reason, not a fixable one —
-[Docs/performance-2026-08-08.md](../../Docs/performance-2026-08-08.md) has the measurements.
+[Docs/generation/pipeline.md](../../Docs/generation/pipeline.md#performance-why-a-full-tree-build-is-not-linear)
+has the measurements.
 
 | Argument | Effect |
 | :-- | :-- |
