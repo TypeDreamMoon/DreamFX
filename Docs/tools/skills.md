@@ -15,6 +15,26 @@ headlessly.
 | `dream-fx-diagnose` | Takes a `DFXnnnn`, looks up the cause, explains it, fixes the source |
 | `dream-fx-decompile` | Exports an existing Niagara system to source, or answers "how much of this project's VFX is expressible" |
 
+Point any agent at [`AGENTS.md`](https://github.com/TypeDreamMoon/DreamFX/blob/main/AGENTS.md) in the
+repository root first. It is plain Markdown, so it works with any tool: the authoring loop, the
+commands, and the rules an agent breaks most often, plus a second section for changing the plugin.
+
+## Give the guide to the agent in your project
+
+An agent reads the instruction file at the root of the folder it works in. In a game project that is
+the project root, not `Plugins/DreamFX/`, so it does not find the plugin's `AGENTS.md` by itself.
+Add this line to your project's instruction file (for example `AGENTS.md` at the project root):
+
+```text
+Before writing or fixing any DreamFX source, read Plugins/DreamFX/AGENTS.md and follow its Authoring section.
+```
+
+In Claude Code you can import the file instead. Add this line to the project's `CLAUDE.md`:
+
+```text
+@Plugins/DreamFX/AGENTS.md
+```
+
 ## The step everyone skips
 
 `dream-fx-create` is a five-step loop, and step 2 is the one that matters:
@@ -54,6 +74,21 @@ The skills are plain text plus `dfx.ps1`, with no other dependency. To use them 
 2. make the engine resolvable (`UE_ENGINE_ROOT` or a registered `EngineAssociation`);
 3. **package-writing commands need the editor closed** — make sure the agent knows;
 4. drop the four `SKILL.md` files from `.skill/` into your agent's skills directory.
+
+For Claude Code, `pwsh -File Plugins/DreamFX/.skill/sync-skills.ps1` copies them into the project's
+`.claude/skills/` and fixes their links; `-Check` reports a stale copy.
+
+## When the agent gets it wrong
+
+If an agent wrote source that does not build, looks wrong, or uses modules or syntax that do not
+exist, open an issue with the **AI wrote it wrong** form. It asks for the prompt, the source, and the
+output of:
+
+```powershell
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 info
+```
+
+That prints the plugin, engine and OS versions without starting the engine or printing any path.
 
 ## Why this language suits agents
 
