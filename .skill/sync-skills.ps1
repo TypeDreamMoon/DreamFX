@@ -26,7 +26,7 @@
     Report whether the published copy is stale. Exit 1 if it is.
 
 .EXAMPLE
-    ./sync-skills.ps1 -Target I:/Other/Project/.claude/skills
+    ./sync-skills.ps1 -Target ../OtherProject/.claude/skills
 #>
 [CmdletBinding()]
 param(

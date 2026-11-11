@@ -115,7 +115,7 @@ existing handle.
 ## What you get back
 
 ```text
-dfx: build  project=DevTest.uproject  engine=F:\UnrealEngine\UE_Moon
+dfx: build  project=DevTest.uproject  engine=<EngineDir>
 === DreamFX build: 1 source file(s) ===
 === DreamFX done: 1 built, 0 up to date, 0 failed | 0 error(s), 0 warning(s) ===
 
