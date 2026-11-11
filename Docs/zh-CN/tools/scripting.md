@@ -18,7 +18,7 @@ lib.export_system(unreal.load_asset("/Game/FX/NS_Spark"))
 lib.adopt_system(unreal.load_asset("/Game/FX/NS_Spark"), True)   # True = skip the confirmation
 ```
 
-> **提示：**
+> **注意：**
 >
 > **一个只有人手能点到的命令，是永远得不到回归测试的命令。** Slate 条目没法从脚本里调用，所以每条命令都有一个可调用的入口 —— 这不是顺手加的便利，是让菜单这一层能被自动验证的前提。
 
