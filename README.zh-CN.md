@@ -180,6 +180,14 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
 插件自带四个 agent 技能([`.skill/`](.skill/)):`dream-fx-create` / `dream-fx-verify` /
 `dream-fx-diagnose` / `dream-fx-decompile`——编码代理可以全程 headless 地创作、构建、排错、迁移特效。
 
+## 参与贡献
+
+欢迎报告问题、提案、修文档和提 PR，先读 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)。
+报 bug 请用 [Issue 表单](https://github.com/TypeDreamMoon/DreamFX/issues/new/choose)，并附上
+`pwsh -File Plugins/DreamFX/.skill/dfx.ps1 info` 的输出；提问请去
+[Discussions](https://github.com/TypeDreamMoon/DreamFX/discussions)。
+用编程 agent？先让它读 [AGENTS.md](AGENTS.md)。
+
 ## 运行环境要求与能力边界
 
 - **引擎**:Unreal Engine 5.8(源码构建与预编译安装版均支持,发布轮双引擎验证)。依赖引擎的

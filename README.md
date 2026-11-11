@@ -192,6 +192,14 @@ Four agent skills ship with the plugin under [`.skill/`](.skill/): `dream-fx-cre
 `dream-fx-verify`, `dream-fx-diagnose`, `dream-fx-decompile` — a coding agent can author, build,
 debug and migrate effects headlessly.
 
+## Contributing
+
+Bug reports, proposals, docs fixes and pull requests are welcome; start with [CONTRIBUTING.md](CONTRIBUTING.md).
+Report bugs through the [issue forms](https://github.com/TypeDreamMoon/DreamFX/issues/new/choose) with the
+output of `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 info`; ask questions in
+[Discussions](https://github.com/TypeDreamMoon/DreamFX/discussions).
+Using a coding agent? Point it at [AGENTS.md](AGENTS.md) first.
+
 ## Requirements and boundaries
 
 - **Engine**: Unreal Engine 5.8 (source builds and the installed/stock engine are both supported and
