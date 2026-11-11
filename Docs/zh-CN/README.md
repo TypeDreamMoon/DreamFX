@@ -61,6 +61,13 @@
 - [限制与已知问题](diagnostics/limitations.md)。
 - [发布概览](changelog/index.md)和[插件更新日志](../../CHANGELOG.md)。
 
+<a id="contributing"></a>
+
+## 参与贡献
+
+- [参与贡献概览](contributing/index.md)：仓库布局、模块、测试宿主、门禁、生成文件、文档与发布。
+- [如何报告并提交更改](../../CONTRIBUTING.md)，以及[代理指南](../../AGENTS.md)。
+
 <a id="maintenance"></a>
 
 ## 维护

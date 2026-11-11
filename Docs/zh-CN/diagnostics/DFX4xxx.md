@@ -97,7 +97,7 @@ Input '%s' has no resolvable Niagara type.
 Property '%s': component %d is not a number.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1383`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1706`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:377`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:404`、`Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:678`、`Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:791`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1388`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1711`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:377`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:404`、`Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:678`、`Source/DreamFXEditor/Private/Generation/DreamFXValueLowering.cpp:791`
 <!-- generated:end DFX4005 -->
 
 **原因。** 向量或 `box()` 的某个分量不是数字。
@@ -157,7 +157,7 @@ Input '%s' expects %s. '%s' is neither a literal of that type nor a parameter re
 Input '%s' is set more than once on dynamic input '%s'.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1293`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1696`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1298`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1701`
 <!-- generated:end DFX4010 -->
 
 **原因。** 同一次 dynamic input 调用里，同一个输入被给了两次。
@@ -237,7 +237,7 @@ Cannot infer the type of '%s' from its value. A first assignment to a new attrib
 Property '%s': box() takes 6 numbers -- minX, minY, minZ, maxX, maxY, maxZ.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:620`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:632`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:625`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:637`
 <!-- generated:end DFX4023 -->
 
 **原因。** `box()` 是 minX、minY、minZ、maxX、maxY、maxZ。
@@ -257,7 +257,7 @@ Property '%s': box() takes 6 numbers -- minX, minY, minZ, maxX, maxY, maxZ.
 Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Properties, or assign a literal first so the type is explicit.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:988`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:993`
 <!-- generated:end DFX4024 -->
 
 **原因。** 右边引用了一个此处还不知道类型的参数。
@@ -277,7 +277,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 '%s' is not a valid assignment target. Parameter names are namespace-qualified, e.g. Particles.MyValue or Emitter.MyCounter.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1374`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2357`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1379`、`Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2362`
 <!-- generated:end DFX4025 -->
 
 **原因。** 不带命名空间的赋值目标没有落脚的地方，而猜一个出来会把值放到一个从没被点名的位置。
@@ -297,7 +297,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 'Bind %s -> %s': the target must be a qualified parameter -- either a namespace such as Particles.SpriteSize, or an emitter's own alias such as MyEmitter.Velocity.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1762`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1767`
 <!-- generated:end DFX4026 -->
 
 **原因。** renderer 绑定的目标是一个参数，不是一个裸名字。
@@ -317,7 +317,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 '%s' is %s, but '%s' is %s. Linking binds a parameter directly -- there is no conversion. Declare '%s' as %s, or drive the input another way.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1035`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:1040`
 <!-- generated:end DFX4027 -->
 
 **原因。** 跨链接的 L7。链接是直接绑定参数 —— 中间没有可以截断或加宽的转换步骤 —— 所以两边类型必须严格一致。
@@ -337,7 +337,7 @@ Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Propert
 Default for '%s' needs a declared type. A default has no module signature to infer one from, so write it: `float %s = …`.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2365`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2370`
 <!-- generated:end DFX4028 -->
 
 **原因。** 一条 `Defaults` 条目没写类型。在别处类型可以来自值、或来自输入所属的模块签名；而默认值不属于任何模块，它的值又可能是 `hlsl` 块或链接，于是没有可推断的来源。
@@ -357,7 +357,7 @@ Default for '%s' needs a declared type. A default has no module signature to inf
 Default for '%s' must be a literal, an enum or another parameter. A dynamic input computes a value per particle, which a default cannot do.
 ```
 
-**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2411`
+**触发位置** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:2416`
 <!-- generated:end DFX4029 -->
 
 **原因。** 一条 `Defaults` 条目被喂了 dynamic input。默认值是存在参数上的**一个**值，而 dynamic input 是一张逐粒子运行的图 —— 没有地方运行它。
