@@ -83,6 +83,9 @@
   形参。GPU 两种写法都过;按未初始化写,一份 Body 两端通。见 `Docs/language/dfm.md`。
   首个外部插件 DI(DreamWind 的 `UNiagaraDataInterfaceDreamWind`)经 `DI<DreamWind>` 反射解析、
   模块输入接线、`.dfs` 里 `User.Wind` 传参全线打通,无需 DreamFX 改动。
+- `dream-fx-verify` 技能删掉「连上 `dream` MCP 服务时优先用它」一节:那一节指向的工具
+  (`dream_build`、`dream_verify`、`dream_schema` 等)已不存在,构建、校验和查模块签名一律走 `dfx.ps1`。
+  已经用 `sync-skills.ps1` 发布过技能的工程,重新发布一次(`-Check` 会报出副本过期)。
 
 ## 1.0.0 — 2026-08-13
 
