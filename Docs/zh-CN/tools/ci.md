@@ -68,6 +68,12 @@ pwsh -File Plugins/DreamFX/.skill/gen-diagnostics.ps1 -Check
 >
 > 这样拆分的理由很直接：**会腐烂的那一半（存在哪些代码、它们说什么）是重新生成的，而不会腐烂的那一半（为什么发生）只写一次。**
 
+```bash
+pwsh -File Plugins/DreamFX/.skill/gen-knowledge.ps1 -Check
+```
+
+另外两个文件由这些页面以及速查表的源生成，`.skill/cheatsheet/cheatsheet.src.md`：`Docs/diagnostics/codes.json`，将每个代码作为数据供工具和代理使用；还有 `Docs/cheatsheet.md` 及其示例 `DFX/CheatSheet/NS_CheatSheetSparks.dfs`，随后由 `lint`、`build` 和 `verify` 步骤像任何其他源一样构建。任一文件过期时，`-Check` 就会失败。这两项检查都不需要引擎；仓库自身的 CI 会在每个拉取请求上运行它们。
+
 <a id="a-minimal-pipeline"></a>
 
 ## 一条最小流水线
@@ -76,6 +82,7 @@ pwsh -File Plugins/DreamFX/.skill/gen-diagnostics.ps1 -Check
 # Sketch: any CI is these four steps plus the docs gate
 steps:
   - run: pwsh -File Plugins/DreamFX/.skill/gen-diagnostics.ps1 -Check
+  - run: pwsh -File Plugins/DreamFX/.skill/gen-knowledge.ps1 -Check
   - run: pwsh -File Plugins/DreamFX/.skill/ci.ps1
 ```
 
