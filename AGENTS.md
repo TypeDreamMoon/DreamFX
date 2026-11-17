@@ -16,7 +16,8 @@ Do not guess syntax from HLSL, C++ or other Niagara tools. Do not copy from `Tes
 parser and generator test cases, and some are wrong on purpose.
 Commands below run from the game project root; the plugin sits at `Plugins/DreamFX/`.
 
-1. Read: `Plugins/DreamFX/Docs/getting-started/quickstart.md` and `Plugins/DreamFX/Docs/language/README.md`.
+1. Read: `Plugins/DreamFX/Docs/cheatsheet.md` (the language on one page) first, then
+   `Plugins/DreamFX/Docs/getting-started/quickstart.md` and `Plugins/DreamFX/Docs/language/README.md`.
 2. Look up what exists. **Do this before writing any module call.** Module input names come from real
    assets (spaces, switch-revealed inputs, per-stack inputs). Nobody can guess them.
    - List modules: `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 list`
@@ -27,7 +28,8 @@ Commands below run from the game project root; the plugin sits at `Plugins/Dream
 4. Build it (editor closed): `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Spark.dfs -Force`
    For a quick check with no asset access first: `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 lint DFX/Effects/NS_Spark.dfs`
 5. Read the diagnostics. Each has a code `DFXnnnn`, a line and a column. Look the code up in
-   `Plugins/DreamFX/Docs/diagnostics/README.md`. Fix, and repeat until the run ends with `dfx: OK (exit 0)`.
+   `Plugins/DreamFX/Docs/diagnostics/codes.json` (or `README.md` beside it). Fix, and repeat until the run
+   ends with `dfx: OK (exit 0)`.
 
 ### Skills
 
@@ -96,7 +98,9 @@ Checks that need no engine: `pwsh -NoProfile -File Tests/Tools/Test-Driver.ps1` 
 
 - Diagnostic pages are half generated. After adding or changing a `DFXnnnn`, run
   `pwsh -NoProfile -File .skill/gen-diagnostics.ps1` and commit the result. Write only the Cause and Fix
-  text, never between the `generated:begin` / `generated:end` markers.
+  text, never between the `generated:begin` / `generated:end` markers. Then run
+  `pwsh -NoProfile -File .skill/gen-knowledge.ps1`: it writes `Docs/diagnostics/codes.json`, and
+  `Docs/cheatsheet.md` with its built example `DFX/CheatSheet/` from `.skill/cheatsheet/`. CI runs both with `-Check`.
 - If the emitted asset shape changes, bump the generator version in `FProvenance::GetGeneratorVersion`
   (`Source/DreamFXEditor/Private/Generation/DreamFXProvenance.cpp`) and say so in `CHANGELOG.md`.
 - Released engine: Unreal Engine 5.8, source build and installed build, from one source tree. Do not split
