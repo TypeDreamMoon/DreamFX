@@ -51,7 +51,16 @@ $ranges = [ordered]@{
 
 $found = @{}
 
-foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -Filter '*.cpp' -File -Recurse) {
+# Sorted by path, ordinally and ignoring case: the first site of a code supplies its severity and message,
+# and Linux, where CI runs this, lists a directory in no particular order.
+$sourceFiles = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+foreach ($item in Get-ChildItem -LiteralPath $sourceRoot -Filter '*.cpp' -File -Recurse) { $sourceFiles.Add($item) }
+$sourceFiles.Sort([System.Comparison[System.IO.FileInfo]] {
+    param($left, $right)
+    [string]::CompareOrdinal($left.FullName.ToUpperInvariant().Replace('\', '/'), $right.FullName.ToUpperInvariant().Replace('\', '/'))
+})
+
+foreach ($file in $sourceFiles) {
     $text = [System.IO.File]::ReadAllText($file.FullName)
 
     # The message is whatever TEXT("...") comes first after the code -- either the message itself or
