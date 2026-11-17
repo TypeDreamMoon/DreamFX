@@ -69,6 +69,9 @@ Reports/
 # Rebuild them with: pwsh -File .skill/dfx.ps1 build -All -Force
 Content/Samples/
 
+# Built from DFX/CheatSheet/, the cheat sheet's example, by the same rule.
+Content/CheatSheet/
+
 # Assets the corpus suites build from Tests/Corpus fixtures. Recreated by every `dfx corpus` run.
 Content/Corpus/
 

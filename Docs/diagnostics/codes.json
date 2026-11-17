@@ -1,0 +1,1725 @@
+{
+  "schema": 1,
+  "plugin": "DreamFX",
+  "prefix": "DFX",
+  "description": "Every DFX diagnostic DreamFX can report. title is the message as printed, with %s / {0} where the source fills in a value; meaning and fix are the Cause and Fix of the code's documentation page; doc is that page on the documentation site.",
+  "generatedBy": ".skill/gen-knowledge.ps1 from Docs/diagnostics/DFX?xxx.md",
+  "stages": [
+    {
+      "range": "DFX1xxx",
+      "title": "Driver and file I/O",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx1xxx/"
+    },
+    {
+      "range": "DFX2xxx",
+      "title": "Lexer and syntax",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/"
+    },
+    {
+      "range": "DFX3xxx",
+      "title": "Declarations and document structure",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/"
+    },
+    {
+      "range": "DFX4xxx",
+      "title": "Values, types and expressions",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/"
+    },
+    {
+      "range": "DFX5xxx",
+      "title": "Generation and asset writing",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/"
+    },
+    {
+      "range": "DFX6xxx",
+      "title": "Niagara compilation",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/"
+    },
+    {
+      "range": "DFX7xxx",
+      "title": "Provenance, drift and lint",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/"
+    },
+    {
+      "range": "DFX8xxx",
+      "title": "Decompiler",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/"
+    }
+  ],
+  "codes": [
+    {
+      "code": "DFX1000",
+      "severity": "error",
+      "stage": "Driver and file I/O",
+      "title": "Could not read source file '%s'.",
+      "meaning": "The path does not exist, or the process cannot read it. A `from` reference and a `-File=` argument both land here.",
+      "fix": "Check the path. Relative `from` paths resolve against the referencing file first, then against every DFX root.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx1xxx/#dfx1000"
+    },
+    {
+      "code": "DFX1001",
+      "severity": "error",
+      "stage": "Driver and file I/O",
+      "title": "Unterminated string literal.",
+      "meaning": "A quoted string ran to the end of the line without a closing quote.",
+      "fix": "Close the quote. DreamFX strings do not span lines.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx1xxx/#dfx1001"
+    },
+    {
+      "code": "DFX1002",
+      "severity": "error",
+      "stage": "Driver and file I/O",
+      "title": "Unterminated block comment.",
+      "meaning": "A `/*` was never closed.",
+      "fix": "Add the `*/`. The reported position is where the comment started, not where the file ended.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx1xxx/#dfx1002"
+    },
+    {
+      "code": "DFX1003",
+      "severity": "error",
+      "stage": "Driver and file I/O",
+      "title": "Unexpected character '%c' (U+%04X).",
+      "meaning": "A character that is not part of the language appeared outside a string, comment or raw block. Smart quotes pasted from a document are the usual cause.",
+      "fix": "Delete it. The code point is printed so a look-alike character is identifiable.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx1xxx/#dfx1003"
+    },
+    {
+      "code": "DFX1004",
+      "severity": "error",
+      "stage": "Driver and file I/O",
+      "title": "Unterminated raw block: missing '}'.",
+      "meaning": "A raw block -- `hlsl { }`, `Body = { }` -- was opened and never closed. Raw blocks are brace-balanced, so an unbalanced brace *inside* the HLSL runs the block to end of file.",
+      "fix": "Balance the braces inside the block.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx1xxx/#dfx1004"
+    },
+    {
+      "code": "DFX1005",
+      "severity": "error",
+      "stage": "Driver and file I/O",
+      "title": "Unterminated back-quoted name. A `name` must close on the same line.",
+      "meaning": "A back-quote opened a name that never closed before the end of the line, or closed immediately with nothing between the quotes.\n\nA back-quoted name is how the language holds a Niagara name it could not otherwise spell — `` `PillarPower(0~1)` ``, `` `Ring/DiscDistributionMode` ``. Names never span lines, so a missing closing quote is reported at the end of the line rather than swallowing the rest of the file.",
+      "fix": "Close the quote. If the name itself contains a back-quote there is no way to write it: the escape would need an escape, and nothing in Niagara produces one — rename the parameter instead.\n\nBack-quotes are only needed when the name is not already an identifier. `` `Speed` `` is legal but noise; write `Speed`. The decompiler applies exactly that rule, so a re-export is the quickest way to see which names need quoting.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx1xxx/#dfx1005"
+    },
+    {
+      "code": "DFX2000",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Unknown document type '%s'. Expected System, Emitter, Module or DynamicInput.",
+      "meaning": "The first word of the file is not one of the four document kinds.",
+      "fix": "Write `System`, `Emitter`, `Module` or `DynamicInput`, matching the file extension.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2000"
+    },
+    {
+      "code": "DFX2001",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Expected '{' to open a raw block but found '%s'.",
+      "meaning": "A construct that takes a raw block was not followed by `{`.",
+      "fix": "Add the brace. `hlsl` and `Body` are always `hlsl { ... }` / `Body = { ... }`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2001"
+    },
+    {
+      "code": "DFX2002",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Expected a name but found %s.",
+      "meaning": "An identifier was expected -- a module name, an input name, an emitter name.",
+      "fix": "Check for a stray punctuation mark before the position reported.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2002"
+    },
+    {
+      "code": "DFX2003",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Expected a number but found '%s'.",
+      "meaning": "A number was expected, inside a vector literal, a `box()` or a curve key.",
+      "fix": "Vector components and curve times are numbers only; a parameter reference cannot appear there.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2003"
+    },
+    {
+      "code": "DFX2004",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Expected a value but found %s.",
+      "meaning": "A value was expected after `=`.",
+      "fix": "Something is missing on the right-hand side, or the previous statement is missing its `;`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2004"
+    },
+    {
+      "code": "DFX2005",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "'#EndRegion' has no matching '#Region'.",
+      "meaning": "`#EndRegion` appeared with no open `#Region`.",
+      "fix": "Delete it, or add the opening `#Region \"...\"`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2005"
+    },
+    {
+      "code": "DFX2006",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Unknown directive '#%s'. Expected Region or EndRegion.",
+      "meaning": "The only directives are `#Region` and `#EndRegion`.",
+      "fix": "Check the spelling. `#Region` is a comment device (L5) and never reaches the asset.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2006"
+    },
+    {
+      "code": "DFX2007",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Expected a version after '@'.",
+      "meaning": "`@` introduces an R7 version pin and must be followed by a version.",
+      "fix": "Write `ModuleName@1.2`, or drop the `@`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2007"
+    },
+    {
+      "code": "DFX2008",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Module '%s' was given a positional argument. Module inputs must be written as 'Name = Value'.",
+      "meaning": "A module call was given a bare value. Niagara addresses module inputs by name, and the order they appear in the stack UI is not the order they are declared in.",
+      "fix": "Write `Name = Value` for every argument. `dfx schema <Module>` lists the names.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2008"
+    },
+    {
+      "code": "DFX2010",
+      "severity": "warning",
+      "stage": "Lexer and syntax",
+      "title": "'#Region \\\"%s\\\"' was never closed with '#EndRegion'.",
+      "meaning": "A `#Region` ran to the end of the block without an `#EndRegion`. Harmless -- regions are text -- but usually means a section was moved and its closer left behind.",
+      "fix": "Add the `#EndRegion`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2010"
+    },
+    {
+      "code": "DFX2013",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "'%s' is a system-scope stack and must be written at the top level of a .dfs, not inside an emitter.",
+      "meaning": "`SystemSpawn` and `SystemUpdate` belong to the system, not to an emitter (L1).",
+      "fix": "Move the block to the top level of the `.dfs`, beside the `Emitter` blocks.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2013"
+    },
+    {
+      "code": "DFX2015",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "'from' must be followed by a quoted path to a .dfe source file.",
+      "meaning": "`from` takes a quoted path to a `.dfe`.",
+      "fix": "Quote it. The extension is optional; the path resolves relative to this file first.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2015"
+    },
+    {
+      "code": "DFX2016",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "A `Defaults = { … }` block contained something other than an assignment.",
+      "meaning": "A `Defaults = { … }` block contained something other than an assignment. A default says what reading a parameter produces when nothing set it, so a module call has nothing to mean there.",
+      "fix": "Move the module call into one of the stacks (`ParticleSpawn`, `ParticleUpdate`, …). Only `<type> Namespace.Name = value;` belongs in `Defaults`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2016"
+    },
+    {
+      "code": "DFX2018",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "A Module or DynamicInput must declare a 'Body = { }' block.",
+      "meaning": "A `.dfm` with no `Body` declares inputs and generates a module that does nothing.",
+      "fix": "Add `Body = { ... }`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2018"
+    },
+    {
+      "code": "DFX2019",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Header argument '%s' must be a quoted string.",
+      "meaning": "Header arguments (`Name=`, `Root=`) are quoted strings.",
+      "fix": "Quote the value.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2019"
+    },
+    {
+      "code": "DFX2020",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Unknown curve key attribute '%s'. Expected Interp, Tangent, Arrive or Leave.",
+      "meaning": "A curve key's attribute list accepts only `Interp`, `Arrive` and `Leave` (plan 3.5).",
+      "fix": "Check the spelling. Tangents are only honoured when `Interp` makes them meaningful.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2020"
+    },
+    {
+      "code": "DFX2021",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "File declares '%s' but its extension is '%s'. Rename the file to '%s' or change the declaration.",
+      "meaning": "The declared document kind and the file extension disagree.",
+      "fix": "Rename the file or change the declaration -- the extension is what the build enumerates by.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2021"
+    },
+    {
+      "code": "DFX2022",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Unexpected '%s' after the end of the document. A DreamFX file declares exactly one top-level object.",
+      "meaning": "Content followed the closing brace of the top-level object. Usually a duplicated block or one brace too few somewhere above.",
+      "fix": "One file, one top-level object. The position reported is where the extra content starts, not where the imbalance is.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2022"
+    },
+    {
+      "code": "DFX2023",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "'%s' is a module call, so it cannot be given a type. Types are written only on assignments.",
+      "meaning": "A type was written in front of a module call. Types annotate assignments, where L2 has to know what a new attribute is; a module call's types come from its schema.",
+      "fix": "Drop the type.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2023"
+    },
+    {
+      "code": "DFX2024",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "A Defaults declaration cannot be disabled; defaults are not executed stack nodes.",
+      "meaning": "`disabled` was applied to a declaration inside `Defaults`. Defaults register parameter values; they are not executed stack nodes. Executable stack assignments and module calls do support `disabled`.",
+      "fix": "Remove `disabled` from the default declaration, or remove the declaration itself if the parameter is no longer needed.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2024"
+    },
+    {
+      "code": "DFX2025",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Unknown OnEvent argument '%s'. Expected Source, Event, Mode, SpawnNumber, MaxEventsPerFrame, UpdateAttributeInitialValues, RandomSpawnNumber or MinSpawnNumber.",
+      "meaning": "An `OnEvent(...)` header carries an argument the parser does not know, an argument is missing its value, or a required argument (`Source`, `Event`) was left out entirely.\n\nThe header is not a module call — its arguments configure the *handler itself* (which emitter's events it listens to and how it spends them), so the accepted set is fixed: `Source` (emitter name in this system), `Event` (the event name, quoted), `Mode` (`SpawnedParticles` or `EveryParticle`), `SpawnNumber`, `MaxEventsPerFrame`, `UpdateAttributeInitialValues`, `RandomSpawnNumber`, `MinSpawnNumber`. Modules that *react* to the event go inside the block, not in the header.",
+      "fix": "Spell the argument as listed above (matching ignores case), give every argument a value of the right shape — `Source` and `Mode` are identifiers, `Event` a name or string, the numbers integers, the flags `true`/`false` — and always write at least `Source` and `Event`:\n\n```\nOnEvent(Source = Sparks, Event = \"LocationEvent\", Mode = SpawnedParticles, SpawnNumber = 1) = {\n    ReceiveLocationEvent();\n}\n```",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2025"
+    },
+    {
+      "code": "DFX2026",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Unknown Stage argument '%s'. Expected a stage iteration, enabled, dispatch or particle-state option; see the Stage language reference.",
+      "meaning": "A `Stage name(...)` header contains an unknown argument or an argument whose value has the wrong type. Stage options cover iteration, enablement, execution behavior, direct dispatch, thread groups and particle-state filtering.",
+      "fix": "Use the argument names and value types in the [Stage reference](../language/dfs.md). A bare `Stage name = { }` uses engine defaults; parameter bindings must name a parameter of the corresponding type.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2026"
+    },
+    {
+      "code": "DFX2027",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Group(...) takes a quoted name: Group(\\\"Name\\\") { ... }.",
+      "meaning": "A `Group(...)` declaration has an unquoted or missing name.",
+      "fix": "Write a quoted name, for example `Group(\"Sparks\") { ... }`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2027"
+    },
+    {
+      "code": "DFX2028",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Group(...) requires a non-empty name.",
+      "meaning": "A `Group(...)` declaration uses an empty name.",
+      "fix": "Give the group a non-empty name so its emitters can be organized consistently.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2028"
+    },
+    {
+      "code": "DFX2030",
+      "severity": "error",
+      "stage": "Lexer and syntax",
+      "title": "Patch '%s' needs a topology call such as Grid(33, 9) or Tube(65, 17, Copies = 3), followed by its HLSL body in braces.",
+      "meaning": "A `DynamicMesh` block holds `Settings`, `Inputs`, `Renderer`, `Draw` and `Patch` entries and nothing else; a `Patch` is `Patch <Name> = <Topology>(...)` followed by its HLSL body in braces. A second `Draw` block is reported too.",
+      "fix": "Use one of the five sections, and write a patch as `Patch Sheet = Grid(33, 9) { ... }`. See [dynamic-mesh.md](../language/dynamic-mesh.md).",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx2xxx/#dfx2030"
+    },
+    {
+      "code": "DFX3000",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "The `Root=\"...\"` does not name a mounted content root, or `Name=\"...\"` has no asset name after its last slash.",
+      "meaning": "The `Root=\"...\"` does not name a mounted content root, or `Name=\"...\"` has no asset name after its last slash.",
+      "fix": "`Root` is `Game`, empty, or `Plugin.<PluginName>`. `Name` is a path ending in the asset's name, e.g. `Systems/NS_Spark`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3000"
+    },
+    {
+      "code": "DFX3001",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "The module name resolved to nothing on the search paths.",
+      "meaning": "The module name resolved to nothing on the search paths. Distinct from DFX3003, which means the module exists but has no such input -- a typo in a path and a typo in an argument would otherwise read the same.",
+      "fix": "Add the folder to `Settings.ModulePaths`, or write the full asset path. `dfx list` prints every module on the current paths.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3001"
+    },
+    {
+      "code": "DFX3002",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Could not read the input schema of module '%s': %s",
+      "meaning": "The module was found but its input signature could not be read. The schema is probed by adding the module to a transient system, so this usually means the module cannot live in the stack it was written in.",
+      "fix": "Check the stack. `dfx schema <Module> -Stack <Stack>` reproduces the probe.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3002"
+    },
+    {
+      "code": "DFX3003",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Module '%s' has no input named '%s'.%s Available inputs: %s",
+      "meaning": "The module has no input by that name. Niagara input names contain spaces (`Loop Duration`); DreamFX normalises both sides, so `LoopDuration` matches, but a misspelling does not.",
+      "fix": "Use one of the names listed. A near-miss is suggested. `dfx schema <Module>` prints the full signature, including inputs hidden behind a static switch.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3003"
+    },
+    {
+      "code": "DFX3004",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Unknown renderer type '%s'. Expected one of SpriteRenderer, MeshRenderer, RibbonRenderer, LightRenderer, DecalRenderer, ComponentRenderer, VolumeRenderer, or any UNiagaraRendererProperties subclass.",
+      "meaning": "Renderer types are a closed set.",
+      "fix": "Use one of the listed types. Renderer *properties* are schema-driven and open (L8); only the type keyword is fixed.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3004"
+    },
+    {
+      "code": "DFX3005",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Emitter '%s' is declared more than once. Emitter names are stable keys and must be unique.",
+      "meaning": "Two emitters share a name. The name is the stable key the regeneration contract matches handles by (plan 4.5), so a duplicate is data loss, not a naming nit.",
+      "fix": "Rename one. To rename an emitter that already exists in an asset, use `dfx rename` first so the handle and its rapid-iteration parameters survive (R4).",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3005"
+    },
+    {
+      "code": "DFX3006",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "'%s' is neither an allowed inline function (%s) nor a dynamic input: %s",
+      "meaning": "A call in a value position matched neither the L6 builtin whitelist nor any dynamic input asset.",
+      "fix": "Use one of the builtins listed, reference a real dynamic input, or write the maths in an `hlsl { }` block. Widening the whitelist is a design decision (L6), not a config change.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3006"
+    },
+    {
+      "code": "DFX3007",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Could not read the input schema of dynamic input '%s': %s",
+      "meaning": "The dynamic input asset was found but its signature could not be read.",
+      "fix": "`dfx schema <Name>` reproduces the read against the same asset.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3007"
+    },
+    {
+      "code": "DFX3008",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Dynamic input '%s' has no input named '%s'. Available inputs: %s",
+      "meaning": "The dynamic input has no input by that name -- DFX3003 one level down a chain.",
+      "fix": "Use one of the names listed.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3008"
+    },
+    {
+      "code": "DFX3009",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Dynamic input '%s' is pinned to version %s, which its asset does not offer. Available version(s): %s.",
+      "meaning": "An R7 `@version` pin disagrees with the module asset's exposed version, or pins an asset that never opted into versioning. The pin records which version the source was written against; DreamFX cannot build against any other one, because the external edit API has no way to select a version.",
+      "fix": "Retest against the exposed version and update the pin, restore the version on the asset, or drop the `@` if the module is unversioned.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3009"
+    },
+    {
+      "code": "DFX3010",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Property '%s': %s",
+      "meaning": "A `Properties` entry is malformed -- see the inner message.",
+      "fix": "Fix the declaration. Types are listed in DFX4021's message.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3010"
+    },
+    {
+      "code": "DFX3020",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Cannot read the default for %s setting '%s'.",
+      "meaning": "A settings key is not supported, or the generator cannot read a mapped setting's fresh-asset default from the current engine. The latter prevents rebuilding with stale values for settings removed from the source.",
+      "fix": "For an unknown key, use one of the supported names listed in the diagnostic. If reading defaults failed, check the accompanying engine/probe error and report the engine version and setting name; rebuilding requires a valid default schema.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3020"
+    },
+    {
+      "code": "DFX3021",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "User parameter '%s' is declared more than once.",
+      "meaning": "Two user parameters share a name; a blueprint `SetNiagaraVariable` would reach whichever won.",
+      "fix": "Rename one.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3021"
+    },
+    {
+      "code": "DFX3030",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "A Module or DynamicInput must declare Settings.Usage -- it decides which stacks the module can be placed in.",
+      "meaning": "`Usage` decides which stacks a module may be placed in. Without it the module exists and is unreachable from every stack.",
+      "fix": "Add `Usage = ParticleUpdate;` (or another stack). An array selects several: `Usage = [ParticleSpawn, ParticleUpdate];`",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3030"
+    },
+    {
+      "code": "DFX3031",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "A DynamicInput must declare Settings.Output -- its return type cannot be inferred from the body.",
+      "meaning": "A dynamic input's return type cannot be inferred from its body.",
+      "fix": "Add `Output = float;` (or the type it returns).",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3031"
+    },
+    {
+      "code": "DFX3032",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "A DynamicInput's Usage must be DynamicInput or a nonempty array of stack names.",
+      "meaning": "A `DynamicInput` declares an invalid Usage value: a bare stack name, an empty array, or an array containing an unknown stack name.",
+      "fix": "Use `Usage = DynamicInput;` for its default stack mask, or a nonempty stack array such as `Usage = [SystemSpawn, SystemUpdate];` to select where the input is available.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3032"
+    },
+    {
+      "code": "DFX3033",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Input '%s' is declared more than once.",
+      "meaning": "Two inputs share a name and would collide on the same `Module.` parameter.",
+      "fix": "Rename one.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3033"
+    },
+    {
+      "code": "DFX3034",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Input '%s' is marked [StaticSwitch] but is a %s. A static switch must be a bool, an int or an enum.",
+      "meaning": "R5: a static switch is resolved at compile time, so it has to be something a switch can branch on.",
+      "fix": "Make it `bool`, `int`, or an enum -- or drop the `[StaticSwitch]`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3034"
+    },
+    {
+      "code": "DFX3035",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Input '%s' is a [StaticSwitch], so its default must be a compile-time constant.",
+      "meaning": "R5 from the other side: a switch resolved at compile time cannot take a runtime value.",
+      "fix": "Give it a literal default.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3035"
+    },
+    {
+      "code": "DFX3036",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "The Body block is empty.",
+      "meaning": "An empty body generates a module that occupies a stack slot and does nothing.",
+      "fix": "Write the body, or delete the file.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3036"
+    },
+    {
+      "code": "DFX3037",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "A dynamic input's body is not a single expression.",
+      "meaning": "A dynamic input's body is not a single expression. The Niagara translator wraps it as `Output = (Type)( <body> );`, so statements before the return produce invalid HLSL rather than an error naming the real problem.",
+      "fix": "Fold it into one expression, or write it as a `Module` -- a module's body is emitted verbatim and can hold as many statements as it likes.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3037"
+    },
+    {
+      "code": "DFX3038",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "'%s' is not a stack a module can be placed in. Use one of: %s.",
+      "meaning": "`Usage` names one of the six stacks (L1) and nothing else.",
+      "fix": "Use one of the names listed.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3038"
+    },
+    {
+      "code": "DFX3039",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "A DynamicInput cannot return a data interface; its Output must be a value type.",
+      "meaning": "A dynamic input feeds a value into an input slot; a data interface is not a value.",
+      "fix": "Return a value type. Data interfaces are declared in `Properties` and fed at runtime (plan 3.5).",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3039"
+    },
+    {
+      "code": "DFX3040",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "The `from` path did not resolve to a `.dfe` on disk.",
+      "meaning": "The `from` path did not resolve to a `.dfe` on disk.",
+      "fix": "Paths resolve relative to the referencing file first, then against every DFX root. The extension is optional.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3040"
+    },
+    {
+      "code": "DFX3041",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "'%s' could not be parsed; see the errors above.",
+      "meaning": "The referenced `.dfe` has its own errors; they are reported above this one against the `.dfe`'s own path.",
+      "fix": "Fix the `.dfe`. Its diagnostics carry its own file and line, not the host's.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3041"
+    },
+    {
+      "code": "DFX3042",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "'%s' declares a %s, but 'from' needs an Emitter document.",
+      "meaning": "`from` pulls in an emitter, and the referenced file declares something else.",
+      "fix": "Point `from` at a `.dfe`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3042"
+    },
+    {
+      "code": "DFX3043",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "'%s' reads user parameters this system does not declare: %s. Add them to the Properties block.",
+      "meaning": "A `.dfe` is merged by copy (R3), including whatever `User.*` it reads. The host has to declare those or the copied emitter reads a parameter that does not exist. The diagnostic points at the `from` line, because that is where the decision was made.",
+      "fix": "Add the named parameters to the host's `Properties` block.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3043"
+    },
+    {
+      "code": "DFX3044",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "The default for input '%s' has to be a literal or an enum entry. A module input default is stored on the asset, so it cannot reference anything outside the module.",
+      "meaning": "A module input's default is stored on the asset, so it cannot reference anything outside the module.",
+      "fix": "Use a literal or an enum entry. To make it caller-supplied, leave it and set it at the call site.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3044"
+    },
+    {
+      "code": "DFX3046",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "'%s' is not a particle attribute DreamFX knows the type of. Write its type at first use, for example `float %s = ...;`.",
+      "meaning": "A `.dfm` body touches a `Particles.*` attribute that is neither a common Niagara attribute nor declared in the body. The pin wired for it needs a type, and guessing would wire one of the wrong width.",
+      "fix": "Write the type at its first use, the way a `.dfs` declares a new attribute: `float Particles.Moon.Phase = 0.0;`",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3046"
+    },
+    {
+      "code": "DFX3047",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "A DynamicInput computes a value; it cannot write '%s'. Move the write into a Module.",
+      "meaning": "A dynamic input computes a value in an input slot; it has no place in the stack to write from.",
+      "fix": "Move the write into a `Module`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3047"
+    },
+    {
+      "code": "DFX3048",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Default override '%s' changes its type from %s to %s. Overrides must keep the base parameter's type.",
+      "meaning": "An emitter using `from` overrides a base `Defaults` parameter with a different type. Base stacks may still read the parameter using its original type.",
+      "fix": "Keep the base parameter's type when overriding its value. Use a separate parameter name if a different type is required.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3048"
+    },
+    {
+      "code": "DFX3049",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "MeshRenderer has no Material property. Set OverrideMaterials = [\\\"/path/to/material\\\"]; and bOverrideMaterials = true; to override its mesh materials.",
+      "meaning": "A `MeshRenderer` declares `Material`, but mesh materials are controlled by its override array and enable switch.",
+      "fix": "Replace `Material` with `OverrideMaterials = [\"/path/to/material\"];` and set `bOverrideMaterials = true;`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3049"
+    },
+    {
+      "code": "DFX3050",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "The system's `Parent` reference cannot be resolved to a `.dfs` source file.",
+      "meaning": "The system's `Parent` reference cannot be resolved to a `.dfs` source file.",
+      "fix": "Correct the parent source path and ensure the referenced `.dfs` file exists in a supported source location.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3050"
+    },
+    {
+      "code": "DFX3051",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Only a System document can inherit a .dfs parent.",
+      "meaning": "The parent source cannot be parsed, does not declare a `System`, or is being inherited by a non-system document.",
+      "fix": "Use system `Parent` inheritance only between `.dfs` system documents and fix any diagnostics reported for the parent file.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3051"
+    },
+    {
+      "code": "DFX3052",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "System inheritance contains a cycle or exceeds 128 sources: %s -> %s.",
+      "meaning": "The system's parent chain revisits a source file or exceeds the limit of 128 sources.",
+      "fix": "Remove the circular parent reference shown in the diagnostic or shorten the inheritance chain.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3052"
+    },
+    {
+      "code": "DFX3053",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Inherited parameter '%s' changes type from %s to %s. An override must preserve the parent's parameter type.",
+      "meaning": "A child system redeclares an inherited parameter with a different Niagara type.",
+      "fix": "Preserve the parent's parameter type when overriding its value, or choose a different name for a new parameter.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3053"
+    },
+    {
+      "code": "DFX3054",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Parameter '%s' is declared twice in one inheritance layer. An override must be declared in the child source, not twice in the same source.",
+      "meaning": "One source in a system inheritance chain declares the same parameter or emitter name more than once.",
+      "fix": "Keep one declaration per name in each source file and place inherited overrides in the child source.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3054"
+    },
+    {
+      "code": "DFX3055",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "An emitter's `inherits` path cannot be resolved to a standalone Niagara emitter asset with inheritance enabled.",
+      "meaning": "An emitter's `inherits` path cannot be resolved to a standalone Niagara emitter asset with inheritance enabled.",
+      "fix": "Correct the asset path and enable inheritance on that emitter, or use `from \"...dfe\"` when the intended parent is DreamFX source.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3055"
+    },
+    {
+      "code": "DFX3056",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Native parent has an unavailable version or a cyclic parent chain: %s.",
+      "meaning": "A native emitter parent chain contains an unavailable version, a cycle, or unmerged ancestor changes.",
+      "fix": "Select an existing version GUID, remove any parent cycle, and merge and save pending ancestor changes in Niagara before rebuilding.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3056"
+    },
+    {
+      "code": "DFX3057",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Attribute '%s' is declared with conflicting types.",
+      "meaning": "A `.dfm` custom attribute has conflicting types, is read during its own initialization, or is first initialized on a path that might not execute.",
+      "fix": "Give a new attribute one unconditional whole-value initializer before control flow; to update a custom attribute supplied by an earlier module, declare its type without an initializer and keep subsequent types consistent.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3057"
+    },
+    {
+      "code": "DFX3058",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Patch '%s': unknown topology '%s'. Expected Grid(Columns, Rows), Strip(Columns), Ring(Columns, Rows), Tube(Columns, Rows) or Sphere(Columns, Rows).",
+      "meaning": "A patch's topology call is not one the lowering knows: an unknown topology, the wrong number of vertex counts (a `Strip` takes one, the others two), a count that is not an integer literal of at least 2, or an unknown or misshapen option (`Copies`, `Material`, `Flip`).",
+      "fix": "Write `Grid`, `Strip`, `Ring`, `Tube` or `Sphere` with integer vertex counts, then the options by name: `Tube(65, 17, Copies = 3, Flip = true)`. Counts are vertex counts, so a closed shape's seam column is included.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3058"
+    },
+    {
+      "code": "DFX3059",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "%s needs an emitter named '%s', which %s already uses. Rename one of them.",
+      "meaning": "A `DynamicMesh` named `X` becomes the user parameter `User.X`, the emitter `X` that draws it and one emitter `X_<Patch>` per patch. One of those names is already taken -- by `Properties`, by an `Emitter` block, by another block -- or two patches of one block share a name.",
+      "fix": "Rename the block, the patch, or whatever already holds the name. The names are part of the built asset, so blueprints that set `User.X` keep working only while the block keeps its name.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3059"
+    },
+    {
+      "code": "DFX3060",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Material takes a quoted material asset path, e.g. Material = \\\"/Game/FX/M_Shell.M_Shell\\\";",
+      "meaning": "A `Settings` entry of a `DynamicMesh` block is unknown, written twice, or has the wrong shape: `TexCoords` is an integer 0-8, `Colors` true/false, `Normals` one of None/Auto/Explicit, `Bounds` a `box(...)` whose minimum is not above its maximum, `Duration` a positive number. A `Renderer` block that sets `Meshes` or `MeshBindings` is refused too -- the renderer draws this mesh and nothing else.",
+      "fix": "Use the documented key and shape; the message names the expected form.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3060"
+    },
+    {
+      "code": "DFX3061",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Material '%s': %s",
+      "meaning": "A `Material` (on the block or on a patch) does not resolve to a material asset. The engine would draw the mesh with its default material, which is never what was meant. Lint does not look assets up, so this is reported by a build.",
+      "fix": "Fix the path. Every spelling a `.dfs` accepts for an asset works: `/Game/FX/M_X`, `/Game/FX/M_X.M_X`, `Plugin.Name:Materials/M_X`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3061"
+    },
+    {
+      "code": "DFX3062",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Input '%s' of DynamicMesh '%s' uses a name the patch prologue already declares (U, V, I, J, NU, NV, K, NK, Rand, T, Index, Theta, Phi, Dir, the outputs, or anything starting with DM_). Rename it.",
+      "meaning": "An `Inputs` entry cannot be passed to the patch bodies: its name is one the generated prologue already declares (`U`, `V`, `I`, `J`, `NU`, `NV`, `K`, `NK`, `Rand`, `T`, `Index`, `Theta`, `Phi`, `Dir`, the outputs, anything starting with `DM_`), it is declared twice, or it has no value.",
+      "fix": "Rename it, or give it the value to pass: `float Gain = User.Gain;`. Inputs are not module inputs with defaults -- each one says what every patch receives.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3062"
+    },
+    {
+      "code": "DFX3063",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "DynamicMesh '%s' has no Patch, so there is nothing to draw. Add one, e.g. `Patch Sheet = Grid(33, 9) { }`.",
+      "meaning": "The block declares no `Patch`, so the mesh would have no vertices.",
+      "fix": "Add a patch, e.g. `Patch Sheet = Grid(33, 9) { }` -- an empty body draws the topology's default shape.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3063"
+    },
+    {
+      "code": "DFX3064",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Patch '%s' has %lld vertices (%d x %d x %d copies); a patch holds at most %lld, because the generated index arithmetic is exact in float only that far. Split it into more patches.",
+      "meaning": "A patch has more than 16,777,216 vertices (the generated index arithmetic is exact in float only that far), or the whole mesh -- with the texture coordinate workaround multiplying the declared vertex count by `TexCoords` -- does not fit the data interface's int32 counts.",
+      "fix": "Split the patch into several, lower its resolution or copies, or use fewer UV channels.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3064"
+    },
+    {
+      "code": "DFX3065",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "Patch '%s' writes '%s', but DynamicMesh '%s' has Normals = Auto, which evaluates the body four times per vertex -- the write would run four times. Keep particle state out of the body, or use Normals = Explicit and write Normal yourself.",
+      "meaning": "With `Normals = Auto` the patch body is evaluated four times per vertex (three samples a quarter grid step away, then the vertex itself), so a write to a `Particles.*` attribute in it would run four times, the last with the vertex's own values. Accumulating state (`+=`, `++`) would be wrong outright.",
+      "fix": "Keep particle state out of the body, or switch to `Normals = Explicit` and write `Normal` yourself (the topology's analytic normal is the starting value).",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3065"
+    },
+    {
+      "code": "DFX3066",
+      "severity": "error",
+      "stage": "Declarations and document structure",
+      "title": "DynamicMesh '%s' needs a plain name (letters, digits, underscores): it becomes a user parameter, emitter names and generated asset names.",
+      "meaning": "A `DynamicMesh` or `Patch` name is not a plain identifier -- typically a back-quoted name with a space or punctuation. The names become the user parameter, emitter names and generated module asset names, and an asset name cannot hold them.",
+      "fix": "Use letters, digits and underscores, starting with a letter: `DynamicMesh MyMesh`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx3xxx/#dfx3066"
+    },
+    {
+      "code": "DFX4001",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Input '%s' expects %s, but a number was written.",
+      "meaning": "A bare number was written where the input wants a vector, colour or other structured type.",
+      "fix": "Write all the components: `(0, 0, -980)`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4001"
+    },
+    {
+      "code": "DFX4002",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Expression for '%s': a vector literal must have 2 to 4 components.",
+      "meaning": "Niagara vector types are 2, 3 or 4 components.",
+      "fix": "Check the component count.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4002"
+    },
+    {
+      "code": "DFX4003",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Input '%s' is an integer, but %s was written. Narrowing is not implicit -- write int(%s) if truncation is intended.",
+      "meaning": "L7: `float -> int` is never implicit. A silently truncated spawn count is among the hardest effect bugs to find.",
+      "fix": "Write `int(...)` if truncation is what you meant, or make the source an int.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4003"
+    },
+    {
+      "code": "DFX4004",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Input '%s' has no resolvable Niagara type.",
+      "meaning": "The input's type could not be resolved from the module schema.",
+      "fix": "Usually the input is hidden behind a static switch that has not been written yet -- write the switch first; source order is write order.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4004"
+    },
+    {
+      "code": "DFX4005",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Property '%s': component %d is not a number.",
+      "meaning": "A vector or `box()` component is not a number.",
+      "fix": "Components are literals; a parameter reference cannot appear inside one.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4005"
+    },
+    {
+      "code": "DFX4006",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Input '%s' is a %s, which has no entry named '%s'. Valid entries: %s",
+      "meaning": "The enum has no entry by that name. Niagara's user-defined enums store `NewEnumerator0` internally and keep the real name in display text, so the names here are not guessable from the asset -- they are read live.",
+      "fix": "Use one of the entries listed. Spaces and hyphens are normalised away, so `Direct Set` is written `DirectSet`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4006"
+    },
+    {
+      "code": "DFX4007",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Input '%s' expects %s. '%s' is neither a literal of that type nor a parameter reference -- parameter references start with a namespace such as User., Particles., Emitter., System. or Engine.",
+      "meaning": "The value is neither a literal of the expected type nor a namespace-qualified parameter.",
+      "fix": "Qualify the parameter (`User.Speed`, `Particles.Velocity`), or write a literal.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4007"
+    },
+    {
+      "code": "DFX4010",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Input '%s' is set more than once on dynamic input '%s'.",
+      "meaning": "The same input was given twice on one dynamic input call.",
+      "fix": "Delete one.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4010"
+    },
+    {
+      "code": "DFX4020",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Parameter '%s': 'Object' needs an inner type, e.g. Object<Texture>.",
+      "meaning": "`DI` names no class on its own.",
+      "fix": "Write the inner type: `DI<SkeletalMesh>`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4020"
+    },
+    {
+      "code": "DFX4021",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Parameter '%s': no UObject class named '%s'. Object<> takes a class name such as Object<Texture> or Object<StaticMesh>.",
+      "meaning": "The declared type is not one DreamFX knows.",
+      "fix": "Use one of the types listed in the message.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4021"
+    },
+    {
+      "code": "DFX4022",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Cannot infer the type of '%s' from its value. A first assignment to a new attribute must use a literal, so its type is unambiguous.",
+      "meaning": "L2 types a new attribute from its first value, and this value carries no type -- an `hlsl` block, a dynamic input and an inline expression all have none of their own.",
+      "fix": "Write the type: `Color Particles.Moon.Tint = hlsl { ... };`",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4022"
+    },
+    {
+      "code": "DFX4023",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Property '%s': box() takes 6 numbers -- minX, minY, minZ, maxX, maxY, maxZ.",
+      "meaning": "`box()` is minX, minY, minZ, maxX, maxY, maxZ.",
+      "fix": "Write six numbers.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4023"
+    },
+    {
+      "code": "DFX4024",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Cannot type '%s = %s': the type of '%s' is not known here. Declare it in Properties, or assign a literal first so the type is explicit.",
+      "meaning": "The right-hand side references a parameter whose type is not known at this point.",
+      "fix": "Declare it in `Properties`, or assign it a literal earlier in the same stack -- L2's first write is what declares an attribute.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4024"
+    },
+    {
+      "code": "DFX4025",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "'%s' is not a valid assignment target. Parameter names are namespace-qualified, e.g. Particles.MyValue or Emitter.MyCounter.",
+      "meaning": "An unqualified assignment target has no namespace to live in, and guessing one would put the value somewhere never named.",
+      "fix": "Qualify it: `Particles.MyValue`, `Emitter.MyValue`, `System.MyValue`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4025"
+    },
+    {
+      "code": "DFX4026",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "'Bind %s -> %s': the target must be a qualified parameter -- either a namespace such as Particles.SpriteSize, or an emitter's own alias such as MyEmitter.Velocity.",
+      "meaning": "A renderer binding target is a parameter, not a bare name.",
+      "fix": "Write `Bind Color -> Particles.Color;`",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4026"
+    },
+    {
+      "code": "DFX4027",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "'%s' is %s, but '%s' is %s. Linking binds a parameter directly -- there is no conversion. Declare '%s' as %s, or drive the input another way.",
+      "meaning": "L7 across a link. A linked value binds the parameter directly -- there is no conversion step to truncate or widen in -- so the two types have to match exactly.",
+      "fix": "Declare the source parameter with the target's type. This is the one L7 case that cannot be fixed with an explicit cast, because there is nowhere to put one.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4027"
+    },
+    {
+      "code": "DFX4028",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Default for '%s' needs a declared type. A default has no module signature to infer one from, so write it: `float %s = …`.",
+      "meaning": "A `Defaults` entry was written without a type. Elsewhere the type can come from the value or from the module signature the input belongs to; a default belongs to no module and its value may be an `hlsl` block or a link, so there is nothing to infer from.",
+      "fix": "Write the type: `float Particles.MySize = 1.0;`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4028"
+    },
+    {
+      "code": "DFX4029",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Default for '%s' must be a literal, an enum or another parameter. A dynamic input computes a value per particle, which a default cannot do.",
+      "meaning": "A `Defaults` entry was given a dynamic input. A default is one value stored on the parameter, and a dynamic input is a graph that runs per particle -- there is nowhere to run it.",
+      "fix": "Use a literal, an enum, or a link to another parameter. If the value really has to be computed, write it as an assignment in `ParticleSpawn` instead, which runs.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4029"
+    },
+    {
+      "code": "DFX4030",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "The hlsl block for '%s' must be a single expression: no statements, no local variables, no return. Move multi-statement logic into a .dfm DynamicInput and call it here.",
+      "meaning": "A stack input's `hlsl` block lowers to a node with one typed output pin and no body, so it cannot hold statements.",
+      "fix": "Fold it into one expression, or move the logic into a `.dfm` Module, whose body is emitted verbatim. This is the gap `.dfm` generation exists to close.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4030"
+    },
+    {
+      "code": "DFX4031",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "'%s' is not an allowed inline function. Allowed: %s. Anything else belongs in a .dfm dynamic input or an hlsl { } block.",
+      "meaning": "L6's whitelist. Widening it is the slide into re-implementing a 13k-line expression backend, so it is deliberately short.",
+      "fix": "Use one of the listed functions, a `.dfm` dynamic input, or an `hlsl { }` block -- inside which any HLSL is allowed.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4031"
+    },
+    {
+      "code": "DFX4032",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "'%s' in the expression for '%s' is not a parameter. Only namespace-qualified parameters (User.X, Particles.X, Engine.X, ...) can be read from an expression.",
+      "meaning": "Inline expressions see parameters, not locals. A bare name has nothing to bind to.",
+      "fix": "Qualify it, or move the expression into an `hlsl { }` block where locals exist.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4032"
+    },
+    {
+      "code": "DFX4033",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Builtin '%s' takes positional arguments, not named ones.",
+      "meaning": "An L6 builtin is positional. Named arguments read as a dynamic input call and would silently resolve to something else.",
+      "fix": "Write `saturate(x)`, not `saturate(Value = x)`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4033"
+    },
+    {
+      "code": "DFX4034",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Builtin '%s' takes %d argument(s), but %d were written.",
+      "meaning": "Arity is the only thing separating `lerp(a, b)` from `lerp(a, b, t)`.",
+      "fix": "Check the argument count.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4034"
+    },
+    {
+      "code": "DFX4035",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Expression for '%s' contains a value that has no HLSL form.",
+      "meaning": "Part of the expression has no HLSL form -- a curve literal or a data interface inside arithmetic, for instance.",
+      "fix": "Move that part to its own input.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4035"
+    },
+    {
+      "code": "DFX4036",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "The hlsl block for '%s' is empty.",
+      "meaning": "An empty `hlsl` block lowers to an expression with no text in it.",
+      "fix": "Write the expression, or delete the block.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4036"
+    },
+    {
+      "code": "DFX4037",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "'%s' is %s; a curve { } literal only fits a curve data interface input.",
+      "meaning": "A `curve { }` literal fills a curve data interface, and this input is not one.",
+      "fix": "Feed the curve to the input that takes it -- usually a dynamic input such as `FloatFromCurve(FloatCurve = curve { ... })`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4037"
+    },
+    {
+      "code": "DFX4038",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "The curve for '%s' has no keys.",
+      "meaning": "An empty curve evaluates to nothing, which reads at runtime as a value stuck at zero.",
+      "fix": "Add keys.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4038"
+    },
+    {
+      "code": "DFX4039",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Unknown curve interpolation '%s'. Expected Auto, Cubic, Linear or Constant.",
+      "meaning": "Curve tangents are data (plan 3.5); an unrecognised mode would fall back to Auto and drop a hand-tuned shape without saying so.",
+      "fix": "Use `Auto`, `Cubic`, `Linear` or `Constant`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4039"
+    },
+    {
+      "code": "DFX4040",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Parameter '%s': no asset at '%s'.",
+      "meaning": "An `Object<T>` parameter was given an asset path and nothing is at that path. Usually the asset moved or was renamed after the source was written, or the path is a content-browser display name rather than an object path.",
+      "fix": "Copy the path from the asset's right-click **Copy Reference** and paste it whole: `Object<Texture> _Tex = \"/Game/FX/T_Spark.T_Spark\";`. The part after the dot is the object name inside the package and is not optional.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4040"
+    },
+    {
+      "code": "DFX4041",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Parameter '%s': '%s' is a %s, which is not a %s.",
+      "meaning": "The asset at that path exists but is not the class the parameter declares. `Object<Texture> = \".../M_Fire\"` names a material, and Niagara would refuse the binding at runtime rather than at build time.",
+      "fix": "Either point at an asset of the declared class, or widen the declaration to the class you actually mean --- `Object<Texture>`, `Object<StaticMesh>`, `Object<MaterialInterface>` and so on match what the module's input expects.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4041"
+    },
+    {
+      "code": "DFX4042",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Unknown curve tangent mode '%s'. Expected Auto, User, Break or None.",
+      "meaning": "A curve key's `Tangent=` attribute named something that is not one of Unreal's four tangent modes. Refused rather than defaulted for the same reason as DFX4039: falling back to `Auto` would silently discard the tangents written beside it, and a curve whose corners have been rounded off is a different curve.",
+      "fix": "Use `Auto`, `User`, `Break` or `None` --- or leave `Tangent` out entirely, in which case a key with a tangent means `User` and a key without means `Auto`, which is what every source written before the attribute existed meant.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4042"
+    },
+    {
+      "code": "DFX4043",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Input '%s' is an instance-backed %s and cannot have a literal or asset-path default. Omit the default and supply an instance through a system parameter or stack input.",
+      "meaning": "A data interface or other instance-backed object input has a literal or asset-path default, or an object reference resolves to a non-asset instance.",
+      "fix": "Omit instance-backed defaults and provide the instance through a system parameter or stack input; use a compatible asset reference only for an asset-backed object input.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4043"
+    },
+    {
+      "code": "DFX4044",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "An int(...) default requires one numeric literal. Runtime casts belong in a stack expression.",
+      "meaning": "An `int(...)` literal conversion is non-finite or outside the signed 32-bit range, or a stored default uses an argument other than one numeric literal.",
+      "fix": "Use a finite numeric literal whose truncated value fits `int32`; put conversions of runtime parameters in stack expressions instead of literal defaults.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4044"
+    },
+    {
+      "code": "DFX4091",
+      "severity": "error",
+      "stage": "Values, types and expressions",
+      "title": "Input '%s': dynamic inputs, hlsl blocks, curves and inline expressions are not available yet (planned for Phase 3).",
+      "meaning": "A Phase 2 build met a Phase 3 value mode. Historical -- it should not appear on a current build.",
+      "fix": "Rebuild the plugin. If it persists, the source is being compiled by an old binary.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx4xxx/#dfx4091"
+    },
+    {
+      "code": "DFX5001",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Stack '%s' has no Niagara script usage mapping.",
+      "meaning": "A stack kind with no Niagara script usage behind it. Every kind the parser can produce maps today — the six fixed stacks, `OnEvent` and `Stage` — so reaching this means a new stack kind was added to the enum without extending `ScriptUsageForStack`.",
+      "fix": "Use one of the mapped stacks; if you are adding a kind, extend the adapter's mapping pair (`ScriptUsageForStack`, `StackForScriptName`) together.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5001"
+    },
+    {
+      "code": "DFX5002",
+      "severity": "warning",
+      "stage": "Generation and asset writing",
+      "title": "This system declares no emitters, so it will produce nothing.",
+      "meaning": "A system with no emitters compiles and produces nothing.",
+      "fix": "Add an `Emitter` block.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5002"
+    },
+    {
+      "code": "DFX5003",
+      "severity": "info",
+      "stage": "Generation and asset writing",
+      "title": "'%s' is not declared in this source, so its existing modules are left as-is: %s",
+      "meaning": "Declaring a stack means taking it over; a stack this source never mentions keeps whatever it had. `CreateNiagaraSystem` puts a `SystemState` in `SystemUpdate`, and clearing it wholesale would make every `.dfs` without an explicit `SystemUpdate` produce a system that never runs. Informational so the difference is visible rather than silent.",
+      "fix": "Nothing, usually. To take the stack over, declare it -- an empty `SystemUpdate = { }` clears it.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5003"
+    },
+    {
+      "code": "DFX5004",
+      "severity": "info",
+      "stage": "Generation and asset writing",
+      "title": "No Material was set, so the engine default was applied: %s. Write 'Material = \\\"...\\\";' to choose your own.",
+      "meaning": "A renderer with no `Material` gets the engine default, which is why an untextured effect still draws.",
+      "fix": "Write `Material = \"...\";` to choose your own.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5004"
+    },
+    {
+      "code": "DFX5015",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Emitter '%s' has no record in the last build's plan.",
+      "meaning": null,
+      "fix": null,
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5015"
+    },
+    {
+      "code": "DFX5020",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "The last build of this stack recorded %d module node(s) for %d module(s), so its nodes cannot be addressed.",
+      "meaning": null,
+      "fix": null,
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5020"
+    },
+    {
+      "code": "DFX5027",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Could not read native parent defaults: %s.",
+      "meaning": "An explicit default changes a native parent's parameter type, or Niagara could not apply the emitter's declared or inherited defaults.",
+      "fix": "Preserve the inherited parameter type and correct the value, binding or graph condition identified by the accompanying adapter error before rebuilding.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5027"
+    },
+    {
+      "code": "DFX5030",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "SavePackage failed for '%s'.",
+      "meaning": "Writing the package failed -- read-only file, source control lock, or a path the process cannot write.",
+      "fix": "Check the file's permissions and check it out if it is under source control.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5030"
+    },
+    {
+      "code": "DFX5031",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Emitter '%s' declares more than one OnEvent block. Only one event handler per emitter is representable; split the extra handlers into their own emitters.",
+      "meaning": "An emitter block declares two or more `OnEvent` blocks.\n\nDreamFX reaches event stacks through the external edit API's ordinary stack rails, and those rails can only address an event script whose usage id is the zero guid — which means exactly one addressable handler per emitter. A second handler would exist on the asset but be invisible to every read and write that follows, so the generator refuses it up front instead of building something it could never round-trip.",
+      "fix": "Keep one `OnEvent` block per emitter. If one emitter genuinely needs to react to two event streams, split it into two emitters, one handler each — the stacks stay identical and both spawn against the same source events.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5031"
+    },
+    {
+      "code": "DFX5032",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Emitter '%s' declares two Stage blocks named '%s'. Stages are identified by name; rename one.",
+      "meaning": "One emitter declares two `Stage` blocks with the same name. The write side creates-or-reuses a stage by its name (the engine UI's own identity for stages), so both blocks would land on one stage and it would silently hold whichever stack was written last. The same code carries adapter-reported stage failures at build time — a slice that was never closed, a stage on the asset whose class is not the engine's generic stage.",
+      "fix": "Rename one of the blocks. Stages within one emitter are identified by name, so each needs its own.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5032"
+    },
+    {
+      "code": "DFX5033",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Emitter '%s' declares Stage blocks but simulates on the CPU. Simulation stages are a GPU feature: set `SimTarget = GPU` in the emitter's Settings.",
+      "meaning": "An emitter declares `Stage` blocks while simulating on the CPU. Simulation stages are a GPU-compute feature; a CPU emitter cannot run one, and Niagara's own complaint arrives later as a compile error naming no source line. The check reads the live emitter rather than this file's `Settings`, because a `from` emitter can be GPU without the `.dfs` saying so.",
+      "fix": "Set `SimTarget = GPU` in the emitter's `Settings` block (with a `FixedBounds`, which GPU emitters cannot compute for themselves), or delete the `Stage` blocks.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5033"
+    },
+    {
+      "code": "DFX5034",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Emitter '%s' uses 'as %s' on two module calls. Node names are unique per emitter; rename one.",
+      "meaning": "Two module calls in one emitter carry the same `as <name>` suffix. The suffix names the function call NODE, `Output.<node>.<value>` links resolve by that name, and node names are unique per emitter graph — two claimants would leave every such link resolving to whichever node the traversal happens to meet first.",
+      "fix": "Rename one. The decompiler only emits `as` with the original asset's node names, which are unique by construction, so this fires on hand-edited sources.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5034"
+    },
+    {
+      "code": "DFX5035",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "'%s' is still open in the Niagara script editor. The rebuild was cancelled to protect its editable copy. Close the editor, then rebuild again.",
+      "meaning": "The target Niagara script editor could not close, for example because its close confirmation was cancelled. Its editable copy could overwrite the generated graph if rebuilding continued.",
+      "fix": "Resolve the editor's pending changes and close it, then rebuild. Editors that close successfully are reopened after generation completes.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5035"
+    },
+    {
+      "code": "DFX5036",
+      "severity": "warning",
+      "stage": "Generation and asset writing",
+      "title": "OnEvent source '%s' is an id no emitter in this system answers to, so this handler never fires. Point it at the emitter that raises the event, or delete the handler.",
+      "meaning": "An `OnEvent` header's `Source` is an id no emitter in this system answers to, written the way the decompiler writes one it cannot resolve: `` `<unresolved GUID>` ``. Two things produce it. A handler carried into a copied system keeps the id it had in the system it came from — nothing remaps it on copy, so several systems end up sharing one stale id. Or the source emitter was deleted and the handler stayed behind.\n\nThe handler is written back with that id, so the round trip is faithful, but it can never fire: the runtime builds its event-handler lookup from the id's **string form** and then finds the event set by **name** (`NiagaraEmitterInstanceImpl.cpp:418-419`, the lookup at `:1307`), and no emitter answers to a guid. The asset is in exactly the same state — this is a fact about the asset, not about the text.",
+      "fix": "Decide which emitter in the system was meant to raise `Event` and name it in `Source`. The source may appear before or after the receiver in the document: handlers are added after all emitters exist. If nothing raises that event any more, delete the handler and the modules its stack carried — that drops facts from the asset, so the build safety gate has to be told (`-Force`) and its report lists what went. Rebuild afterwards: the warning stays until `Source` names a live emitter.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5036"
+    },
+    {
+      "code": "DFX5037",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "The module DreamFX generated for this DynamicMesh did not parse (%s is the text). This is a DreamFX defect -- report it with the .dfs:\\n%s",
+      "meaning": "The `.dfm` text DreamFX generated for a `DynamicMesh` block did not parse. The text is the generator's, so this is a DreamFX defect rather than an error in the source; the message carries the parser's output and the path of the generated text under `Saved/DreamFX/DynamicMesh/`.",
+      "fix": "Report it with the `.dfs` and the generated file the message names.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5037"
+    },
+    {
+      "code": "DFX5093",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "'MaterialParam' is reserved syntax and is not implemented in v1 (plan section 7).",
+      "meaning": "`MaterialParam` is reserved syntax (L8) with no implementation in v1.",
+      "fix": "Not available. Set material parameters on the material instance instead.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5093"
+    },
+    {
+      "code": "DFX5097",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Only System documents can be generated right now; this file declares a %s.",
+      "meaning": "Only `.dfs` and `.dfm` produce assets. A `.dfe` is merged into its host by copy (R3) and has nothing of its own to generate.",
+      "fix": "Reference the `.dfe` from a `.dfs` with `from`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5097"
+    },
+    {
+      "code": "DFX5098",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Data interface parameter '%s' takes its configuration as a quoted JSON object, the form the decompiler writes.",
+      "meaning": "A `DI<T>` user parameter's configuration is a quoted JSON object — the same verbatim form a module's data interface input takes, and the form the exporter writes. Anything else here is a value the applier cannot read. The code also reports under DFX5098 when the configuration was well-formed but the engine refused to apply it, which usually means a property name in the blob no longer exists on that interface class.",
+      "fix": "Write the configuration as a quoted JSON object, or leave the parameter bare — a declaration with no value is a slot to fill at runtime, which is legitimate and silent. `dfx decompile` on a system that already has the interface configured the way you want prints the exact blob.\n\n> **Changed 2026-08-12.** This used to be a warning meaning \"declared only, v1 does not apply defaults\" (plan 3.5). Configuration is now applied. That scope cut was costing real behaviour: the collision sources and property readers on `NS_Spawn_Ninja_Root` are all user data interfaces, and every mirror default-constructed them — the effect rendered and interacted with nothing.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5098"
+    },
+    {
+      "code": "DFX5100",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "'%s' is a %s with no generated asset at '%s', and %s",
+      "meaning": "No previously generated asset was found, and this build has no graph backend to make one. That is rarer than it used to be: an engine that does not export the five declarations still gets the reflection backend, so reaching this means its startup self-check failed and the message names which check it was. See [dfm.md](../language/dfm.md) for the three outcomes.",
+      "fix": "Read the named check --- it says which engine shape the backend expected and did not find, which is the actual thing to fix or report. Meanwhile, build the module on an engine where a backend does run and commit the asset; any engine loads, references and cooks it normally. Or sidestep the module entirely with an inline `hlsl { }` expression or an existing dynamic input asset.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5100"
+    },
+    {
+      "code": "DFX5101",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "The `Root=\"...\"` on a `.dfm` does not name a mounted content root.",
+      "meaning": "The `Root=\"...\"` on a `.dfm` does not name a mounted content root.",
+      "fix": "`Root` is `Game`, empty, or `Plugin.<PluginName>`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5101"
+    },
+    {
+      "code": "DFX5102",
+      "severity": "info",
+      "stage": "Generation and asset writing",
+      "title": "Input '%s' is marked [StaticSwitch]. Tier-one generation (plan 3.3) lowers the whole Body to a single custom HLSL node, which has no branch for a switch to select, so it is written as an ordinary input instead. The body reads it the same way; only the compile-time folding is lost.",
+      "meaning": "Tier-one generation (plan 3.3) puts the whole body in one custom HLSL node, which has no branch for a switch to select, so a `[StaticSwitch]` input becomes an ordinary one. Said out loud because silently downgrading a declared compile-time switch to a runtime value is the kind of difference that surfaces later as a performance question nobody can source.",
+      "fix": "Nothing -- the body reads it the same way. Only the compile-time folding is lost.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5102"
+    },
+    {
+      "code": "DFX5103",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Package '%s' exists on disk but could not be loaded.",
+      "meaning": "The package exists on disk but would not load. Usually a partially written file or one held by another process.",
+      "fix": "Check the file. If the editor has it open, close the asset and rebuild.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5103"
+    },
+    {
+      "code": "DFX5104",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Package '%s' exists but holds no Niagara script named '%s'. Refusing to overwrite it.",
+      "meaning": "The target package exists and holds something other than the expected script. DreamFX refuses to overwrite it rather than replacing an unrelated asset.",
+      "fix": "Change `Name=\"...\"`, or delete the asset if it really is stale.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5104"
+    },
+    {
+      "code": "DFX5105",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Could not create package '%s'.",
+      "meaning": "The package could not be created -- usually an unmounted root or an invalid name.",
+      "fix": "Check `Root` and `Name`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5105"
+    },
+    {
+      "code": "DFX5106",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "Could not wire the module graph. The Niagara schema rejected a parameter map connection.",
+      "meaning": "The Niagara schema rejected a connection while building the module graph. A type mismatch between an input's declared type and the pin it feeds is the usual cause.",
+      "fix": "Check the input's type. If it is a type Niagara has no pin for, the module cannot take it.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5106"
+    },
+    {
+      "code": "DFX5107",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "'%s' no longer matches the module asset at '%s', and this build cannot regenerate it. Rebuild it where a graph backend runs and commit the updated asset; %s",
+      "meaning": "The `.dfm` source no longer matches its committed asset, and this build has no graph backend to regenerate it. Distinct from DFX5100 because the remedy differs: there is an asset, it is simply out of date.",
+      "fix": "Rebuild the module where a backend runs and commit the updated asset. The trailing half of the message names the check that failed, which is what to fix if you expected this engine to be able to generate.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5107"
+    },
+    {
+      "code": "DFX5109",
+      "severity": "error",
+      "stage": "Generation and asset writing",
+      "title": "'%s' references '%s', which does not exist. Create the asset before building (a renderer built against a missing asset renders nothing), or fix the path.",
+      "meaning": null,
+      "fix": null,
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx5xxx/#dfx5109"
+    },
+    {
+      "code": "DFX6001",
+      "severity": "error",
+      "stage": "Niagara compilation",
+      "title": "A Niagara compile error, mapped back to the source line of the module that raised it.",
+      "meaning": "A Niagara compile error, mapped back to the source line of the module that raised it.",
+      "fix": "The message is Niagara's own. An unresolved attribute usually means a module that writes it is missing or runs later in the stack than the module that reads it.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/#dfx6001"
+    },
+    {
+      "code": "DFX6002",
+      "severity": "warning",
+      "stage": "Niagara compilation",
+      "title": "A Niagara compile warning, mapped back to source.",
+      "meaning": "A Niagara compile warning, mapped back to source.",
+      "fix": "Read the message. Warnings from a dependency are marked as such.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/#dfx6002"
+    },
+    {
+      "code": "DFX6003",
+      "severity": "error",
+      "stage": "Niagara compilation",
+      "title": "A Niagara stack issue at error level -- an unmet module dependency, most often.",
+      "meaning": "A Niagara stack issue at error level -- an unmet module dependency, most often. Stack issues are only readable where Slate exists, so these appear in the editor and in the corpus suite but not in a headless build (`GetStackIssues` is not headless-safe).",
+      "fix": "Add the module the dependency names. `ScaleSpriteSize` requiring `UpdateAge` (provided by `ParticleState`) is the common one -- without it `NormalizedAge` never advances and every age-driven curve evaluates at zero.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/#dfx6003"
+    },
+    {
+      "code": "DFX6004",
+      "severity": "warning",
+      "stage": "Niagara compilation",
+      "title": "A Niagara stack issue at warning level.",
+      "meaning": "A Niagara stack issue at warning level. A deprecated module reports here.",
+      "fix": "The message usually names the replacement asset.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/#dfx6004"
+    },
+    {
+      "code": "DFX6005",
+      "severity": "error",
+      "stage": "Niagara compilation",
+      "title": "Niagara compilation of '%s' did not succeed (status %s).",
+      "meaning": "The system's compile did not reach a successful state. Individual errors are reported as DFX6001 above this.",
+      "fix": "Fix the errors above. A status of `Dirty` with no errors means the compile did not finish.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/#dfx6005"
+    },
+    {
+      "code": "DFX6006",
+      "severity": "error",
+      "stage": "Niagara compilation",
+      "title": "Niagara could not compile the body of '%s':\\n%s",
+      "meaning": "A `.dfm`'s body is not valid HLSL once lowered. The Niagara message follows.",
+      "fix": "Read the translator error. `Cannot access field 'X' of structure` means a namespaced reference did not resolve -- `Particles.*` has to be a known attribute or declared with a type in the body (DFX3046).",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/#dfx6006"
+    },
+    {
+      "code": "DFX6007",
+      "severity": "info",
+      "stage": "Niagara compilation",
+      "title": "Nothing in this source writes that parameter, so there is no graph parameter for a default to sit on and Niagara refuses the read. Check the asset before the effect: the decompiler drops any module input whose value matches a freshly probed module, and a value the author set that happens to equal the default is dropped with them -- NS_Spawn_Ground_Root reads Particles.MySize and builds clean once the suppressed writes are exported, so its text was missing a write its asset had. If the source really is the whole story, write the parameter before whatever reads it -- for an 'Emitter.<Module>.<Output>' name, move the module that produces it ahead of its readers -- or drop the read. Building on an engine with the MoonEngine additions makes the message go away by supplying the type's zero, which is not the same as making the effect work.",
+      "meaning": "Attached to a DFX6001 \"read before being set\": nothing in the **source text** writes the parameter, so no link write created it and there is no graph parameter for a default to sit on.",
+      "fix": "**Check the asset before the effect.** The first asset to carry this message, `NS_Spawn_Ground_Root`, was ruled a defective effect on the evidence that its export had no writer --- and the export was the lossy step. A suppressed static switch several stacks away had been dropped by the decompiler, the rebuild compiled the other branch, and the missing write was a casualty with an unrelated name. The asset wrote the parameter all along; once switches export unconditionally (2026-08-11) it builds clean on both engines. That ruling is void, and the shape of the mistake is the house rule it produced: proving \"the asset does not contain X\" takes asset-level evidence (PkgInfo, a reflection walk, asset-diff), never an export product.\n\nFirst re-export the asset with a current build --- if the message goes away, the source was missing something the exporter used to drop, and nothing was ever wrong with the effect. If the source genuinely is the whole story (hand-written, or the asset really has no writer), fix it there: write the parameter before whatever reads it --- for an `Emitter.<Module>.<Output>` name, move the module that produces it above its readers --- or drop the read. Building on MoonEngine makes the message go away by supplying the type's zero, which is not the same as making the effect work.\n\n**Why DreamFX does not just create the parameter.** It could: `FGraphSurgeon::AddParameter` already creates one by reflection for the `.dfm` path. Deliberately not wired in --- reflection parameter creation in the `.dfs` path would invert the layer dependency and paper over real source defects on every engine.\n\n**Not** a reason to distrust the build. It is an explanation attached to an error, never an error of its own.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/#dfx6007"
+    },
+    {
+      "code": "DFX6008",
+      "severity": "error",
+      "stage": "Niagara compilation",
+      "title": "'%s' finished its compile with stale scripts: %s. The compiled VM was not rebuilt from the graphs this build wrote, so the asset would simulate something other than what the source says. This is a DreamFX pipeline defect -- report it with this source file.",
+      "meaning": "The build finished its Niagara compile, and the engine's own synchronization test then said some script's stored VM was **not** compiled from the graphs as this build left them. That should be impossible with the build forcing its final compile, which is exactly why it is an error: either a write path mutated a graph after the compile was issued, or the force was lost somewhere. The check exists because this class of asset has shipped before --- `NE_C` of `NS_Spawn_Teleport_Root` carried bytecode from an all-Unset-switches era under the compile id of the correct graph, and simulated the wrong branches for days while every text-level check agreed with the source (2026-08-11).",
+      "fix": "Not in the source --- the message names a DreamFX pipeline defect. Rebuild once with `-Force`; if it recurs, report it with the source file and the named scripts. The stale scripts list says which emitter and which stage to look at.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx6xxx/#dfx6008"
+    },
+    {
+      "code": "DFX7001",
+      "severity": "error",
+      "stage": "Provenance, drift and lint",
+      "title": "Asset '%s' carries no DreamFX provenance stamp: it was never generated from this source, or it was created by hand.",
+      "meaning": "The asset carries no provenance stamp: it was never generated from this source, or it was built by hand.",
+      "fix": "Run the build. If the asset is hand-built and should stay that way, do not point a `.dfs` at its path -- a build would overwrite it.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7001"
+    },
+    {
+      "code": "DFX7002",
+      "severity": "error",
+      "stage": "Provenance, drift and lint",
+      "title": "Asset '%s' is stale: it was generated from a different revision of this source. Run the DreamFX build.",
+      "meaning": "The asset was generated from a different revision of this source. This is the case nobody notices on their own: someone edited a `.dfs`, did not rebuild, and committed both. A build alone would pass, because a build fixes it.",
+      "fix": "Run the DreamFX build and commit the asset with the source.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7002"
+    },
+    {
+      "code": "DFX7003",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "Asset '%s' was generated by DreamFX %s; the current generator is %s. A rebuild is recommended.",
+      "meaning": "The asset was generated by an older generator. The same text can lower to a different asset after a generator change, so the stamp records the version.",
+      "fix": "Rebuild.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7003"
+    },
+    {
+      "code": "DFX7004",
+      "severity": "error",
+      "stage": "Provenance, drift and lint",
+      "title": "Asset '%s' does not exist: this source has never been built.",
+      "meaning": "`-Verify` found no asset at all for this source.",
+      "fix": "Run the build.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7004"
+    },
+    {
+      "code": "DFX7005",
+      "severity": "error",
+      "stage": "Provenance, drift and lint",
+      "title": "R7 drift.",
+      "meaning": "R7 drift. The source did not change and the asset did not change, but a module they both depend on now exposes a different version -- so the asset was built against a different module than the one this build would use. Nothing in the source or the asset says anything about it, which is why the stamp records module versions.",
+      "fix": "Rebuild to adopt the new version, or pin the module with `@<version>` to have the mismatch reported at the call site. A warning by default because an engine upgrade hits every source at once and a rebuild resolves it; `-StrictVersions` makes it an error, for a release gate.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7005"
+    },
+    {
+      "code": "DFX7101",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "Emitter '%s' simulates on the GPU but declares no FixedBounds. GPU emitters cannot compute their own bounds, so it will use a default box and may be culled unexpectedly.",
+      "meaning": "A GPU emitter cannot read its own particle positions back to compute bounds, so without a fixed box it gets a default one and vanishes the moment the camera looks at it from the wrong angle.",
+      "fix": "Set `FixedBounds = box(...)` on the emitter or the system.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7101"
+    },
+    {
+      "code": "DFX7102",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "Emitter '%s' spawns by rate ('%s') with no upper bound. Set AllocationMode = Fixed and PreAllocationCount to cap the particle count.",
+      "meaning": "Rate-based spawning has no ceiling of its own: a long-lived emitter with an automatic allocation estimate keeps reallocating, and a runaway rate has nothing to stop it.",
+      "fix": "Set `AllocationMode = Fixed;` and `PreAllocationCount` to cap the particle count.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7102"
+    },
+    {
+      "code": "DFX7103",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "Emitter '%s' uses randomness ('%s') but does not set Determinism = true, so it will look different on every play. Add Determinism and RandomSeed to its Settings if reproducibility matters.",
+      "meaning": "Randomness without a fixed seed means the effect differs every play. Fine for ambience, wrong for anything a cinematic or a test compares against.",
+      "fix": "Add `Determinism = true;` and a `RandomSeed` if reproducibility matters.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7103"
+    },
+    {
+      "code": "DFX7104",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "This renderer has no Material and DreamFX knows no default for its type, so it will not draw. Set 'Material = \\\"...\\\";'.",
+      "meaning": "The renderer has no material and DreamFX knows no engine default for its type, so it draws nothing at all.",
+      "fix": "Set `Material = \"...\";`",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7104"
+    },
+    {
+      "code": "DFX7105",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "MeshRenderer OverrideMaterials is nonempty but material overrides are disabled. Set bOverrideMaterials = true; or remove OverrideMaterials to use the mesh's own materials.",
+      "meaning": "A mesh renderer has a nonempty `OverrideMaterials` array while its final `bOverrideMaterials` setting is false, so Niagara ignores the overrides.",
+      "fix": "Set `bOverrideMaterials = true;` to apply the array, or remove `OverrideMaterials` to use the mesh's own materials.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7105"
+    },
+    {
+      "code": "DFX7106",
+      "severity": "info",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: %s.%s is stored on the asset and not declared in this text -- skipped. pull adds no structure.",
+      "meaning": "The asset's store holds a value for an input the text does not write. pull rewrites the literals a call already has and nothing else: adding the argument would change the structure the text describes, which is a different edit with a different owner -- the build safety gate (DFX8017) is what decides whether a rebuild would drop such a value.\n\nThe list is long by nature. The engine materialises a constant for every input of every module, so most of these lines are the module's own defaults sitting in the store; on this project's content one system reports 94 of them and 8 are values someone actually tuned.",
+      "fix": "Nothing, when the value is the module's default -- a rebuild reproduces it and loses nothing, which is why these lines are information and not a failure. When it is a tuned value (the ones DFX8017 refuses a save over), write the input into the text and run pull again, or export with `decompile -NoDefaults`, which prints every input a module has. Either way the next pull has a literal to correct.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7106"
+    },
+    {
+      "code": "DFX7107",
+      "severity": "info",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: '%s' already holds every value '%s' stores for the input(s) it declares (%d compared, %d not declared, %d not writable, %d withheld). No bytes written.",
+      "meaning": "The comparison found nothing to write: every input the text declares and the asset stores a value for holds the same value already. The comparison is by value, not by characters -- the text's literal is lowered exactly the way a build lowers it and the bytes are compared against the store -- so `0` and a stored `0.0` are agreement and are not rewritten into each other's spelling.",
+      "fix": "Nothing. This is the fixed point the command is built around: a second `-Apply` on a file that has just been pulled reports this and writes no byte.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7107"
+    },
+    {
+      "code": "DFX7108",
+      "severity": "error",
+      "stage": "Provenance, drift and lint",
+      "title": "pull reads a .dfs and the Niagara system it names: '%s' declares a %s document.",
+      "meaning": "pull needs a Niagara system to read values out of, and it takes the path from the text's own `Name=`/`Root=` -- the same resolution a build uses, so that pull reads the asset this text writes. It fails four ways: the file declares a Module, Emitter or DynamicInput document rather than a System; the root token does not resolve; no system exists at the resolved path; or `-Asset=` named something that is not a Niagara system.",
+      "fix": "Build the text first when the asset has never been built, or name the asset you meant with `-Asset=`. Note which asset an export names: plan-v4 writes every export into the `Decompiled/` namespace, so an export names its MIRROR -- pulling the values someone tuned in the original is `-Asset=/Game/.../NS_X`, and that is also the only spelling of it, since a `Name=` can only point at one of the two.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7108"
+    },
+    {
+      "code": "DFX7109",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: %s: %s. pull rewrites literals inside a structure both sides agree on, so nothing in this stack was addressed.",
+      "meaning": "pull addresses an input by matching the text's statement to the asset's node at the **same position in the same stack**, and refuses the whole stack when the two do not line up: a different number of nodes, a node that is a module call on one side and a folded assignment run on the other, a module call whose asset is not the script that node runs, an `as <name>` the asset's node does not carry, or an emitter or stack the asset does not have at all.\n\nThe refusal is the feature. A correspondence that might be off by one rewrites the wrong literal, and a wrong literal in a text file is silent corruption -- the message therefore prints both sides' node names, which is also the diagnosis one line further on.",
+      "fix": "Build the text, which is what makes the asset match what the text describes, then pull. When the two are meant to differ structurally -- an edit that has not been built yet -- pull is not the tool for the values inside that stack.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7109"
+    },
+    {
+      "code": "DFX7110",
+      "severity": "error",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: the rewritten text does not read back (%s), so '%s' was left untouched.",
+      "meaning": "The write half failed, and nothing was left half-done. The same code covers the three ways it can: the rewritten text does not parse (pull parses its own output before touching the file, and splices only over the byte range the parser recorded for the literal, so this is a defect in pull rather than in the text), the backup could not be written, or the file itself could not be written.",
+      "fix": "Report it when the message says the rewritten text does not read back: the file on disk is exactly what it was, and the byte range pull replaced is the only information needed to reproduce it. The other two are an environment problem; when the last message names a backup, the bytes the file held are there.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7110"
+    },
+    {
+      "code": "DFX7111",
+      "severity": "info",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: %s is declared but was not written back: %s",
+      "meaning": "The text declares the input, the asset stores a value for it, and pull still would not write it. Each line names which of the reasons it is:\n\n- the value is not a literal -- a link, a dynamic input, an `hlsl { }` block, a `curve { }`, a data interface or an object reference. Changing a value MODE is an edit, not a write-back;\n- the text's value does not type-check against the input, which the build would refuse for the same reason;\n- several inputs, or several arguments, share one identifier. The DSL drops spaces, hyphens and case, so the value input `Scale RGB` and the inline edit condition `ScaleRGB` that gates it are one name to this language. Which one a written value MEANS is decided by its type, the way the generator decides it; pull only reports when it cannot tell;\n- the same parameter name is stored in two scripts with different values, so which copy the engine reads is not something pull can determine;\n- the stored value has no spelling in this language (a struct that is not int/float/bool/2-4 packed floats);\n- the stack is an `OnEvent` or `Stage` stack, which v1 does not address -- those are read through a focus slice, a different mechanism from the six fixed stacks.",
+      "fix": "Each line names its own reason, and the first two are about the text rather than the asset. For a shared identifier, spell the intended input in a way that cannot be read as the other one, or change the value so its type decides. For the event and stage stacks there is nothing to do in v1.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7111"
+    },
+    {
+      "code": "DFX7112",
+      "severity": "info",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: %s: %s",
+      "meaning": "One line per structural edit `-Structure` applied: a module the asset has and the text did not (the line that was inserted, verbatim), or a statement the text has and the asset does not (the line that was removed).",
+      "fix": "Nothing. This is the record of what the run wrote, and it is the only place the inserted line appears in full -- the summary counts the edits, and the console list would otherwise be the sole copy of a line that is now in a file.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7112"
+    },
+    {
+      "code": "DFX7113",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: %s: the asset has %s that the text does not, and the text has %s that the asset does not. The two lists line up uniquely, so -Structure writes that difference; it adds and removes lines, so it does not happen without the switch. Nothing in this stack was addressed.",
+      "meaning": "The text and the asset describe a stack's structure differently, and pull would not write the difference. Two shapes:\n\n- **without `-Structure`** -- the difference is located (the node lists align uniquely) and is deliberately not applied. Adding or removing a line moves modules in the execution order, and the values inside that stack are addressed by position, so the whole stack is left alone.\n- **with `-Structure`** -- the difference could not be written at all: a module whose inputs include a data interface or an object reference (the call cannot be reconstructed from what the store holds), a `Set Parameters` module the text does not declare (pulling a run of assignments out of a fold is a different edit), a statement with no recorded byte range, a statement that shares its line with something else, or a stack whose closing brace the parser did not record.",
+      "fix": "The message names which. For the first, re-run with `-Structure` if the edit is wanted. For the second, build the text first (`dfx build`), which makes the two structures agree and leaves the value write-back available.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7113"
+    },
+    {
+      "code": "DFX7114",
+      "severity": "warning",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: the baseline could not be used (%s), so every value this text declares was compared from scratch.",
+      "meaning": "The state of the dirty set, said once per run rather than guessed at:\n\n- **no baseline on disk** -- the first run after this feature arrives, or after the file under `Saved/DreamFX/Pull/` was deleted. Every value the text declares is compared, exactly as it was before the baseline existed, and a following `-Apply` records one.\n- **the baseline could not be used** -- unreadable, or a line that is not a record. The same full comparison happens, at warning severity, because the file being there and unusable is different from it not being there.\n- **the baseline could not be written** (`-Apply` only) -- the values were still written; only the record of what the asset held is missing, so the next run compares everything again.",
+      "fix": "Nothing, for the first two: they describe a run that did the conservative thing. For the third, check that `Saved/DreamFX/Pull/` is writable.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7114"
+    },
+    {
+      "code": "DFX7115",
+      "severity": "info",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: %s differs from this text but the asset has not moved since the last apply, so the text's value stands.",
+      "meaning": "A declared value differs from the asset's, and the asset has not moved since the last `-Apply` recorded a baseline for it. That makes the TEXT the newer side -- somebody edited the literal rather than the editor -- so the text's value stands and nothing is written. This is the whole point of the dirty set: without it, pull would hold the asset's reading above a text edit that deliberately contradicts it.",
+      "fix": "Nothing, when the text edit was meant. To make pull write the asset's value anyway, move the value in the editor (which is what the baseline is watching), or delete the baseline file to fall back to comparing everything.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7115"
+    },
+    {
+      "code": "DFX7116",
+      "severity": "info",
+      "stage": "Provenance, drift and lint",
+      "title": "pull: %s: %s -> %s",
+      "meaning": "One literal the text writes differs from the value the asset stores for that input. The diagnostic's own `file(line,col)` is the line the literal sits on, and the message gives `<module>.<input>`, the literal as written, and what it would become. Raised once per literal by `dfx pull`; the value compared is the asset's rapid-iteration **store**, not the resolved pin -- that distinction is the reason pull exists at all (`NS_Effects1_Mesh` stores `Sprite_Atlas_Size.MeshYaw` = -90 while every read of the pin returns 0.0).",
+      "fix": "Nothing, unless you asked for it: without `-Apply` the run is a dry run and writes no byte. `dfx pull <file> -Apply` writes them. Two things are worth checking when a line is a surprise: whether pull read the asset you meant (an export names its mirror, so pulling the original's values needs `-Asset=`), and whether the asset stores this value at all -- the run reports the store's own contents, and a text whose asset never held the value has nothing to pull.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx7xxx/#dfx7116"
+    },
+    {
+      "code": "DFX8000",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "Cannot decompile a null system.",
+      "meaning": "The asset path resolved to nothing, or to something that is not a Niagara System.",
+      "fix": "Check the path. `dfx decompile /Game/FX/NS_Spark` takes a package path.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8000"
+    },
+    {
+      "code": "DFX8001",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "Could not read emitters: %s",
+      "meaning": "The system's emitters could not be read.",
+      "fix": "The inner message is the adapter's. A system that fails to load at all reports DFX8000 instead.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8001"
+    },
+    {
+      "code": "DFX8002",
+      "severity": "warning",
+      "stage": "Decompiler",
+      "title": "Skipping emitter '%s': %s",
+      "meaning": "One emitter could not be exported; the rest of the system still was.",
+      "fix": "The export is incomplete for that emitter. `dfx coverage` reports the same information across every system at once.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8002"
+    },
+    {
+      "code": "DFX8003",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "Cannot decompile a null emitter.",
+      "meaning": "The Export .dfe entry point was reached with nothing selected, or the selected asset failed to load.",
+      "fix": "Right-click a single `UNiagaraEmitter` asset. Emitters that live inside a system are not separate assets -- export the system instead.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8003"
+    },
+    {
+      "code": "DFX8004",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "Could not create a host system to read the emitter through: %s",
+      "meaning": "Reading an emitter needs an owning system: every reader in the Niagara external edit API addresses through one. The throwaway host under `/Temp/DreamFX` could not be created.",
+      "fix": "The inner message is the adapter's. Nothing under `/Temp` is written to disk, so this is an in-memory failure -- usually the Niagara plugin failing to initialise rather than anything about the emitter.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8004"
+    },
+    {
+      "code": "DFX8005",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "Could not copy emitter '%s' into a host system: %s",
+      "meaning": "The emitter could not be copied into the host system. Niagara's `AddEmitter` rejected it as a template.",
+      "fix": "The inner message is Niagara's. An emitter asset saved by a much older engine version is the usual cause; opening and re-saving it in the Niagara editor upgrades it.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8005"
+    },
+    {
+      "code": "DFX8006",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "Could not read emitter '%s': %s",
+      "meaning": "The emitter was copied into the host, but its topology could not be read back.",
+      "fix": "The inner message is the adapter's. `dfx coverage` exercises the same read path across every system and is the fastest way to see whether the problem is this emitter or the read path itself.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8006"
+    },
+    {
+      "code": "DFX8010",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "'%s' cannot be adopted: '%s' has no DreamFXLang form yet, so adopting would destroy it on the first rebuild. Export .dfs instead.",
+      "meaning": "**Adopt** refuses an asset that has features DreamFXLang cannot express. One line is raised per feature.\n\nThis is the gate that makes adoption safe. Adopting means the text becomes the only source of truth for that asset, so adopting with a known gap destroys whatever did not survive the first rebuild -- silently, and with no diff to show for it.",
+      "fix": "Use **Export .dfs** instead. It writes the same text, does not touch the asset, and lists the gaps in the file header. To see which buckets are open across your own content, run `dfx.ps1 coverage`.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8010"
+    },
+    {
+      "code": "DFX8011",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "Cannot adopt '%s': source destination or another source already exists at '%s'. Edit that file instead; Adopt never replaces existing source.",
+      "meaning": "Another `.dfs` already declares the same target asset. Two sources generating one asset take turns overwriting each other, and whichever built last wins.\n\nNeither source can detect this at build time -- both succeed. The only place to catch it is here, before the second one exists.",
+      "fix": "Edit the existing source instead. Its path is in the message and in the toast.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8011"
+    },
+    {
+      "code": "DFX8012",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "'%s' was adopted, but re-exporting the rebuilt asset does not reproduce this file. First difference at %s",
+      "meaning": "The asset was adopted and rebuilt, but re-exporting the rebuilt asset does not reproduce the file that was written. The first differing line is in the message.\n\nBecause DFX8010 already ruled out every *known* gap, a mismatch here is a real defect in the generator or the decompiler rather than an expected loss.",
+      "fix": "The source file stays on disk and the asset was rebuilt from it, so the text is authoritative either way -- nothing is lost. Report the differing line: a round-trip that is not a fixed point is exactly what `DreamFX.Corpus.RoundTrip` exists to prevent, so a case that reaches this is one the corpus does not cover yet.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8012"
+    },
+    {
+      "code": "DFX8013",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "This file sits in the decompiled output directory but Name=\\\"%s\\\" builds '%s', outside the '%s/' namespace. That would overwrite the asset it was exported from. Re-export it, or move the file out of the decompiled tree to keep this name.",
+      "meaning": "The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its `Name=` resolves to an asset outside the `Decompiled/` content namespace. Building it would write over the asset it was exported from -- usually third-party content the author only meant to read.\n\nAlmost always this is an export written before the plugin started rehoming exports: those files named the original asset, and the whole decompiled tree was kept out of the build to compensate. The tree is ordinary source now, so the check moved onto the file itself.",
+      "fix": "Re-export the asset (right-click > *Export .dfs*, or `dfx decompile-all -Path=...`). The new file names `Decompiled/<original directory>/<asset>` and rebuilds a mirror beside the original, which is what makes it safe to edit and save.\n\nIf the intent really is to make this text the asset's source of truth, that is *Adopt*, not *Export*: move the file out of the decompiled tree into a `DFX/` directory and keep the name it has. Adopt writes exactly that arrangement, and refuses when the export would lose something the language cannot express yet (DFX8010).",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8013"
+    },
+    {
+      "code": "DFX8014",
+      "severity": "warning",
+      "stage": "Decompiler",
+      "title": "Emitter '%s' inherits from '%s'. The export flattens the inheritance: the merged stack is carried in full, but the rebuilt emitter no longer follows the parent, so later parent edits will change the original and not the mirror.",
+      "meaning": "Export cannot preserve every aspect of the emitter's native inheritance. System `.dfs` export now retains `inherits \"<parent asset>\" version \"<GUID>\"` and omits supported content identical to the selected parent version. This warning identifies a remaining limitation: changed stacks or renderer groups are complete overrides; event handlers and stages are snapshots; inherited defaults, handlers or entire renderer/stage groups cannot be removed in source; or a parent association, version or baseline could not be read reliably. It also reports a parent that is no longer an inheritable standalone asset, an invalid parent chain, and unmerged changes on the parent or child. Standalone `.dfe` export still flattens the parent relationship into a snapshot.",
+      "fix": "Read the specific message and coverage gap before adopting the export. Export the owning system as `.dfs` to retain a native parent link. Merge and save pending parent/ancestor changes in Niagara, merge the child, and re-export; repair invalid parent assets or versions first. For an intentional complete-block override, keep the warning's inheritance limit in mind: later parent edits inside that block will not propagate on rebuild. For deletions without a source spelling, retain editor authoring or change the parent/source design rather than treating the snapshot as a complete round trip. See [native emitter inheritance](../language/native-emitter-inheritance.md) for the supported override rules.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8014"
+    },
+    {
+      "code": "DFX8015",
+      "severity": "warning",
+      "stage": "Decompiler",
+      "title": "Emitter '%s' carries %d event handler(s) this export cannot represent%s. The rebuilt emitter will receive no events -- an event-spawned emitter comes back permanently empty. The gap header names each handler's source emitter and event.",
+      "meaning": "The emitter carries event handlers the export has no text form for. Event handlers themselves ARE supported --- they export as `OnEvent(...)` blocks --- so this now fires in two narrower cases only:\n\n- the emitter has **more than one** handler (one `OnEvent` block per emitter is representable, because the write side reaches an event stack through a single zero usage id);\n- the export is a **standalone `.dfe`**, which has no sibling emitter for the handler's `Source` to name (the stored `SourceEmitterID` is a handle guid no rebuild could reproduce, so the source travels by emitter NAME).",
+      "fix": "For the multi-handler case, split the receiving emitter so each one carries a single handler. For the standalone case, export the whole system as a `.dfs` instead, where the source emitter exists to be named. Either way the gap header names each handler's source emitter and event, so nothing is lost silently.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8015"
+    },
+    {
+      "code": "DFX8016",
+      "severity": "warning",
+      "stage": "Decompiler",
+      "title": "Emitter '%s' carries %d simulation stage(s) this export cannot represent (custom stage class or missing script). The gap header names each one.",
+      "meaning": "The emitter carries a simulation stage the export has no text form for. Ordinary stages export as `Stage name(...)` blocks and do not raise this; what remains is a stage whose class is not the engine's `UNiagaraSimulationStageGeneric` (a custom C++ stage), or one whose script object is missing from the asset. The gap header names each one, so the loss survives into code review rather than living only in a commandlet log.",
+      "fix": "Nothing to fix in the source file — this is a representation limit. If the stage matters, keep authoring that emitter in the Niagara editor; a rebuilt mirror will not run it.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8016"
+    },
+    {
+      "code": "DFX8017",
+      "severity": "warning",
+      "stage": "Decompiler",
+      "title": "emitter '%s' uses unsupported Lightweight/Stateless mode. Keep this emitter in Niagara; DreamFX cannot rebuild its stateless modules and renderers.",
+      "meaning": "An emitter handle uses Niagara's Lightweight/Stateless mode. DreamFX does not yet represent its stateless modules and renderers. Export records a coverage gap and omits that emitter instead of presenting an empty standard emitter as a complete export. Adopt rejects exports with this gap before rebuilding the asset.",
+      "fix": "Keep authoring this emitter in Niagara. A partial export remains useful for inspecting the supported portions of the system, but it is not a complete migration. Convert the emitter to a supported standard emitter in Niagara only if that is appropriate for the effect, then export again.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8017"
+    },
+    {
+      "code": "DFX8018",
+      "severity": "error",
+      "stage": "Decompiler",
+      "title": "'%s' was not saved: rebuilding it would drop %d fact(s) this source cannot express, and a save would destroy them. They are listed above, and the asset still holds every one of them. -Force writes anyway; full lists in %s",
+      "meaning": "A rebuild would leave the asset holding less than it holds now, so the save was refused. One line is raised per fact that would be lost, and then this one as the summary; the fact lists themselves are written to `Saved/DreamFX/BuildSafety/<asset>.{before,after,lost}.facts`, because the console truncates long facts and because after a `-Force` save the asset no longer holds the `before` state at all.\n\nThe build replays text onto the asset, and text is not a complete description of a Niagara system. Inputs the decompiler suppressed (R8: only inputs that differ from a pristine module are printed), renderer bindings a commandlet patched in after the last build, properties no setting table carries --- a rebuild replaces whatever those held, silently. Measured on this project's own content: 41 stored module-input constants on one asset, `Sprite_Atlas_Size.MeshYaw` -90 -> 0 on another, 61 on a third. Every one of them had L1 and L2 green, because both sides of an L1 comparison are the same lossy exporter's output.\n\nWhat separates this gate from DFX8010 is where it reads. DFX8010 refuses an *adoption* using the exporter's own list of features it could not carry, and none of the three assets above appears in that list. This compares the asset against itself by reflection --- `DescribeSystemFacts`, read before the build's first write and again immediately before the save --- so a loss the exporter makes on both sides is exactly what it is able to see. The system's own properties are part of that comparison, which they were not before this gate existed.",
+      "fix": "Read the lines above: each names one address, the value it holds now, and either the value the rebuild would write instead or `(missing)` when the rebuild has nothing for it at all. Then pick one:\n\n- Teach the source to carry it. A suppressed input can usually simply be written out; a renderer's material-parameter bindings travel as the `MaterialParameters = \"{...}\"` JSON the decompiler emits.\n- Keep authoring that asset in the editor and export it (*Export .dfs*) instead of adopting it. Adopt makes the text the only source of truth, and this gate is what turns that from a side effect into a decision.\n- `-Force` writes anyway. The same list is logged at warning severity, so a forced build stays accountable afterwards; the refusal is never silent.\n\nA refused build writes neither the asset nor its provenance stamp, so the next ordinary build is not skipped as up to date. In an editor session the refused package is also reloaded from disk: the rebuild had already been applied to the asset in memory, and leaving it there would let *Save All*, autosave or an open Niagara editor write exactly what the gate refused. On the command line the process ends and nothing is kept.\n\nA rebuild that loses nothing logs nothing, and a target with no asset yet is never refused: a first generation has no earlier content to replace.",
+      "doc": "https://fx.toolchain.64hz.cn/en/docs/diagnostics/dfx8xxx/#dfx8018"
+    }
+  ]
+}
