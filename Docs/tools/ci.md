@@ -68,12 +68,23 @@ nobody documented.
 > The reason for splitting it this way is direct: **the half that rots (which codes exist, what they
 > say) is regenerated, and the half that does not (why it happens) is written once.**
 
+```bash
+pwsh -File Plugins/DreamFX/.skill/gen-knowledge.ps1 -Check
+```
+
+Two more files are generated from those pages and from the cheat sheet's source,
+`.skill/cheatsheet/cheatsheet.src.md`: `Docs/diagnostics/codes.json`, every code as data for tools and
+agents, and `Docs/cheatsheet.md` with its example `DFX/CheatSheet/NS_CheatSheetSparks.dfs`, which the
+`lint`, `build` and `verify` steps then build like any other source. `-Check` fails when either is out of
+date. Both checks need no engine; the repository's own CI runs them on every pull request.
+
 ## A minimal pipeline
 
 ```yaml
 # Sketch: any CI is these four steps plus the docs gate
 steps:
   - run: pwsh -File Plugins/DreamFX/.skill/gen-diagnostics.ps1 -Check
+  - run: pwsh -File Plugins/DreamFX/.skill/gen-knowledge.ps1 -Check
   - run: pwsh -File Plugins/DreamFX/.skill/ci.ps1
 ```
 
