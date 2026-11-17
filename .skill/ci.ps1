@@ -6,7 +6,8 @@
     Runs the checks that together mean "the text and the assets agree", in the order that
     gives the most useful first failure:
 
-      0. checks  -- diagnostic reference is current and driver regressions pass.
+      0. checks  -- diagnostic reference, diagnostics JSON and cheat sheet are current, and driver
+                    regressions pass.
       1. lint    -- static checks over source. No asset access, so it fails fastest.
       2. build   -- every .dfs and .dfm generates and its Niagara compile is clean.
       3. verify  -- every generated asset carries a provenance stamp matching its source.
@@ -76,6 +77,7 @@ if ($Project) { $common += @('-Project', $Project) }
 if ($Engine) { $common += @('-Engine', $Engine) }
 
 Invoke-Step -Name 'diagnostics' -Script (Join-Path $PSScriptRoot 'gen-diagnostics.ps1') -Arguments @('-Check')
+Invoke-Step -Name 'knowledge files' -Script (Join-Path $PSScriptRoot 'gen-knowledge.ps1') -Arguments @('-Check')
 Invoke-Step -Name 'driver regressions' -Script (Join-Path $PSScriptRoot '../Tests/Tools/Test-Driver.ps1') -Arguments @()
 Invoke-Step -Name 'lint' -Arguments (@('lint', '-All') + $common)
 
