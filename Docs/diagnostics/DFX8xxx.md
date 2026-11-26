@@ -140,7 +140,7 @@ Could not read emitter '%s': %s
 '%s' cannot be adopted: '%s' has no DreamFXLang form yet, so adopting would destroy it on the first rebuild. Export .dfs instead.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:540`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:538`
 <!-- generated:end DFX8010 -->
 
 **Cause.** **Adopt** refuses an asset that has features DreamFXLang cannot express. One line is raised per feature.
@@ -160,7 +160,7 @@ This is the gate that makes adoption safe. Adopting means the text becomes the o
 Cannot adopt '%s': source destination or another source already exists at '%s'. Edit that file instead; Adopt never replaces existing source.
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:456`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:454`
 <!-- generated:end DFX8011 -->
 
 **Cause.** Another `.dfs` already declares the same target asset. Two sources generating one asset take turns overwriting each other, and whichever built last wins.
@@ -180,7 +180,7 @@ Neither source can detect this at build time -- both succeed. The only place to 
 '%s' was adopted, but re-exporting the rebuilt asset does not reproduce this file. First difference at %s
 ```
 
-**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:636`
+**Raised by** `Source/DreamFXEditor/Private/UI/DreamFXAssetCommands.cpp:634`
 <!-- generated:end DFX8012 -->
 
 **Cause.** The asset was adopted and rebuilt, but re-exporting the rebuilt asset does not reproduce the file that was written. The first differing line is in the message.
@@ -203,7 +203,7 @@ This file sits in the decompiled output directory but Name=\"%s\" builds '%s', o
 **Raised by** `Source/DreamFXEditor/Private/Generation/DreamFXGenerator.cpp:4843`
 <!-- generated:end DFX8013 -->
 
-**Cause.** The file lives under the *Decompiled Output Directory* (`DFX/Decompiled` by default), but its
+**Cause.** The file lives under the *Decompiled Output Directory* (`Decompiled/` inside the source directory, `DreamSource/FX/Decompiled`, by default), but its
 `Name=` resolves to an asset outside the `Decompiled/` content namespace. Building it would write over
 the asset it was exported from -- usually third-party content the author only meant to read.
 
@@ -216,7 +216,7 @@ file names `Decompiled/<original directory>/<asset>` and rebuilds a mirror besid
 is what makes it safe to edit and save.
 
 If the intent really is to make this text the asset's source of truth, that is *Adopt*, not *Export*:
-move the file out of the decompiled tree into a `DFX/` directory and keep the name it has. Adopt writes
+move the file out of the decompiled tree into the source directory (`DreamSource/FX/`) and keep the name it has. Adopt writes
 exactly that arrangement, and refuses when the export would lose something the language cannot express
 yet (DFX8010).
 

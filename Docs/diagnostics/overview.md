@@ -6,7 +6,7 @@ description: Every DFXnnnn code — how to read one, which pipeline stage each f
 Every DreamFX diagnostic is a `DFXnnnn` carrying a **file, line and column**:
 
 ```text
-DFX/Effects/NS_Hello.dfs(31,17): error DFX3003: Module 'GravityForce' has no input named 'Gravty'.
+DreamSource/FX/Effects/NS_Hello.dfs(31,17): error DFX3003: Module 'GravityForce' has no input named 'Gravty'.
 Did you mean 'Gravity'? Available inputs: Gravity, CoordinateSpace
 ```
 

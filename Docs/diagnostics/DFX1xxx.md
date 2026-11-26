@@ -19,7 +19,7 @@ Could not read source file '%s'.
 
 **Cause.** The path does not exist, or the process cannot read it. A `from` reference and a `-File=` argument both land here.
 
-**Fix.** Check the path. Relative `from` paths resolve against the referencing file first, then against every DFX root.
+**Fix.** Check the path. Relative `from` paths resolve against the referencing file first, then against every source root. A leading `DFX/` or `DreamSource/FX/` is dropped first, so a path written before the [DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout) still resolves.
 
 ## DFX1001
 

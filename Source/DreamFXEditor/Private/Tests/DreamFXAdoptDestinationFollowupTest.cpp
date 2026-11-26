@@ -5,6 +5,7 @@
 #include "DreamFXWorkspaceTestFiles.h"
 #include "Misc/ScopeExit.h"
 #include "NiagaraSystem.h"
+#include "SourceFiles/DreamFXPaths.h"
 #include "UI/DreamFXAssetCommands.h"
 #include "UObject/GCObjectScopeGuard.h"
 #include "UObject/Package.h"
@@ -17,7 +18,7 @@ bool FDreamFXAdoptDestinationRegression::RunTest(const FString& Parameters)
 	using namespace UE::DreamFX;
 	using namespace UE::DreamFX::Editor;
 	using namespace UE::DreamFX::Editor::WorkspaceFollowups;
-	const FString SourceRoot = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("DFX"));
+	const FString SourceRoot = FDreamFXPaths::GetProjectSourceDirectory();
 	const bool bRootExisted = IFileManager::Get().DirectoryExists(*SourceRoot);
 	ON_SCOPE_EXIT { if (!bRootExisted) { IFileManager::Get().DeleteDirectory(*SourceRoot, false, false); } };
 	FFiles Files;

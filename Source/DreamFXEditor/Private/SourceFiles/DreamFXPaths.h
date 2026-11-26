@@ -4,15 +4,40 @@
 
 namespace UE::DreamFX::Editor
 {
-	/** One `DFX/` source tree: the project's own, or one belonging to an enabled plugin. */
+	/** One source tree: the project's own, or one belonging to an enabled plugin. */
 	struct FSourceRoot
 	{
-		/** Absolute path of the DFX directory. */
+		/** Absolute path of the source directory: `DreamSource/FX`, or a legacy `DFX`. */
 		FString Directory;
 		/** The token an author writes in `Root="..."`. Empty for the project root. */
 		FString RootToken;
 		/** Content mount point the token resolves to, e.g. "/Game" or "/MoonToon". */
 		FString MountPoint;
+		/** True when this is a deprecated `DFX/` directory that is still read. */
+		bool bLegacy = false;
+	};
+
+	/**
+	 * Which directory the project's sources are read from, and why (Plan/DreamSource, section 13.2).
+	 *
+	 *   configured exists                 -> configured (a legacy `DFX/` beside it is ignored, and said so)
+	 *   only the legacy `DFX/` exists     -> `DFX/`, deprecated
+	 *   neither                           -> configured; whatever creates a source creates it there
+	 */
+	struct FProjectSourceDirectory
+	{
+		/** Absolute, no trailing slash: where the project's sources are. */
+		FString Directory;
+		/** `<Project>/<UDreamFXSourceSettings::SourceDirectory>`, absolute. */
+		FString ConfiguredDirectory;
+		/** The configured value as written, relative to the project, e.g. `DreamSource/FX`. */
+		FString ConfiguredRelative;
+		/** `<Project>/DFX`, absolute. */
+		FString LegacyDirectory;
+		/** Directory is LegacyDirectory, because the configured one does not exist yet. */
+		bool bUsingLegacy = false;
+		/** The configured directory is used, and a legacy `DFX/` beside it is not read. */
+		bool bLegacyIgnored = false;
 	};
 
 	/**
@@ -35,7 +60,47 @@ namespace UE::DreamFX::Editor
 		 */
 		static constexpr const TCHAR* DecompiledNamespace = TEXT("Decompiled");
 
-		/** Project `DFX/` plus every enabled plugin's `DFX/`, in that order. */
+		/** The deprecated directory name, project and plugin alike. Still read when it is the only one there. */
+		static constexpr const TCHAR* LegacySourceDirectoryName = TEXT("DFX");
+
+		/** Where a plugin keeps its sources. Not configurable. */
+		static constexpr const TCHAR* PluginSourceDirectory = TEXT("DreamSource/FX");
+
+		/**
+		 * The project's source directory under the rule above. Fixed for the session once read: the source watcher is
+		 * set up on it at startup, so switching mid-session would leave the two disagreeing. A migration says
+		 * "restart" instead.
+		 */
+		static FProjectSourceDirectory ResolveProjectSourceDirectory();
+
+		/** ResolveProjectSourceDirectory().Directory. */
+		static FString GetProjectSourceDirectory();
+
+		/** A plugin's source directory: `<Plugin>/DreamSource/FX`, else `<Plugin>/DFX`, else the first (to create). */
+		static FString GetPluginSourceDirectory(const FString& PluginBaseDir, bool* bOutLegacy = nullptr);
+
+		/** `<Project>/Intermediate/DreamSource`, absolute. */
+		static FString GetDreamSourceIntermediateDirectory();
+
+		/** `<Project>/Intermediate/DreamSource/FX`: what this plugin rebuilds by itself (the bridge, DynamicMesh). */
+		static FString GetFXIntermediateDirectory();
+
+		/** `<Project>/Intermediate/DreamSource/fx.db`: the bridge's diagnostics, for tools. */
+		static FString GetFXDatabasePath();
+
+		/** `<source directory>/.dreamfx/index.db`: the module index, which only `dfx index` rebuilds. */
+		static FString GetIndexDatabasePath();
+
+		/**
+		 * Where *Export .dfs* writes, absolute: `UDreamFXEditorSettings::DecompiledOutputDirectory` when somebody set
+		 * it, else `<source directory>/Decompiled`. The old default `DFX/Decompiled` counts as unset.
+		 */
+		static FString GetDecompiledOutputDirectory();
+
+		/** Logs each deprecated directory in use once per process: the project's and every plugin's. */
+		static void LogDeprecatedSourceDirectoriesOnce();
+
+		/** The project's source directory plus every enabled plugin's, in that order. */
 		static const TArray<FSourceRoot>& GetSourceRoots();
 
 		/** Forces the next GetSourceRoots call to rescan. Used by the file watcher on plugin changes. */
@@ -112,9 +177,10 @@ namespace UE::DreamFX::Editor
 		/**
 		 * Resolves a `from "..."` reference to a source file on disk.
 		 *
-		 * Tried relative to the referencing file first, then against every DFX root, so both
-		 * `from "../Emitters/E_Flash"` and `from "DFX/Emitters/E_Flash"` work. The extension is
-		 * optional.
+		 * Tried relative to the referencing file first, then against every source root, so both
+		 * `from "../Emitters/E_Flash"` and `from "DFX/Emitters/E_Flash"` work. A leading `DFX/` or the
+		 * project's configured directory (`DreamSource/FX/`) is dropped, so a source written before the
+		 * DreamSource layout still resolves after the move. The extension is optional.
 		 */
 		static bool ResolveSourceReference(const FString& Reference, const FString& ReferencingFile,
 			const TCHAR* Extension, FString& OutFullPath, FString& OutError);

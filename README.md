@@ -96,7 +96,7 @@ System(Name="Effects/NS_Hello", Root="Game")
 ```
 
 ```bash
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Hello.dfs
 ```
 
 No editor required — generation runs headless. With the editor open, saving the file rebuilds the
@@ -119,9 +119,9 @@ and `Bind`, static switches in every value form, nested dynamic inputs, `hlsl { 
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 list
 
 # 2. build one file / verify without writing / lint only
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build  DFX/Effects/NS_Hello.dfs
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 verify DFX/Effects/NS_Hello.dfs
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 lint   DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build  DreamSource/FX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 verify DreamSource/FX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 lint   DreamSource/FX/Effects/NS_Hello.dfs
 
 # 3. bring an existing Niagara system into text
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion
@@ -208,6 +208,9 @@ Using a coding agent? Point it at [AGENTS.md](AGENTS.md) first.
 - **Host projects must enable the same content plugins as the authoring project** (e.g.
   `NiagaraFluids`): an unmounted plugin blinds the module probe, and sources referencing its modules
   surface as explicit gaps or compile errors.
+- **Sources live in `DreamSource/FX/`** (*Project Settings ▸ Dream Source ▸ FX*), each plugin's in its
+  own `DreamSource/FX/`. A project still on the old `DFX/` keeps working, with a deprecation warning
+  and a one-click migration in the editor ([layout and naming](Docs/getting-started/project-layout.md#the-dreamsource-layout)).
 - **Close the editor for package-writing commands** (`build`, `corpus`, `mirror-diff`,
   `decompile-all`) — two processes saving the same packages race silently.
 - Not covered (by design or not yet): Scratch Pad, module-internal graph lowering, GPU/CPU branch

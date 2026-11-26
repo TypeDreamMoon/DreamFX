@@ -1,6 +1,8 @@
 #include "DreamFXPaths.h"
 
+#include "DreamFXModule.h"
 #include "Settings/DreamFXEditorSettings.h"
+#include "Settings/DreamFXSourceSettings.h"
 
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
@@ -15,6 +17,175 @@ namespace UE::DreamFX::Editor
 		bool bGRootsCached = false;
 
 		const TCHAR* const SourceExtensions[] = { TEXT("dfs"), TEXT("dfe"), TEXT("dfm") };
+
+		/** Forward slashes, trimmed, no trailing slash. */
+		FString DreamFXPaths_CleanSettingPath(FString InPath)
+		{
+			InPath.TrimStartAndEndInline();
+			InPath.ReplaceInline(TEXT("\\"), TEXT("/"));
+			while (InPath.EndsWith(TEXT("/")))
+			{
+				InPath.LeftChopInline(1);
+			}
+			return InPath;
+		}
+
+		/** Absolute, normalized, no trailing slash. */
+		FString DreamFXPaths_FullDirectory(const FString& InPath)
+		{
+			FString Directory = FPaths::ConvertRelativePathToFull(InPath);
+			FPaths::NormalizeDirectoryName(Directory);
+			Directory.RemoveFromEnd(TEXT("/"));
+			return Directory;
+		}
+
+		/** `SourceDirectory` as configured, relative to the project; the default when unset, absolute or empty. */
+		FString DreamFXPaths_ConfiguredRelativeSourceDirectory()
+		{
+			const UDreamFXSourceSettings* Settings = GetDefault<UDreamFXSourceSettings>();
+			const FString Configured = DreamFXPaths_CleanSettingPath(Settings ? Settings->SourceDirectory.Path : FString());
+			// Absolute paths are refused: the extensions and every other checkout have to reproduce the same answer.
+			if (Configured.IsEmpty() || !FPaths::IsRelative(Configured))
+			{
+				return UDreamFXSourceSettings::GetDefaultSourceDirectory();
+			}
+			return Configured;
+		}
+
+		struct DreamFXPaths_FProjectSourceDirectoryMemo
+		{
+			FString ConfiguredRelative;
+			FProjectSourceDirectory Resolved;
+			bool bInitialized = false;
+		};
+
+		DreamFXPaths_FProjectSourceDirectoryMemo DreamFXPaths_GProjectSourceDirectoryMemo;
+
+		FProjectSourceDirectory DreamFXPaths_ResolveProjectSourceDirectoryUncached(const FString& InConfiguredRelative)
+		{
+			FProjectSourceDirectory Out;
+			Out.ConfiguredRelative = InConfiguredRelative;
+			Out.ConfiguredDirectory = DreamFXPaths_FullDirectory(FPaths::Combine(FPaths::ProjectDir(), InConfiguredRelative));
+			Out.LegacyDirectory = DreamFXPaths_FullDirectory(FPaths::Combine(FPaths::ProjectDir(), FDreamFXPaths::LegacySourceDirectoryName));
+
+			const bool bConfiguredExists = IFileManager::Get().DirectoryExists(*Out.ConfiguredDirectory);
+			// A configured directory that IS `DFX` is not a legacy one: it is what was asked for.
+			const bool bSame = Out.ConfiguredDirectory.Equals(Out.LegacyDirectory, ESearchCase::IgnoreCase);
+			const bool bLegacyExists = !bSame && IFileManager::Get().DirectoryExists(*Out.LegacyDirectory);
+
+			if (bConfiguredExists)
+			{
+				Out.Directory = Out.ConfiguredDirectory;
+				Out.bLegacyIgnored = bLegacyExists;
+			}
+			else if (bLegacyExists)
+			{
+				Out.Directory = Out.LegacyDirectory;
+				Out.bUsingLegacy = true;
+			}
+			else
+			{
+				Out.Directory = Out.ConfiguredDirectory;
+			}
+			return Out;
+		}
+	}
+
+	FProjectSourceDirectory FDreamFXPaths::ResolveProjectSourceDirectory()
+	{
+		const FString ConfiguredRelative = DreamFXPaths_ConfiguredRelativeSourceDirectory();
+		DreamFXPaths_FProjectSourceDirectoryMemo& Memo = DreamFXPaths_GProjectSourceDirectoryMemo;
+		// Re-resolved only when the setting itself changes, never because a directory appeared: a migration in this
+		// session must not flip the answer under the watcher that was set up on the old one.
+		if (!Memo.bInitialized || !Memo.ConfiguredRelative.Equals(ConfiguredRelative, ESearchCase::IgnoreCase))
+		{
+			Memo.ConfiguredRelative = ConfiguredRelative;
+			Memo.Resolved = DreamFXPaths_ResolveProjectSourceDirectoryUncached(ConfiguredRelative);
+			Memo.bInitialized = true;
+		}
+		return Memo.Resolved;
+	}
+
+	FString FDreamFXPaths::GetProjectSourceDirectory()
+	{
+		return ResolveProjectSourceDirectory().Directory;
+	}
+
+	FString FDreamFXPaths::GetPluginSourceDirectory(const FString& PluginBaseDir, bool* bOutLegacy)
+	{
+		const FString Current = DreamFXPaths_FullDirectory(FPaths::Combine(PluginBaseDir, PluginSourceDirectory));
+		const FString Legacy = DreamFXPaths_FullDirectory(FPaths::Combine(PluginBaseDir, LegacySourceDirectoryName));
+		const bool bLegacy = !IFileManager::Get().DirectoryExists(*Current) && IFileManager::Get().DirectoryExists(*Legacy);
+		if (bOutLegacy)
+		{
+			*bOutLegacy = bLegacy;
+		}
+		return bLegacy ? Legacy : Current;
+	}
+
+	FString FDreamFXPaths::GetDreamSourceIntermediateDirectory()
+	{
+		return DreamFXPaths_FullDirectory(FPaths::Combine(FPaths::ProjectIntermediateDir(), TEXT("DreamSource")));
+	}
+
+	FString FDreamFXPaths::GetFXIntermediateDirectory()
+	{
+		return FPaths::Combine(GetDreamSourceIntermediateDirectory(), TEXT("FX"));
+	}
+
+	FString FDreamFXPaths::GetFXDatabasePath()
+	{
+		return FPaths::Combine(GetDreamSourceIntermediateDirectory(), TEXT("fx.db"));
+	}
+
+	FString FDreamFXPaths::GetIndexDatabasePath()
+	{
+		return FPaths::Combine(GetProjectSourceDirectory(), TEXT(".dreamfx/index.db"));
+	}
+
+	FString FDreamFXPaths::GetDecompiledOutputDirectory()
+	{
+		const UDreamFXEditorSettings* Settings = GetDefault<UDreamFXEditorSettings>();
+		const FString Configured = DreamFXPaths_CleanSettingPath(Settings ? Settings->DecompiledOutputDirectory : FString());
+		// `DFX/Decompiled` was the default every saved DefaultEditor.ini spells out. While the project is still on `DFX/`
+		// the two answers are the same directory; after a migration only this one follows the sources.
+		if (Configured.IsEmpty() || Configured.Equals(TEXT("DFX/Decompiled"), ESearchCase::IgnoreCase))
+		{
+			return FPaths::Combine(GetProjectSourceDirectory(), TEXT("Decompiled"));
+		}
+		return DreamFXPaths_FullDirectory(FPaths::Combine(FPaths::ProjectDir(), Configured));
+	}
+
+	void FDreamFXPaths::LogDeprecatedSourceDirectoriesOnce()
+	{
+		static TSet<FString> Logged;
+		const FProjectSourceDirectory Project = ResolveProjectSourceDirectory();
+		if (Project.bUsingLegacy && !Logged.Contains(Project.LegacyDirectory))
+		{
+			Logged.Add(Project.LegacyDirectory);
+			UE_LOG(LogDreamFX, Warning,
+				TEXT("DreamFX: '%s' is deprecated. Move it to '%s' -- Dream sources are managed together under DreamSource/. ")
+				TEXT("It is still read until then."),
+				*Project.LegacyDirectory, *Project.ConfiguredDirectory);
+		}
+		if (Project.bLegacyIgnored && !Logged.Contains(Project.LegacyDirectory))
+		{
+			Logged.Add(Project.LegacyDirectory);
+			UE_LOG(LogDreamFX, Warning,
+				TEXT("DreamFX: '%s' is ignored because '%s' exists. Merge what it still holds into '%s' and delete it."),
+				*Project.LegacyDirectory, *Project.ConfiguredDirectory, *Project.ConfiguredDirectory);
+		}
+		for (const FSourceRoot& Root : GetSourceRoots())
+		{
+			if (Root.bLegacy && !Root.RootToken.IsEmpty() && !Logged.Contains(Root.Directory))
+			{
+				Logged.Add(Root.Directory);
+				UE_LOG(LogDreamFX, Warning,
+					TEXT("DreamFX: %s keeps its sources in the deprecated '%s'. Move them to '%s'."),
+					*Root.RootToken, *Root.Directory,
+					*FPaths::Combine(FPaths::GetPath(Root.Directory), PluginSourceDirectory));
+			}
+		}
 	}
 
 	void FDreamFXPaths::InvalidateSourceRoots()
@@ -32,26 +203,29 @@ namespace UE::DreamFX::Editor
 
 		GCachedRoots.Reset();
 
-		const FString ProjectDfx = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("DFX"));
-		if (IFileManager::Get().DirectoryExists(*ProjectDfx))
+		const FProjectSourceDirectory Project = ResolveProjectSourceDirectory();
+		if (IFileManager::Get().DirectoryExists(*Project.Directory))
 		{
 			FSourceRoot Root;
-			Root.Directory = ProjectDfx;
+			Root.Directory = Project.Directory;
 			Root.RootToken = FString();
 			Root.MountPoint = TEXT("/Game");
+			Root.bLegacy = Project.bUsingLegacy;
 			GCachedRoots.Add(MoveTemp(Root));
 		}
 
 		for (const TSharedRef<IPlugin>& Plugin : IPluginManager::Get().GetEnabledPlugins())
 		{
-			const FString PluginDfx = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir() / TEXT("DFX"));
-			if (!IFileManager::Get().DirectoryExists(*PluginDfx))
+			bool bLegacy = false;
+			const FString PluginDirectory = GetPluginSourceDirectory(Plugin->GetBaseDir(), &bLegacy);
+			if (!IFileManager::Get().DirectoryExists(*PluginDirectory))
 			{
 				continue;
 			}
 
 			FSourceRoot Root;
-			Root.Directory = PluginDfx;
+			Root.bLegacy = bLegacy;
+			Root.Directory = PluginDirectory;
 			Root.RootToken = FString::Printf(TEXT("Plugin.%s"), *Plugin->GetName());
 			Root.MountPoint = Plugin->GetMountedAssetPath().LeftChop(1); // "/MoonToon/" -> "/MoonToon"
 			GCachedRoots.Add(MoveTemp(Root));
@@ -88,15 +262,7 @@ namespace UE::DreamFX::Editor
 
 	bool FDreamFXPaths::IsDecompiledExport(const FString& FilePath)
 	{
-		const UDreamFXEditorSettings* Settings = GetDefault<UDreamFXEditorSettings>();
-		const FString Configured = Settings ? Settings->DecompiledOutputDirectory : FString();
-		if (Configured.IsEmpty())
-		{
-			return false;
-		}
-
-		FString Directory = FPaths::ConvertRelativePathToFull(
-			FPaths::Combine(FPaths::ProjectDir(), Configured));
+		FString Directory = GetDecompiledOutputDirectory();
 		if (!Directory.EndsWith(TEXT("/")))
 		{
 			Directory += TEXT("/");
@@ -140,16 +306,11 @@ namespace UE::DreamFX::Editor
 
 	FString FDreamFXPaths::DecompiledSourcePathFor(const FString& PackagePath, const TCHAR* Extension)
 	{
-		const UDreamFXEditorSettings* Settings = GetDefault<UDreamFXEditorSettings>();
-		const FString OutputDirectory = (Settings && !Settings->DecompiledOutputDirectory.IsEmpty())
-			? Settings->DecompiledOutputDirectory
-			: FString(TEXT("DFX/Decompiled"));
-
 		FString Relative = PackagePath;
 		Relative.RemoveFromStart(TEXT("/"));
 
 		return FPaths::ConvertRelativePathToFull(
-			FPaths::Combine(FPaths::ProjectDir(), OutputDirectory, Relative + Extension));
+			FPaths::Combine(GetDecompiledOutputDirectory(), Relative + Extension));
 	}
 
 	bool FDreamFXPaths::ResolveRootTokenForPackage(const FString& PackagePath, FString& OutRootToken,
@@ -333,13 +494,21 @@ namespace UE::DreamFX::Editor
 		{
 			OutCandidates.AddUnique(FPaths::ConvertRelativePathToFull(FPaths::GetPath(ReferencingFile), Relative));
 		}
+		// The directory name an author may have written in front: the legacy `DFX/` (every source before the DreamSource
+		// layout), and the project's configured one. Migrating moves the files and never edits them, so both must keep
+		// resolving against whichever root the file now sits in.
+		const FString ConfiguredPrefix = ResolveProjectSourceDirectory().ConfiguredRelative + TEXT("/");
+		const FString Prefixes[] = { FString(LegacySourceDirectoryName) + TEXT("/"), ConfiguredPrefix };
 		for (const FSourceRoot& Root : GetSourceRoots())
 		{
 			OutCandidates.AddUnique(FPaths::ConvertRelativePathToFull(Root.Directory / Relative));
-			FString WithoutDfxPrefix = Relative;
-			if (WithoutDfxPrefix.RemoveFromStart(TEXT("DFX/"), ESearchCase::IgnoreCase))
+			for (const FString& Prefix : Prefixes)
 			{
-				OutCandidates.AddUnique(FPaths::ConvertRelativePathToFull(Root.Directory / WithoutDfxPrefix));
+				FString WithoutPrefix = Relative;
+				if (WithoutPrefix.RemoveFromStart(Prefix, ESearchCase::IgnoreCase))
+				{
+					OutCandidates.AddUnique(FPaths::ConvertRelativePathToFull(Root.Directory / WithoutPrefix));
+				}
 			}
 		}
 	}

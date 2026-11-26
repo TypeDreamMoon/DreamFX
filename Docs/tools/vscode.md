@@ -1,18 +1,19 @@
 ---
 title: VSCode and the module index
-description: What the workspace file contains, how VSCode is discovered, the rules for jump links, and why .dfx-index.json probes input signatures.
+description: What the workspace file contains, how VSCode is discovered, the rules for jump links, what the extension reads in the DreamSource layout, and why the module index probes input signatures.
 ---
 
 ## Open DreamFX Workspace
 
-*Tools ▸ DreamFX ▸ Open DreamFX Workspace (VSCode)* rewrites `DFX/DreamFX.code-workspace`, then
-launches it through VSCode → the OS default editor → Notepad.
+*Tools ▸ DreamFX ▸ Open DreamFX Workspace (VSCode)* rewrites `DreamFX.code-workspace` in the project's
+source directory (`DreamSource/FX/`, see [the DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout)),
+then launches it through VSCode → the OS default editor → Notepad.
 
 ```json
 {
   "folders": [
     { "name": "DreamFX Source", "path": "." },
-    { "name": "Plugin: DreamFX", "path": "../Plugins/DreamFX/DFX" }
+    { "name": "Plugin: DreamFX", "path": "../../Plugins/DreamFX/DreamSource/FX" }
   ],
   "settings": {
     "files.associations": { "*.dfs": "dreamfxlang", "*.dfe": "dreamfxlang", "*.dfm": "dreamfxlang" }
@@ -26,7 +27,7 @@ launches it through VSCode → the OS default editor → Notepad.
 > **Warning:**
 >
 > **The file is fully rewritten every time, never merged.** Hand-added `launch` or `tasks` blocks are
-> lost. Per-user configuration belongs in `DFX/.vscode/`.
+> lost. Per-user configuration belongs in `DreamSource/FX/.vscode/`.
 
 The project root is always first and always `"."` — the workspace file lives inside it, and a stable
 folder identity keeps VSCode's per-folder state attached across a rewrite. A plugin root on another
@@ -61,16 +62,36 @@ Windows only, most specific first. The first candidate that exists on disk wins.
 Opening a **workspace** honours *Open Workspace In New Window*. Opening a **file** always passes
 `--reuse-window -g <path>:<line>:<col>` — a new window per diagnostic jump would be unusable.
 
+## The DreamSource layout
+
+The DreamFXLang extension follows the same [layout](../getting-started/project-layout.md#the-dreamsource-layout)
+as the plugin from version 0.8.0, which needs VS Code 1.147 or later: it reads the databases with the
+`node:sqlite` that release ships.
+
+| What | Where the extension looks |
+| :-- | :-- |
+| The project's sources | `SourceDirectory` in `Config/DefaultDreamSource.ini`, default `DreamSource/FX`; the legacy `DFX/` while that is the only one there |
+| A plugin's sources | `<Plugin>/DreamSource/FX`, else `<Plugin>/DFX` |
+| The module index | `<source directory>/.dreamfx/index.db`; the old `.dfx-index.json` while the database is missing or has no modules |
+| The editor's last diagnostics | `Intermediate/DreamSource/fx.db`; the old `Saved/DreamFX/Bridge/diagnostics.json` from an older plugin |
+| The [bridge](editor-integration.md#the-bridge) | `Intermediate/DreamSource/FX/Bridge/` when an editor has written `status.json` there, else `Saved/DreamFX/Bridge/` |
+
+The command **DreamFX: Migrate to DreamSource** (`dreamfx.migrateToDreamSource`) moves `DFX/` the
+way the editor's [Migrate button](../getting-started/project-layout.md#the-migration-notice) does. It
+refuses while the editor has the project open, and leaves the old index files for the plugin to
+import on its next `dfx index`.
+
 ## The module index
 
 ```bash
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 index
 ```
 
-Writes `DFX/.dfx-index.json`: every module and dynamic input the search paths expose, with its
-declared stacks, category, description and **input signature**. The editor extension reads that file
-for completion and hover — it cannot ask the engine, because every `dfx` call boots it and nothing
-that happens while someone is typing may cost tens of seconds.
+Writes `.dreamfx/index.db` in the project's source directory — `DreamSource/FX/.dreamfx/index.db`, or
+`DFX/.dreamfx/index.db` while the project is still on `DFX/`: every module and dynamic input the
+search paths expose, with its declared stacks, category, description and **input signature**. The
+editor extension reads it for completion and hover — it cannot ask the engine, because every `dfx`
+call boots it and nothing that happens while someone is typing may cost tens of seconds.
 
 The two halves have very different costs:
 
@@ -84,9 +105,13 @@ enum-shaped inputs in it would be worse than none, so the cost is worth paying.
 
 | Flag | |
 | --- | --- |
-| `-Out <path>` | write somewhere else |
+| `-Out <path>` | write a JSON file there instead of the database, with its `.inflight` / `.quarantine` files beside it |
 | `-NoInputs` | skip the probe. Fast, and enough to answer "what exists" |
 | `-Retry` | clear the quarantine and try every module again — for after an engine upgrade |
+
+The editor's [bridge](editor-integration.md#the-bridge) action `refreshIndex` writes the same database
+from a running editor, without probing inputs: probing can crash the editor, so that half stays a
+`dfx index` job.
 
 > **Warning:**
 >
@@ -101,7 +126,31 @@ a different engine is a different module set, and enabling a content plugin adds
 Nothing compares them yet — that needs a live editor to compare against — so rebuilding is a command
 rather than something guessed at.
 
+### What is in `index.db`
+
+A SQLite database, written with `synchronous=FULL` so the record of the module being probed is on
+disk before the probe that may end the process.
+
+| Table | Holds |
+| :-- | :-- |
+| `meta(key, value)` | `schema` (`1`), `producer` (`DreamFX@<version>`), `revision`, `modules_revision`, `modules_updated_utc`, and the header the JSON file had: `version`, `generated_utc`, `project`, `inputs_probed`, `engine`, `plugins`, `search_paths` |
+| `modules(ord, path, name, kind, json)` | one module (`kind = 'module'`) or dynamic input (`'dynamicInput'`) per row, in the JSON array's order; `json` is that array entry |
+| `probe_journal` | at most one row: the module being probed right now |
+| `quarantine(package, quarantined_utc)` | the modules whose probe ended a run |
+
+A finished run replaces `modules` and the header in one transaction; the quarantine stays.
+
+**The database is never dropped.** Each quarantine row cost a crashed engine. When its `schema` is
+not the one this build writes, `dfx index` refuses to open it and asks you to update the DreamFX
+plugin; the file is left as it is.
+
+**The old files are imported.** A source directory that still holds `.dfx-index.json`,
+`.dfx-index.json.inflight` or `.dfx-index.json.quarantine` — from before the DreamSource layout — has
+them read into `index.db` by the next `dfx index` (or `refreshIndex`, or the editor's
+[Migrate](../getting-started/project-layout.md#the-migration-notice)), then deleted. The quarantine and
+whatever was in flight are always merged in; the modules only when the database has none yet.
+
 ## Committing it
 
-Do not commit `DFX/.dfx-index.json`: it carries this machine's engine path. See
-[layout and naming](../getting-started/project-layout.md).
+Do not commit `.dreamfx/`: `index.db` carries this machine's engine path. Add `.dreamfx/` to
+`.gitignore`. See [layout and naming](../getting-started/project-layout.md#what-belongs-in-version-control).

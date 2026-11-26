@@ -17,13 +17,13 @@ assets**: run `dfx.ps1 schema <Module>` (or read the module in the editor) befor
 | `.dfe` | `Emitter(Name="…", Root="…") { … }` | nothing on its own — copied into a system with `Emitter X from "…"` |
 | `.dfm` | `Module(…) { … }` or `DynamicInput(…) { … }` | a `UNiagaraScript` |
 
-Sources live under `DFX/`. `Root="Game"` (or empty) builds under `/Game`, `Root="Plugin.MyPlugin"` under
+Sources live under `DreamSource/FX/` (Project Settings > Dream Source > FX; a project still on the deprecated `DFX/` keeps working). `Root="Game"` (or empty) builds under `/Game`, `Root="Plugin.MyPlugin"` under
 that plugin; `Name="Effects/NS_Spark"` is the path below it.
 
 ## A system
 
 ```cpp
-// DFX/CheatSheet/NS_CheatSheetSparks.dfs -- a burst of sparks that fly out, fall and fade, once a second
+// DreamSource/FX/CheatSheet/NS_CheatSheetSparks.dfs -- a burst of sparks that fly out, fall and fade, once a second
 System(Name="CheatSheet/NS_CheatSheetSparks", Root="Game")
 {
     Settings = {

@@ -34,7 +34,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "DreamFX")
 	static void OpenWorkspace();
 
-	/** Writes `DFX/DreamFX.code-workspace` without launching anything. Returns the path, or empty. */
+	/** Writes `DreamFX.code-workspace` in the project's source directory without launching anything. Returns the path, or empty. */
 	UFUNCTION(BlueprintCallable, Category = "DreamFX")
 	static FString WriteWorkspaceFile();
 

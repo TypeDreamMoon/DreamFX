@@ -182,8 +182,7 @@ namespace UE::DreamFX::Editor
 
 	FString FDreamFXWorkspaceService::GetWorkspaceFilePath()
 	{
-		return FPaths::ConvertRelativePathToFull(
-			FPaths::Combine(FPaths::ProjectDir(), TEXT("DFX/DreamFX.code-workspace")));
+		return FPaths::Combine(FDreamFXPaths::GetProjectSourceDirectory(), TEXT("DreamFX.code-workspace"));
 	}
 
 	FString FDreamFXWorkspaceService::BuildWorkspaceJson(const FString& WorkspaceDirectory)

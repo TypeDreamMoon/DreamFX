@@ -34,8 +34,10 @@ Emitter Flash from "../Emitters/E_MoonFlashCard"
 }
 ```
 
-The path resolves relative to the referencing file first, then against every DFX root. The extension
-is optional.
+The path resolves relative to the referencing file first, then against every source root. A leading
+`DFX/` or `DreamSource/FX/` is dropped first, so a path written before the
+[DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout) still resolves. The
+extension is optional.
 
 ## Copy, not inheritance
 

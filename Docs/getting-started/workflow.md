@@ -5,7 +5,7 @@ description: Save-to-rebuild, live preview, the bulk-rebuild gate, the two hard 
 
 ## Save to rebuild
 
-The editor watches every `DFX/` root. Save a source, it rebuilds, and the generated asset refreshes.
+The editor watches every source root (`DreamSource/FX/` and each plugin's). Save a source, it rebuilds, and the generated asset refreshes.
 Leave that asset open in the Niagara editor and it is your live preview, at no setup cost.
 
 A failed build toasts with an **Open in VSCode** link that jumps to the offending line and column.
@@ -82,7 +82,7 @@ other way.
 
 ### Write
 Edit the `.dfs` in VSCode (*Tools ▸ DreamFX ▸ Open DreamFX Workspace* sets the workspace up for you).
-Completion and hover come from `DFX/.dfx-index.json`; re-run `dfx.ps1 index` after an engine upgrade
+Completion and hover come from the module index, `DreamSource/FX/.dreamfx/index.db`; re-run `dfx.ps1 index` after an engine upgrade
 or when a new content plugin is enabled.
 
 ### Save

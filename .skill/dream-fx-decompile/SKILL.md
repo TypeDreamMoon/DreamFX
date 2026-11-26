@@ -9,7 +9,7 @@ Turns a `UNiagaraSystem` back into a `.dfs`. The migration path for effects that
 the round-trip check that keeps the generator honest.
 
 ```bash
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/FX/NS_Spark -Out DFX/NS_Spark.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/FX/NS_Spark -Out DreamSource/FX/NS_Spark.dfs
 ```
 
 Without `-Out` the source goes to the log.
@@ -25,7 +25,7 @@ Without `-Out` the source goes to the log.
 An export's `Name=` is **not** the asset it was read from. `/Game/FX/NS_Spark` exports as
 `Name="Decompiled/FX/NS_Spark"`, so building the file writes `/Game/Decompiled/FX/NS_Spark` — a
 mirror — and the original cannot be reached however the file is edited. That is what makes the whole
-`DFX/Decompiled/` tree ordinary source: saving an export rebuilds its mirror, and `build -All`, lint
+`DreamSource/FX/Decompiled/` tree (the *Decompiled Output Directory*) ordinary source: saving an export rebuilds its mirror, and `build -All`, lint
 and CI cover it like anything else.
 
 Rehoming is idempotent, so re-exporting a mirror reproduces the mirror's own source rather than

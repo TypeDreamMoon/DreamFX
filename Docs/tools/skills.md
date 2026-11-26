@@ -11,7 +11,7 @@ headlessly.
 | Skill | What it does |
 | --- | --- |
 | `dream-fx-create` | Writes a new `.dfs` / `.dfe` / `.dfm` from a plain-language description, then **builds it to prove it compiles** |
-| `dream-fx-verify` | Builds or checks headlessly: one file, or the whole DFX tree. The harness the other three call |
+| `dream-fx-verify` | Builds or checks headlessly: one file, or every source root. The harness the other three call |
 | `dream-fx-diagnose` | Takes a `DFXnnnn`, looks up the cause, explains it, fixes the source |
 | `dream-fx-decompile` | Exports an existing Niagara system to source, or answers "how much of this project's VFX is expressible" |
 
@@ -51,7 +51,7 @@ assets: names with spaces, inputs revealed by a static switch, inputs that only 
 Nobody — including a model — can guess them reliably.
 
 ### Write the file
-Under a `DFX/` root.
+Under a source root: the project's `DreamSource/FX/` or a plugin's (see [the DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout)).
 
 ### Build it
 `dfx.ps1 build <file> -Force`.

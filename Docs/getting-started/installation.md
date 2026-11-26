@@ -5,13 +5,15 @@ description: Enable the DreamFX plugin, confirm the driver can reach the engine,
 
 DreamFX is an Unreal plugin and installs like any other: drop `DreamFX/` into the project's
 `Plugins/` directory (or the engine's `Engine/Plugins/`) and restart the editor. It depends on
-`Niagara`, and the `.uplugin` declares that dependency.
+`Niagara` and `SQLiteCore` (an engine plugin, for the databases described in
+[the DreamSource layout](project-layout.md#old-and-new-paths)), and the `.uplugin` declares both
+dependencies.
 
 | | |
 | --- | --- |
 | Modules | `DreamFX` (Runtime), `DreamFXEditor` (Editor, `LoadingPhase = Default`) |
 | Enabled by default | yes (`EnabledByDefault: true`) |
-| Plugin dependency | `Niagara` |
+| Plugin dependencies | `Niagara`, `SQLiteCore` |
 | Engine | Unreal Engine `5.8` |
 | Platform | Win64 (the driver is PowerShell; `dfx.ps1` needs `pwsh`) |
 
@@ -40,13 +42,17 @@ order:
    `HKLM:\SOFTWARE\EpicGames\Unreal Engine\<version>`.
 
 The project itself is found by walking up from the target file (then from the working directory), so
-calling the driver from anywhere under `DFX/` still finds the right one. Pass `-Project` when it
+calling the driver from anywhere under `DreamSource/FX/` (or a legacy `DFX/`) still finds the right one. Pass `-Project` when it
 cannot.
 
 ## Confirming it editor-side
 
 Once the editor is up, *Tools ▸ DreamFX* holds three entries: **Rebuild DFX**, **Verify DFX** and
 **Open DreamFX Workspace (VSCode)**. The Level Editor toolbar carries a **DFX** button as well.
+
+A project whose sources are still in the old `DFX/` directory also gets a notice at startup: it is
+deprecated, and the notice offers to move it to `DreamSource/FX/`. See
+[the migration notice](project-layout.md#the-migration-notice).
 
 If none of them are there, either the module did not load or the process was launched with
 `-NoDreamFXEditor`. That switch is deliberate: it turns off the whole interactive surface (menus,
@@ -91,15 +97,17 @@ it sees an editor process, but it cannot tell which project that editor has open
 
 ## Where source lives
 
-Sources live under `DFX/` — the project's own, or any plugin's:
+Sources live under `DreamSource/FX/` — the project's own, or any plugin's:
 
 ```
-DevTest/DFX/                        Root=""  or  Root="Game"     -> /Game
-DevTest/Plugins/MoonToon/DFX/       Root="Plugin.MoonToon"       -> /MoonToon
+DevTest/DreamSource/FX/                     Root=""  or  Root="Game"     -> /Game
+DevTest/Plugins/MoonToon/DreamSource/FX/    Root="Plugin.MoonToon"       -> /MoonToon
 ```
 
-Every `DFX/` directory is a source root: discovered, watched, and swept up by `build -All`. The full
-story is in [layout and naming](project-layout.md).
+Every such directory is a source root: discovered, watched, and swept up by `build -All`. The
+project's directory is set in *Project Settings ▸ Dream Source ▸ FX* (`Config/DefaultDreamSource.ini`),
+and a project or plugin still on the old `DFX/` keeps working with a deprecation warning. The full
+story, with how to migrate, is in [layout and naming](project-layout.md#the-dreamsource-layout).
 
 ## Next
 

@@ -95,7 +95,7 @@ System(Name="Effects/NS_Hello", Root="Game")
 ```
 
 ```bash
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Hello.dfs
 ```
 
 全程无需打开编辑器——生成是 headless 的。编辑器开着时,存盘即重建(file watcher),
@@ -114,9 +114,9 @@ Niagara 预览窗口就是文本工作流的实时预览。存盘只写出与上
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 list
 
 # 2. 建一个文件 / 只校验不写 / 只 lint
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build  DFX/Effects/NS_Hello.dfs
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 verify DFX/Effects/NS_Hello.dfs
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 lint   DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build  DreamSource/FX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 verify DreamSource/FX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 lint   DreamSource/FX/Effects/NS_Hello.dfs
 
 # 3. 把现有 Niagara 系统接进文本世界
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion
@@ -195,6 +195,9 @@ pwsh -File Plugins/DreamFX/.skill/ci.ps1
   API 漂移由启动自检显形,绝不静默吸收。
 - **宿主项目必须启用与创作项目相同的内容插件**(如 `NiagaraFluids`):插件未挂载时探针没有基线,
   引用其模块的源会以缺口头 / 编译错的形式显形。
+- **源码放在 `DreamSource/FX/`**(*Project Settings ▸ Dream Source ▸ FX* 可改),插件的源码放在各自的
+  `DreamSource/FX/`。仍在旧 `DFX/` 的项目照常可用,会提示已废弃,编辑器里可一键迁移
+  ([布局与命名](Docs/getting-started/project-layout.md#the-dreamsource-layout))。
 - **写包命令必须关编辑器**(`build` / `corpus` / `mirror-diff` / `decompile-all`)——
   两个进程存同一批包,谁后存谁赢,而且两边都不吭声。
 - 未覆盖(设计使然或尚未做):Scratch Pad、模块内部图 lowering、GPU/CPU 条件分支、

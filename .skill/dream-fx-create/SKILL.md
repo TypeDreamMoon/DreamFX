@@ -15,7 +15,7 @@ Paths below are relative to the plugin root, `Plugins/DreamFX/`.
 1. **Find the modules.** `dfx.ps1 list` prints every module the search paths expose.
 2. **Read their real signatures.** `dfx.ps1 schema <Module>` — once per module you intend to call.
    This is the step people skip and then spend twenty minutes on.
-3. **Write the file** under a `DFX/` root.
+3. **Write the file** under a source root: the project's `DreamSource/FX/`, or a plugin's.
 4. **Build it.** `dfx.ps1 build <file> -Force`.
 5. **Fix and repeat.** Diagnostics carry line and column; see
    [`dream-fx-diagnose`](../dream-fx-diagnose/SKILL.md) for what each code means.
@@ -25,7 +25,7 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 schema AddVelocityInCone
 ```
 
 ```bash
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Samples/NS_MyEffect.dfs -Force
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Samples/NS_MyEffect.dfs -Force
 ```
 
 ## Skeleton
@@ -119,7 +119,7 @@ expression, an `hlsl` block or a dynamic input, because inference only works on 
 | omitted, or `"Game"` | `/Game` |
 | `"Plugin.MoonToon"` | `/MoonToon` |
 
-Source lives under a `DFX/` directory — the project's, or a plugin's. `-All` finds every one.
+Source lives under a `DreamSource/FX/` directory — the project's (set in *Project Settings ▸ Dream Source ▸ FX*), or a plugin's. A project or plugin still on the old `DFX/` keeps working, with a deprecation warning; write new files where its existing sources are. `-All` finds every root. See `Docs/getting-started/project-layout.md`.
 
 ## See also
 

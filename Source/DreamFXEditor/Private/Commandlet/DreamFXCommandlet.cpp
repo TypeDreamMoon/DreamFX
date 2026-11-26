@@ -1142,6 +1142,9 @@ int32 UDreamFXCommandlet::Main(const FString& Params)
 			TEXT("over the same package files -- close it before a full build."));
 	}
 
+	// A commandlet has no notification to show, so the log is the only place a deprecated `DFX/` is mentioned.
+	UE::DreamFX::Editor::FDreamFXPaths::LogDeprecatedSourceDirectoriesOnce();
+
 	FString SchemaQuery;
 	if (FParse::Value(*Params, TEXT("Schema="), SchemaQuery))
 	{

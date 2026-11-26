@@ -1,6 +1,6 @@
 ---
 name: dream-fx-verify
-description: Build or check DreamFXLang sources headlessly — one .dfs file or the whole DFX tree — turning text into Niagara system assets without opening the Unreal editor. Use when asked to verify, validate, build, compile, test, or CI-gate .dfs / .dfe / .dfm / DreamFX sources, or to check whether a Niagara effect still generates from its source.
+description: Build or check DreamFXLang sources headlessly — one .dfs file or every DreamFX source root — turning text into Niagara system assets without opening the Unreal editor. Use when asked to verify, validate, build, compile, test, or CI-gate .dfs / .dfe / .dfm / DreamFX sources, or to check whether a Niagara effect still generates from its source.
 ---
 
 # dream-fx-verify `<file>` | `-All`
@@ -13,7 +13,7 @@ Paths below are relative to the plugin root, `Plugins/DreamFX/`.
 ## Run it
 
 ```bash
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Samples/NS_DreamFXPhase1.dfs -Force
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Samples/NS_DreamFXPhase1.dfs -Force
 ```
 
 ```bash
@@ -39,7 +39,7 @@ has the measurements.
 | Argument | Effect |
 | :-- | :-- |
 | *(positional)* | the source file — absolute, or relative to the working directory |
-| `-All` | every source under every DFX root |
+| `-All` | every source under every source root (`DreamSource/FX/` of the project and of each plugin, or a legacy `DFX/`) |
 | `-Force` | bypass the provenance-hash skip. Without it an unchanged file reports `up to date` and proves nothing |
 | `-Incremental` | build only the difference from the plan the asset's last build stored, falling back to a full rebuild when that plan cannot be trusted (the log line says which). Off by default, and **not for gates**: CI and `verify` want the full rebuild's answer. It is a local edit-loop flag — see [Docs/tools/incremental-builds.md](../../Docs/tools/incremental-builds.md) |
 | `-NoSave` | build in memory without writing packages — the right flag for checking that source is valid |

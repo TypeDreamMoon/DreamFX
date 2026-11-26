@@ -34,7 +34,7 @@ same `.dfm` built both ways reads back with a byte-identical schema, and that ho
 ```bash
 # force the reflection backend on an engine that does not need it —
 # this is how the two paths are diffed on one machine
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Modules/ToonSpin.dfm -ForceReflectionBackend
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Modules/ToonSpin.dfm -ForceReflectionBackend
 ```
 
 > **Note:**

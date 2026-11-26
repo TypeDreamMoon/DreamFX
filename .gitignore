@@ -69,17 +69,19 @@ Reports/
 # Rebuild them with: pwsh -File .skill/dfx.ps1 build -All -Force
 Content/Samples/
 
-# Built from DFX/CheatSheet/, the cheat sheet's example, by the same rule.
+# Built from DreamSource/FX/CheatSheet/, the cheat sheet's example, by the same rule.
 Content/CheatSheet/
 
 # Assets the corpus suites build from Tests/Corpus fixtures. Recreated by every `dfx corpus` run.
 Content/Corpus/
 
-# Module and dynamic input assets, built from DFX/Modules/*.dfm by the same rule as the samples.
+# Module and dynamic input assets, built from DreamSource/FX/Modules/*.dfm by the same rule as the samples.
 Content/Modules/
 
 # The module index and its quarantine list: a snapshot of what one engine, with one set of plugins
 # enabled, exposed at one moment. Rebuild with: pwsh -File .skill/dfx.ps1 index
+DreamSource/FX/.dreamfx/
+# Where they were before the DreamSource layout.
 DFX/.dfx-index.json*
 
 # Mirrors of this plugin's own assets. `decompile-all` walks every Niagara system it can see, which

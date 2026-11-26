@@ -4,21 +4,29 @@
 #include "DreamFXModule.h"
 #include "DreamFXTypes.h"
 #include "Adapter/DreamFXNiagaraAdapter.h"
+#include "Database/DreamFXDatabase.h"
+#include "Dom/JsonObject.h"
 #include "Generation/DreamFXValueLowering.h"
+#include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/App.h"
 #include "Misc/DateTime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "NiagaraScript.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "Schema/DreamFXModuleLibrary.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "SourceFiles/DreamFXPaths.h"
+#include "SQLitePreparedStatement.h"
 
 using namespace UE::DreamFX;
 
 namespace UE::DreamFX::Editor
 {
-	namespace
+	namespace IndexExportLocal
 	{
 		// ---------------------------------------------------------------- index export
 
@@ -45,6 +53,11 @@ namespace UE::DreamFX::Editor
 			{ EStackKind::SystemSpawn,    ENiagaraScriptUsage::SystemSpawnScript    },
 		};
 
+		/** The pre-DreamSource file names, beside (and later inside) the source directory. */
+		const TCHAR* const LegacyIndexFileName = TEXT(".dfx-index.json");
+		const TCHAR* const JournalSuffix = TEXT(".inflight");
+		const TCHAR* const QuarantineSuffix = TEXT(".quarantine");
+
 		/** Every enum entry, spelled the way an author writes it. Empty for a non-enum type. */
 		void CollectEnumEntries(const FNiagaraTypeDefinition& Type, TArray<FString>& OutEntries)
 		{
@@ -69,58 +82,156 @@ namespace UE::DreamFX::Editor
 			}
 		}
 
-		void WriteInputSchema(const TSharedRef<TJsonWriter<>>& Writer, const FInputSchema& Input)
+		TArray<TSharedPtr<FJsonValue>> ToJsonStrings(const TArray<FString>& Values)
 		{
-			Writer->WriteObjectStart();
-			Writer->WriteValue(TEXT("name"), ToInputIdentifier(Input.Name));
-			Writer->WriteValue(TEXT("type"), Input.Type.GetName());
+			TArray<TSharedPtr<FJsonValue>> Out;
+			for (const FString& Value : Values)
+			{
+				Out.Add(MakeShared<FJsonValueString>(Value));
+			}
+			return Out;
+		}
+
+		TSharedRef<FJsonObject> InputSchemaToJson(const FInputSchema& Input)
+		{
+			const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+			Object->SetStringField(TEXT("name"), ToInputIdentifier(Input.Name));
+			Object->SetStringField(TEXT("type"), Input.Type.GetName());
 			if (Input.bIsStaticSwitch)
 			{
 				// Worth its own flag rather than a note in the type: source order is write order on a
 				// module, so a switch has to be written before whatever it gates.
-				Writer->WriteValue(TEXT("staticSwitch"), true);
+				Object->SetBoolField(TEXT("staticSwitch"), true);
 			}
 			if (Input.bSupportsExpressions)
 			{
-				Writer->WriteValue(TEXT("expressions"), true);
+				Object->SetBoolField(TEXT("expressions"), true);
 			}
 			if (!Input.Category.IsEmpty())
 			{
-				Writer->WriteValue(TEXT("category"), Input.Category);
+				Object->SetStringField(TEXT("category"), Input.Category);
 			}
 			if (!Input.Description.IsEmpty())
 			{
-				Writer->WriteValue(TEXT("description"), Input.Description);
+				Object->SetStringField(TEXT("description"), Input.Description);
 			}
 
 			TArray<FString> EnumEntries;
 			CollectEnumEntries(Input.Type, EnumEntries);
 			if (EnumEntries.Num() > 0)
 			{
-				Writer->WriteArrayStart(TEXT("enum"));
-				for (const FString& Entry : EnumEntries)
-				{
-					Writer->WriteValue(Entry);
-				}
-				Writer->WriteArrayEnd();
+				Object->SetArrayField(TEXT("enum"), ToJsonStrings(EnumEntries));
 			}
-			Writer->WriteObjectEnd();
+			return Object;
 		}
 
-		/**
-		 * Exports every module and dynamic input the search paths expose, with its input signature.
-		 *
-		 * One command rather than the `-Json` flags the plan first proposed, and the reason is arithmetic:
-		 * a per-module `schema -Json` would cost one engine boot each, and there are hundreds of modules.
-		 * Anything an editor integration wants to do per keystroke has to read a file, so the file has to
-		 * be producible in a single boot.
-		 *
-		 * Two costs are traded deliberately. The stacks a module may sit in are read from its declared
-		 * usage bitmask, which is free -- it is the same list the engine's own stack UI filters by. The
-		 * input signature is *probed*, because the asset-level schema misses inline edit conditions and
-		 * static switches entirely, and a completion list missing every enum-shaped input would be worse
-		 * than none. The probe runs once per module, in the first stack the module says it belongs to.
-		 */
+		FString ToCondensedJson(const TSharedRef<FJsonObject>& Object)
+		{
+			FString Text;
+			const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+				TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Text);
+			FJsonSerializer::Serialize(Object, Writer);
+			return Text;
+		}
+
+		FString ToCondensedJson(const TArray<FString>& Values)
+		{
+			FString Text;
+			const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+				TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Text);
+			FJsonSerializer::Serialize(ToJsonStrings(Values), Writer);
+			return Text;
+		}
+
+		/** What one run found, before it is stored: the old file's header, and its modules in order. */
+		struct FIndexContent
+		{
+			FString GeneratedUtc;
+			FString Project;
+			bool bInputsProbed = false;
+			bool bHasInputsProbed = true;
+			FString Engine;
+			TArray<FString> Plugins;
+			TArray<FString> SearchPaths;
+			TArray<TSharedRef<FJsonObject>> Modules;
+		};
+
+		/** Header + modules into an open index database, in one transaction. */
+		bool StoreContent(FDreamFXDatabase& Database, const FIndexContent& Content)
+		{
+			if (!Database.Begin())
+			{
+				return false;
+			}
+			bool bOk = Database.Execute(TEXT("DELETE FROM modules;"));
+			if (bOk)
+			{
+				FSQLitePreparedStatement Insert(Database.Get(),
+					TEXT("INSERT INTO modules(ord, path, name, kind, json) VALUES(?1, ?2, ?3, ?4, ?5);"),
+					ESQLitePreparedStatementFlags::Persistent);
+				bOk = Insert.IsValid();
+				for (int32 Index = 0; bOk && Index < Content.Modules.Num(); ++Index)
+				{
+					const TSharedRef<FJsonObject>& Module = Content.Modules[Index];
+					Insert.Reset();
+					Insert.ClearBindings();
+					bOk = Insert.SetBindingValueByIndex(1, static_cast<int64>(Index))
+						&& Insert.SetBindingValueByIndex(2, Module->GetStringField(TEXT("path")))
+						&& Insert.SetBindingValueByIndex(3, Module->GetStringField(TEXT("name")))
+						&& Insert.SetBindingValueByIndex(4, Module->GetStringField(TEXT("kind")))
+						&& Insert.SetBindingValueByIndex(5, ToCondensedJson(Module))
+						&& Insert.Step() == ESQLitePreparedStatementStepResult::Done;
+				}
+			}
+
+			bOk = bOk
+				&& Database.SetMeta(TEXT("version"), TEXT("1"))
+				&& Database.SetMeta(TEXT("generated_utc"), Content.GeneratedUtc)
+				&& Database.SetMeta(TEXT("project"), Content.Project)
+				&& Database.SetMeta(TEXT("engine"), Content.Engine)
+				&& Database.SetMeta(TEXT("plugins"), ToCondensedJson(Content.Plugins))
+				&& Database.SetMeta(TEXT("search_paths"), ToCondensedJson(Content.SearchPaths));
+			if (bOk && Content.bHasInputsProbed)
+			{
+				bOk = Database.SetMeta(TEXT("inputs_probed"), Content.bInputsProbed ? TEXT("true") : TEXT("false"));
+			}
+			else if (bOk)
+			{
+				// An imported file from before the flag existed: absent, which is not the same as false.
+				bOk = Database.Execute(TEXT("DELETE FROM meta WHERE key = 'inputs_probed';"));
+			}
+			bOk = bOk && Database.Bump(TEXT("modules"), Content.GeneratedUtc) && Database.Commit();
+			if (!bOk)
+			{
+				UE_LOG(LogDreamFX, Error, TEXT("DreamFX: %s"), *Database.DescribeError(TEXT("writing the module index")));
+				Database.Rollback();
+			}
+			return bOk;
+		}
+
+		/** The old JSON file's text: the same shape the language tools read before the index moved into SQLite. */
+		FString ContentToJsonFile(const FIndexContent& Content)
+		{
+			const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+			Root->SetNumberField(TEXT("version"), 1);
+			Root->SetStringField(TEXT("generatedUtc"), Content.GeneratedUtc);
+			Root->SetStringField(TEXT("project"), Content.Project);
+			Root->SetBoolField(TEXT("inputsProbed"), Content.bInputsProbed);
+			Root->SetStringField(TEXT("engine"), Content.Engine);
+			Root->SetArrayField(TEXT("plugins"), ToJsonStrings(Content.Plugins));
+			Root->SetArrayField(TEXT("searchPaths"), ToJsonStrings(Content.SearchPaths));
+			TArray<TSharedPtr<FJsonValue>> Modules;
+			for (const TSharedRef<FJsonObject>& Module : Content.Modules)
+			{
+				Modules.Add(MakeShared<FJsonValueObject>(Module));
+			}
+			Root->SetArrayField(TEXT("modules"), Modules);
+
+			FString Text;
+			FJsonSerializer::Serialize(Root, TJsonWriterFactory<>::Create(&Text));
+			return Text;
+		}
+
 		/**
 		 * The set of modules a previous run started probing and never finished.
 		 *
@@ -132,127 +243,419 @@ namespace UE::DreamFX::Editor
 		 * state. So the walk is made *resumable* instead: the journal records the intent to probe before
 		 * probing, and a name that is still open when the next run starts is a name that killed the last
 		 * one. The driver re-runs until the walk completes, and each run quarantines one more.
-		 */
-		/**
-		 * Two files, with one job between them.
 		 *
-		 * The journal holds exactly one line: the module about to be probed, overwritten each time. The
-		 * quarantine list accumulates the ones that were still in the journal when the next run started
-		 * -- which is the definition of "this module ended the process".
+		 * Two records, with one job between them. The journal holds at most one entry: the module about
+		 * to be probed, overwritten each time. The quarantine list accumulates the ones that were still
+		 * in the journal when the next run started -- which is the definition of "this module ended the
+		 * process". Split that way because a single append-only log would need the walk to record a
+		 * completion for every module, and the one place it can never record anything is the case this
+		 * exists for.
 		 *
-		 * Split that way because a single append-only log would need the walk to record a completion for
-		 * every module, and the one place it can never record anything is the case this exists for.
+		 * Kept either in the index database (probe_journal / quarantine, written with synchronous=FULL so
+		 * the journal is on disk before the probe that may end the process), or -- for an explicit
+		 * `-Out=<file>` -- in the two files beside that file, as before.
 		 */
-		void MarkProbeInFlight(const FString& JournalPath, const FString& PackageName)
+		class FProbeLedger
 		{
-			FFileHelper::SaveStringToFile(PackageName, *JournalPath,
-				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
-		}
+		public:
+			/** Database mode. */
+			explicit FProbeLedger(FDreamFXDatabase& InDatabase) : Database(&InDatabase) {}
 
-		/** Promotes an unfinished probe into the quarantine list, and returns everything quarantined. */
-		TSet<FString> CollectQuarantined(const FString& JournalPath, const FString& QuarantinePath)
-		{
-			TSet<FString> Quarantined;
-
-			FString Existing;
-			if (FFileHelper::LoadFileToString(Existing, *QuarantinePath))
+			/** File mode, for `-Out=<file>`. */
+			explicit FProbeLedger(const FString& InOutputPath)
+				: JournalPath(InOutputPath + JournalSuffix)
+				, QuarantinePath(InOutputPath + QuarantineSuffix)
 			{
-				TArray<FString> Lines;
-				Existing.ParseIntoArrayLines(Lines);
-				Quarantined.Append(Lines);
 			}
 
-			FString InFlight;
-			if (FFileHelper::LoadFileToString(InFlight, *JournalPath))
+			void Clear()
 			{
-				InFlight.TrimStartAndEndInline();
-				if (!InFlight.IsEmpty() && !Quarantined.Contains(InFlight))
+				if (Database)
 				{
-					UE_LOG(LogDreamFX, Warning,
-						TEXT("'%s' ended the previous index run without returning; quarantining it."), *InFlight);
-					Quarantined.Add(InFlight);
+					Database->Execute(TEXT("DELETE FROM probe_journal;"));
+					Database->Execute(TEXT("DELETE FROM quarantine;"));
+					return;
+				}
+				IFileManager::Get().Delete(*JournalPath);
+				IFileManager::Get().Delete(*QuarantinePath);
+			}
 
-					TArray<FString> Sorted = Quarantined.Array();
-					Sorted.Sort();
-					FFileHelper::SaveStringToFile(FString::Join(Sorted, TEXT("\n")), *QuarantinePath,
-						FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+			/** Promotes an unfinished probe into the quarantine list, and returns everything quarantined. */
+			TSet<FString> CollectQuarantined()
+			{
+				return Database ? CollectFromDatabase() : CollectFromFiles();
+			}
+
+			/**
+			 * Written BEFORE the probe, not after, and that ordering is the whole mechanism: nothing that
+			 * runs after the probe gets a chance to name the module that killed the process.
+			 */
+			void MarkInFlight(const FString& PackageName)
+			{
+				if (Database)
+				{
+					FSQLitePreparedStatement Statement(Database->Get(),
+						TEXT("INSERT OR REPLACE INTO probe_journal(id, package, started_utc) VALUES(1, ?1, ?2);"));
+					if (!Statement.IsValid() || !Statement.SetBindingValueByIndex(1, PackageName)
+						|| !Statement.SetBindingValueByIndex(2, FDateTime::UtcNow().ToIso8601())
+						|| Statement.Step() != ESQLitePreparedStatementStepResult::Done)
+					{
+						UE_LOG(LogDreamFX, Warning, TEXT("DreamFX: %s"), *Database->DescribeError(TEXT("recording the probe")));
+					}
+					return;
+				}
+				FFileHelper::SaveStringToFile(PackageName, *JournalPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+			}
+
+			/** The walk finished, so nothing is mid-probe. The quarantine stays: it is what makes the next run fast. */
+			void ClearInFlight()
+			{
+				if (Database)
+				{
+					Database->Execute(TEXT("DELETE FROM probe_journal;"));
+					return;
 				}
 				IFileManager::Get().Delete(*JournalPath);
 			}
 
-			return Quarantined;
+		private:
+			TSet<FString> CollectFromFiles()
+			{
+				TSet<FString> Quarantined;
+
+				FString Existing;
+				if (FFileHelper::LoadFileToString(Existing, *QuarantinePath))
+				{
+					TArray<FString> Lines;
+					Existing.ParseIntoArrayLines(Lines);
+					Quarantined.Append(Lines);
+				}
+
+				FString InFlight;
+				if (FFileHelper::LoadFileToString(InFlight, *JournalPath))
+				{
+					InFlight.TrimStartAndEndInline();
+					if (!InFlight.IsEmpty() && !Quarantined.Contains(InFlight))
+					{
+						UE_LOG(LogDreamFX, Warning,
+							TEXT("'%s' ended the previous index run without returning; quarantining it."), *InFlight);
+						Quarantined.Add(InFlight);
+
+						TArray<FString> Sorted = Quarantined.Array();
+						Sorted.Sort();
+						FFileHelper::SaveStringToFile(FString::Join(Sorted, TEXT("\n")), *QuarantinePath,
+							FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+					}
+					IFileManager::Get().Delete(*JournalPath);
+				}
+
+				return Quarantined;
+			}
+
+			TSet<FString> CollectFromDatabase()
+			{
+				FString InFlight;
+				{
+					FSQLitePreparedStatement Select(Database->Get(), TEXT("SELECT package FROM probe_journal WHERE id = 1;"));
+					if (Select.IsValid() && Select.Step() == ESQLitePreparedStatementStepResult::Row)
+					{
+						Select.GetColumnValueByIndex(0, InFlight);
+					}
+				}
+				InFlight.TrimStartAndEndInline();
+
+				TSet<FString> Quarantined;
+				{
+					FSQLitePreparedStatement Select(Database->Get(), TEXT("SELECT package FROM quarantine;"));
+					while (Select.IsValid() && Select.Step() == ESQLitePreparedStatementStepResult::Row)
+					{
+						FString Package;
+						Select.GetColumnValueByIndex(0, Package);
+						Quarantined.Add(Package);
+					}
+				}
+
+				if (!InFlight.IsEmpty())
+				{
+					if (!Quarantined.Contains(InFlight))
+					{
+						UE_LOG(LogDreamFX, Warning,
+							TEXT("'%s' ended the previous index run without returning; quarantining it."), *InFlight);
+						FSQLitePreparedStatement Insert(Database->Get(),
+							TEXT("INSERT OR IGNORE INTO quarantine(package, quarantined_utc) VALUES(?1, ?2);"));
+						if (!Insert.IsValid() || !Insert.SetBindingValueByIndex(1, InFlight)
+							|| !Insert.SetBindingValueByIndex(2, FDateTime::UtcNow().ToIso8601())
+							|| Insert.Step() != ESQLitePreparedStatementStepResult::Done)
+						{
+							UE_LOG(LogDreamFX, Warning, TEXT("DreamFX: %s"), *Database->DescribeError(TEXT("quarantining")));
+						}
+						Quarantined.Add(InFlight);
+					}
+					Database->Execute(TEXT("DELETE FROM probe_journal;"));
+				}
+				return Quarantined;
+			}
+
+			FDreamFXDatabase* Database = nullptr;
+			FString JournalPath;
+			FString QuarantinePath;
+		};
+
+		/** Reads one legacy `.dfx-index.json` into content. False when it is not there or not an index. */
+		bool ReadLegacyIndexFile(const FString& Path, FIndexContent& OutContent)
+		{
+			FString Text;
+			if (!FFileHelper::LoadFileToString(Text, *Path))
+			{
+				return false;
+			}
+			TSharedPtr<FJsonObject> Root;
+			if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root) || !Root.IsValid())
+			{
+				return false;
+			}
+			Root->TryGetStringField(TEXT("generatedUtc"), OutContent.GeneratedUtc);
+			Root->TryGetStringField(TEXT("project"), OutContent.Project);
+			Root->TryGetStringField(TEXT("engine"), OutContent.Engine);
+			OutContent.bHasInputsProbed = Root->TryGetBoolField(TEXT("inputsProbed"), OutContent.bInputsProbed);
+			Root->TryGetStringArrayField(TEXT("plugins"), OutContent.Plugins);
+			Root->TryGetStringArrayField(TEXT("searchPaths"), OutContent.SearchPaths);
+
+			const TArray<TSharedPtr<FJsonValue>>* Modules = nullptr;
+			if (!Root->TryGetArrayField(TEXT("modules"), Modules))
+			{
+				return false;
+			}
+			for (const TSharedPtr<FJsonValue>& Value : *Modules)
+			{
+				const TSharedPtr<FJsonObject>* Module = nullptr;
+				if (Value.IsValid() && Value->TryGetObject(Module) && Module && Module->IsValid())
+				{
+					OutContent.Modules.Add(Module->ToSharedRef());
+				}
+			}
+			return true;
 		}
 
+		int64 CountModules(FDreamFXDatabase& Database)
+		{
+			int64 Count = 0;
+			FSQLitePreparedStatement Select(Database.Get(), TEXT("SELECT COUNT(*) FROM modules;"));
+			if (Select.IsValid() && Select.Step() == ESQLitePreparedStatementStepResult::Row)
+			{
+				Select.GetColumnValueByIndex(0, Count);
+			}
+			return Count;
+		}
+
+		/** ImportLegacyIndex, on a database the caller already holds open. */
+		bool ImportLegacyInto(FDreamFXDatabase& Database, const FString& SourceDirectory, FString& OutError)
+		{
+			const FString IndexFile = FPaths::Combine(SourceDirectory, LegacyIndexFileName);
+			const FString JournalFile = IndexFile + JournalSuffix;
+			const FString QuarantineFile = IndexFile + QuarantineSuffix;
+			IFileManager& Files = IFileManager::Get();
+			const bool bIndex = Files.FileExists(*IndexFile);
+			const bool bJournal = Files.FileExists(*JournalFile);
+			const bool bQuarantine = Files.FileExists(*QuarantineFile);
+			if (!bIndex && !bJournal && !bQuarantine)
+			{
+				return true;
+			}
+
+			// The quarantine first, and whatever was in flight with it: both mean "this module ended a run".
+			TArray<FString> Quarantined;
+			FString Text;
+			if (bQuarantine && FFileHelper::LoadFileToString(Text, *QuarantineFile))
+			{
+				Text.ParseIntoArrayLines(Quarantined);
+			}
+			if (bJournal && FFileHelper::LoadFileToString(Text, *JournalFile))
+			{
+				Text.TrimStartAndEndInline();
+				if (!Text.IsEmpty())
+				{
+					Quarantined.Add(Text);
+				}
+			}
+
+			if (!Database.Begin())
+			{
+				OutError = Database.DescribeError(TEXT("BEGIN"));
+				return false;
+			}
+			bool bOk = true;
+			{
+				FSQLitePreparedStatement Insert(Database.Get(),
+					TEXT("INSERT OR IGNORE INTO quarantine(package, quarantined_utc) VALUES(?1, ?2);"),
+					ESQLitePreparedStatementFlags::Persistent);
+				bOk = Insert.IsValid();
+				const FString Now = FDateTime::UtcNow().ToIso8601();
+				for (int32 Index = 0; bOk && Index < Quarantined.Num(); ++Index)
+				{
+					const FString Package = Quarantined[Index].TrimStartAndEnd();
+					if (Package.IsEmpty())
+					{
+						continue;
+					}
+					Insert.Reset();
+					Insert.ClearBindings();
+					bOk = Insert.SetBindingValueByIndex(1, Package)
+						&& Insert.SetBindingValueByIndex(2, Now)
+						&& Insert.Step() == ESQLitePreparedStatementStepResult::Done;
+				}
+			}
+			bOk = bOk && Database.Commit();
+			if (!bOk)
+			{
+				OutError = Database.DescribeError(TEXT("importing the quarantine"));
+				Database.Rollback();
+				return false;
+			}
+
+			// The modules only into an empty index: a database that already has some is newer than the file.
+			bool bIndexConsumed = !bIndex;
+			if (bIndex)
+			{
+				FIndexContent Content;
+				if (CountModules(Database) > 0)
+				{
+					bIndexConsumed = true;
+				}
+				else if (ReadLegacyIndexFile(IndexFile, Content))
+				{
+					bIndexConsumed = StoreContent(Database, Content);
+					if (!bIndexConsumed)
+					{
+						OutError = Database.DescribeError(TEXT("importing the module index"));
+						return false;
+					}
+				}
+				else
+				{
+					UE_LOG(LogDreamFX, Warning, TEXT("DreamFX: '%s' is not a module index; it is left where it is."), *IndexFile);
+				}
+			}
+
+			Files.Delete(*JournalFile);
+			Files.Delete(*QuarantineFile);
+			if (bIndexConsumed)
+			{
+				Files.Delete(*IndexFile);
+			}
+			UE_LOG(LogDreamFX, Display, TEXT("DreamFX: imported the index files in '%s' into '%s'."),
+				*SourceDirectory, *FIndexExport::GetIndexDatabasePath(SourceDirectory));
+			return true;
+		}
 	}
 
+	FString FIndexExport::GetIndexDatabasePath(const FString& SourceDirectory)
+	{
+		return FPaths::Combine(SourceDirectory, TEXT(".dreamfx/index.db"));
+	}
+
+	bool FIndexExport::ImportLegacyIndex(const FString& SourceDirectory, FString& OutError)
+	{
+		using namespace IndexExportLocal;
+		const FString IndexFile = FPaths::Combine(SourceDirectory, LegacyIndexFileName);
+		IFileManager& Files = IFileManager::Get();
+		if (!Files.FileExists(*IndexFile) && !Files.FileExists(*(IndexFile + JournalSuffix))
+			&& !Files.FileExists(*(IndexFile + QuarantineSuffix)))
+		{
+			return true;
+		}
+		FDreamFXDatabase Database;
+		if (!Database.Open(GetIndexDatabasePath(SourceDirectory), FDreamFXDatabase::EKind::Index, &OutError))
+		{
+			return false;
+		}
+		return ImportLegacyInto(Database, SourceDirectory, OutError);
+	}
+
+	/**
+	 * Exports every module and dynamic input the search paths expose, with its input signature.
+	 *
+	 * One command rather than the `-Json` flags the plan first proposed, and the reason is arithmetic:
+	 * a per-module `schema -Json` would cost one engine boot each, and there are hundreds of modules.
+	 * Anything an editor integration wants to do per keystroke has to read stored data, so the data has
+	 * to be producible in a single boot.
+	 *
+	 * Two costs are traded deliberately. The stacks a module may sit in are read from its declared
+	 * usage bitmask, which is free -- it is the same list the engine's own stack UI filters by. The
+	 * input signature is *probed*, because the asset-level schema misses inline edit conditions and
+	 * static switches entirely, and a completion list missing every enum-shaped input would be worse
+	 * than none. The probe runs once per module, in the first stack the module says it belongs to.
+	 */
 	int32 FIndexExport::Run(const FString& OutputPath, bool bSkipInputs, bool bRetryQuarantined, FString& OutDestination)
 	{
+		using namespace IndexExportLocal;
 		const double StartedAt = FPlatformTime::Seconds();
 
 		FModuleLibrary Library;
 
-		const FString Destination = OutputPath.IsEmpty()
-			? FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("DFX/.dfx-index.json")))
-			: FPaths::ConvertRelativePathToFull(OutputPath);
-		OutDestination = Destination;
-		const FString JournalPath = Destination + TEXT(".inflight");
-		const FString QuarantinePath = Destination + TEXT(".quarantine");
+		// Held open for the whole walk: the journal is written once per module, and opening the file for each
+		// of several hundred writes would cost more than the probes it guards.
+		FDreamFXDatabase Database;
+		TUniquePtr<FProbeLedger> Ledger;
+		const bool bToFile = !OutputPath.IsEmpty();
+		if (bToFile)
+		{
+			OutDestination = FPaths::ConvertRelativePathToFull(OutputPath);
+			Ledger = MakeUnique<FProbeLedger>(OutDestination);
+		}
+		else
+		{
+			const FString SourceDirectory = FDreamFXPaths::GetProjectSourceDirectory();
+			OutDestination = GetIndexDatabasePath(SourceDirectory);
+			FString Error;
+			if (!Database.Open(OutDestination, FDreamFXDatabase::EKind::Index, &Error))
+			{
+				UE_LOG(LogDreamFX, Error, TEXT("Could not open the module index: %s"), *Error);
+				return 1;
+			}
+			// A project upgraded from before the DreamSource layout keeps the quarantine it already paid for.
+			if (!ImportLegacyInto(Database, SourceDirectory, Error))
+			{
+				UE_LOG(LogDreamFX, Warning, TEXT("DreamFX: the old index files were not imported: %s"), *Error);
+			}
+			Ledger = MakeUnique<FProbeLedger>(Database);
+		}
 
 		TSet<FString> Quarantined;
 		if (bRetryQuarantined)
 		{
-			IFileManager::Get().Delete(*JournalPath);
-			IFileManager::Get().Delete(*QuarantinePath);
+			Ledger->Clear();
 		}
 		else
 		{
-			Quarantined = CollectQuarantined(JournalPath, QuarantinePath);
+			Quarantined = Ledger->CollectQuarantined();
 		}
 
-		FString IndexText;
-		const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&IndexText);
+		FIndexContent Content;
+		Content.GeneratedUtc = FDateTime::UtcNow().ToIso8601();
+		Content.Project = FApp::GetProjectName();
 
-		Writer->WriteObjectStart();
-		Writer->WriteValue(TEXT("version"), 1);
-		Writer->WriteValue(TEXT("generatedUtc"), FDateTime::UtcNow().ToIso8601());
-		Writer->WriteValue(TEXT("project"), FApp::GetProjectName());
-
-		// Whether the signatures in this file were probed at all. Without it, an index written
+		// Whether the signatures in this index were probed at all. Without it, an index written
 		// without probing is indistinguishable from one where every module happens to take no
 		// inputs -- the same "absent and empty must not look alike" rule the per-module
 		// `inputsUnavailable` follows, one level up.
-		Writer->WriteValue(TEXT("inputsProbed"), !bSkipInputs);
+		Content.bInputsProbed = !bSkipInputs;
 
 		// The fingerprint. An index goes stale when the engine changes, when a content plugin is
 		// enabled or disabled, or when the search paths move -- and none of those touch the clock, so
 		// a timestamp alone would keep serving a wrong answer.
-		Writer->WriteValue(TEXT("engine"), FPaths::ConvertRelativePathToFull(FPaths::EngineDir()));
-
-		Writer->WriteArrayStart(TEXT("plugins"));
-		TArray<FString> EnabledPlugins;
+		Content.Engine = FPaths::ConvertRelativePathToFull(FPaths::EngineDir());
 		for (const TSharedRef<IPlugin>& Plugin : IPluginManager::Get().GetEnabledPlugins())
 		{
-			EnabledPlugins.Add(Plugin->GetName());
+			Content.Plugins.Add(Plugin->GetName());
 		}
-		EnabledPlugins.Sort();
-		for (const FString& Name : EnabledPlugins)
-		{
-			Writer->WriteValue(Name);
-		}
-		Writer->WriteArrayEnd();
-
-		Writer->WriteArrayStart(TEXT("searchPaths"));
-		for (const FString& Path : Library.GetSearchPaths())
-		{
-			Writer->WriteValue(Path);
-		}
-		Writer->WriteArrayEnd();
+		Content.Plugins.Sort();
+		Content.SearchPaths = Library.GetSearchPaths();
 
 		int32 Probed = 0;
 		int32 Unprobed = 0;
 		int32 Skipped = 0;
 
-		Writer->WriteArrayStart(TEXT("modules"));
 		for (const bool bDynamicInput : { false, true })
 		{
 			TArray<FModuleLibrary::FModuleListing> Listings;
@@ -260,10 +663,10 @@ namespace UE::DreamFX::Editor
 
 			for (const FModuleLibrary::FModuleListing& Listing : Listings)
 			{
-				Writer->WriteObjectStart();
-				Writer->WriteValue(TEXT("name"), Listing.AssetName);
-				Writer->WriteValue(TEXT("path"), Listing.PackageName);
-				Writer->WriteValue(TEXT("kind"), bDynamicInput ? TEXT("dynamicInput") : TEXT("module"));
+				const TSharedRef<FJsonObject> Module = MakeShared<FJsonObject>();
+				Module->SetStringField(TEXT("name"), Listing.AssetName);
+				Module->SetStringField(TEXT("path"), Listing.PackageName);
+				Module->SetStringField(TEXT("kind"), bDynamicInput ? TEXT("dynamicInput") : TEXT("module"));
 
 				int32 UsageBitmask = 0;
 				if (Listing.Script != nullptr)
@@ -274,39 +677,36 @@ namespace UE::DreamFX::Editor
 						UsageBitmask = Data->ModuleUsageBitmask;
 						if (!Data->Category.IsEmpty())
 						{
-							Writer->WriteValue(TEXT("category"), Data->Category.ToString());
+							Module->SetStringField(TEXT("category"), Data->Category.ToString());
 						}
 						if (!Data->Description.IsEmpty())
 						{
-							Writer->WriteValue(TEXT("description"), Data->Description.ToString());
+							Module->SetStringField(TEXT("description"), Data->Description.ToString());
 						}
 					}
 				}
 
 				TArray<EStackKind> DeclaredStacks;
-				Writer->WriteArrayStart(TEXT("stacks"));
+				TArray<FString> StackNames;
 				for (const FStackUsage& Stack : IndexStacks)
 				{
 					if ((UsageBitmask & (1 << static_cast<int32>(Stack.Usage))) != 0)
 					{
 						DeclaredStacks.Add(Stack.Kind);
-						Writer->WriteValue(LexStackKind(Stack.Kind));
+						StackNames.Add(LexStackKind(Stack.Kind));
 					}
 				}
-				Writer->WriteArrayEnd();
+				Module->SetArrayField(TEXT("stacks"), ToJsonStrings(StackNames));
 
 				if (Quarantined.Contains(Listing.PackageName))
 				{
 					++Skipped;
-					Writer->WriteValue(TEXT("inputsUnavailable"),
+					Module->SetStringField(TEXT("inputsUnavailable"),
 						TEXT("probing this module ended a previous run without returning; it is quarantined"));
 				}
 				else if (!bSkipInputs && Listing.Script != nullptr)
 				{
-					// Written BEFORE the probe, not after, and that ordering is the whole mechanism:
-					// nothing that runs after the probe gets a chance to name the module that killed
-					// the process.
-					MarkProbeInFlight(JournalPath, Listing.PackageName);
+					Ledger->MarkInFlight(Listing.PackageName);
 					UE_LOG(LogDreamFX, Verbose, TEXT("  probing %s (%s)"), *Listing.AssetName, *Listing.PackageName);
 
 					FString Error;
@@ -325,7 +725,7 @@ namespace UE::DreamFX::Editor
 							Schema = Library.GetStackSchema(Listing.Script, Stack, Error);
 							if (Schema != nullptr)
 							{
-								Writer->WriteValue(TEXT("probedIn"), LexStackKind(Stack));
+								Module->SetStringField(TEXT("probedIn"), LexStackKind(Stack));
 								break;
 							}
 						}
@@ -334,12 +734,12 @@ namespace UE::DreamFX::Editor
 					if (Schema != nullptr)
 					{
 						++Probed;
-						Writer->WriteArrayStart(TEXT("inputs"));
+						TArray<TSharedPtr<FJsonValue>> Inputs;
 						for (const FInputSchema& Input : Schema->Inputs)
 						{
-							WriteInputSchema(Writer, Input);
+							Inputs.Add(MakeShared<FJsonValueObject>(InputSchemaToJson(Input)));
 						}
-						Writer->WriteArrayEnd();
+						Module->SetArrayField(TEXT("inputs"), Inputs);
 					}
 					else
 					{
@@ -347,33 +747,40 @@ namespace UE::DreamFX::Editor
 						// not be probed look identical from the outside, and a consumer that cannot
 						// tell them apart will present the second as the first.
 						++Unprobed;
-						Writer->WriteValue(TEXT("inputsUnavailable"),
+						Module->SetStringField(TEXT("inputsUnavailable"),
 							Error.IsEmpty() ? TEXT("the module declares no stack this build supports") : *Error);
 					}
 				}
 
-				Writer->WriteObjectEnd();
+				Content.Modules.Add(Module);
 			}
 		}
-		Writer->WriteArrayEnd();
-		Writer->WriteObjectEnd();
-		Writer->Close();
 
-		if (!FFileHelper::SaveStringToFile(IndexText, *Destination,
-			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		int64 WrittenBytes = 0;
+		if (bToFile)
 		{
-			UE_LOG(LogDreamFX, Error, TEXT("Could not write the index to '%s'."), *Destination);
+			const FString IndexText = ContentToJsonFile(Content);
+			if (!FFileHelper::SaveStringToFile(IndexText, *OutDestination, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+			{
+				UE_LOG(LogDreamFX, Error, TEXT("Could not write the index to '%s'."), *OutDestination);
+				return 1;
+			}
+			WrittenBytes = IndexText.Len();
+		}
+		else if (!StoreContent(Database, Content))
+		{
 			return 1;
 		}
 
 		// The walk finished, so nothing is mid-probe. The quarantine list stays -- it is the record
 		// of which modules cannot be probed on this engine, and it is what makes the next run fast.
-		IFileManager::Get().Delete(*JournalPath);
+		Ledger->ClearInFlight();
 
 		UE_LOG(LogDreamFX, Display,
-			TEXT("=== DreamFX index: %d probed, %d unprobed, %d quarantined, %.1f KB -> %s (%.1fs) ==="),
-			Probed, Unprobed, Skipped, IndexText.Len() / 1024.0f, *Destination,
-			FPlatformTime::Seconds() - StartedAt);
+			TEXT("=== DreamFX index: %d probed, %d unprobed, %d quarantined, %d entries%s -> %s (%.1fs) ==="),
+			Probed, Unprobed, Skipped, Content.Modules.Num(),
+			bToFile ? *FString::Printf(TEXT(", %.1f KB"), WrittenBytes / 1024.0f) : TEXT(""),
+			*OutDestination, FPlatformTime::Seconds() - StartedAt);
 		return 0;
 	}
 }

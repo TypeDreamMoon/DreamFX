@@ -19,8 +19,8 @@ That had three costs:
 
 The host fixes all three. Its `Plugins/DreamFX` is a separate **git worktree** of the DreamFX repository,
 with its own `Binaries/`, `Intermediate/` and generated `Content/`; it enables nothing but DreamFX (and
-Niagara, which DreamFX declares); and it has no code or content of its own. The only DreamFX sources it
-sees are the plugin's own `DFX/` tree and `Tests/Corpus`.
+Niagara and SQLiteCore, which DreamFX declares); and it has no code or content of its own. The only DreamFX sources it
+sees are the plugin's own `DreamSource/FX/` tree and `Tests/Corpus`.
 
 It is also the place to try a pull request: check the PR's head out in the host's worktree, build, run the
 gate and open the host editor -- the working project never sees it.
@@ -133,8 +133,8 @@ those sections from DevTest verbatim. Change one of them and the first launch co
 
 | | DevTest | Host |
 | --- | --- | --- |
-| Plugins | DreamFX plus about thirty others | DreamFX (and Niagara through it) |
-| DFX roots | the project's own `DFX/` (its own repository) and every plugin's | the plugin's `DFX/` only |
+| Plugins | DreamFX plus about thirty others | DreamFX (and Niagara and SQLiteCore through it) |
+| Source roots | the project's own `DreamSource/FX/` (its own repository) and every plugin's | the plugin's `DreamSource/FX/` only |
 | Content | the project's own | none; DreamFX writes its samples, modules and corpus assets into the worktree's `Content/` (gitignored) |
 | Startup map | a full showcase level | `/Engine/Maps/Entry` |
 | MoonToon ramp atlases | loaded from the MoonToon project plugin | `None` |

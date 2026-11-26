@@ -1,5 +1,7 @@
 #include "Bridge/DreamFXBridgeService.h"
 
+#include "Database/DreamFXDatabase.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "DreamFXDiagnostics.h"
 #include "DreamFXModule.h"
 #include "DreamFXParser.h"
@@ -54,11 +56,10 @@ namespace UE::DreamFX::Editor
 		FString GBusyAction;
 		FString GLastResult;
 
-		FString BridgeDir()      { return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("DreamFX/Bridge"))); }
+		FString BridgeDir()      { return FPaths::Combine(FDreamFXPaths::GetFXIntermediateDirectory(), TEXT("Bridge")); }
 		FString RequestsDir()    { return FPaths::Combine(BridgeDir(), TEXT("Requests")); }
 		FString ResponsesDir()   { return FPaths::Combine(BridgeDir(), TEXT("Responses")); }
 		FString StatusPath()     { return FPaths::Combine(BridgeDir(), TEXT("status.json")); }
-		FString DiagnosticsPath(){ return FPaths::Combine(BridgeDir(), TEXT("diagnostics.json")); }
 
 		/**
 		 * Writes a file the way a reader that is polling for it needs it written.
@@ -84,25 +85,31 @@ namespace UE::DreamFX::Editor
 			return true;
 		}
 
+		template <typename PrintPolicy>
+		void WriteDiagnosticObject(const TSharedRef<TJsonWriter<TCHAR, PrintPolicy>>& Writer, const FDiagnostic& Diagnostic)
+		{
+			Writer->WriteObjectStart();
+			// Each diagnostic keeps its own file: a .dfs that pulls in a broken .dfe fails at the
+			// .dfe's position, and attributing it to the .dfs would send the author to the wrong
+			// file. The CLI has always got this right; so must the bridge.
+			Writer->WriteValue(TEXT("file"), Diagnostic.File);
+			Writer->WriteValue(TEXT("line"), FMath::Max(1, Diagnostic.Location.Line));
+			Writer->WriteValue(TEXT("column"), FMath::Max(1, Diagnostic.Location.Column));
+			Writer->WriteValue(TEXT("severity"),
+				Diagnostic.Severity == EDiagnosticSeverity::Error   ? TEXT("error")
+				: Diagnostic.Severity == EDiagnosticSeverity::Warning ? TEXT("warning")
+				: TEXT("info"));
+			Writer->WriteValue(TEXT("code"), Diagnostic.Code);
+			Writer->WriteValue(TEXT("message"), Diagnostic.Message);
+			Writer->WriteObjectEnd();
+		}
+
 		void WriteDiagnosticsArray(const TSharedRef<TJsonWriter<>>& Writer, const FDiagnosticSink& Diagnostics)
 		{
 			Writer->WriteArrayStart(TEXT("diagnostics"));
 			for (const FDiagnostic& Diagnostic : Diagnostics.GetDiagnostics())
 			{
-				Writer->WriteObjectStart();
-				// Each diagnostic keeps its own file: a .dfs that pulls in a broken .dfe fails at the
-				// .dfe's position, and attributing it to the .dfs would send the author to the wrong
-				// file. The CLI has always got this right; so must the bridge.
-				Writer->WriteValue(TEXT("file"), Diagnostic.File);
-				Writer->WriteValue(TEXT("line"), FMath::Max(1, Diagnostic.Location.Line));
-				Writer->WriteValue(TEXT("column"), FMath::Max(1, Diagnostic.Location.Column));
-				Writer->WriteValue(TEXT("severity"),
-					Diagnostic.Severity == EDiagnosticSeverity::Error   ? TEXT("error")
-					: Diagnostic.Severity == EDiagnosticSeverity::Warning ? TEXT("warning")
-					: TEXT("info"));
-				Writer->WriteValue(TEXT("code"), Diagnostic.Code);
-				Writer->WriteValue(TEXT("message"), Diagnostic.Message);
-				Writer->WriteObjectEnd();
+				WriteDiagnosticObject(Writer, Diagnostic);
 			}
 			Writer->WriteArrayEnd();
 		}
@@ -539,15 +546,18 @@ namespace UE::DreamFX::Editor
 
 			// Also published standalone, so a client that was not the one who asked -- or one that
 			// reconnected after the response was consumed -- can still show what the last run found.
-			FString DiagnosticsText;
-			const TSharedRef<TJsonWriter<>> DiagnosticsWriter = TJsonWriterFactory<>::Create(&DiagnosticsText);
-			DiagnosticsWriter->WriteObjectStart();
-			DiagnosticsWriter->WriteValue(TEXT("protocol"), BridgeProtocolVersion);
-			DiagnosticsWriter->WriteValue(TEXT("generatedUtc"), FDateTime::UtcNow().ToIso8601());
-			WriteDiagnosticsArray(DiagnosticsWriter, Result.Diagnostics);
-			DiagnosticsWriter->WriteObjectEnd();
-			DiagnosticsWriter->Close();
-			WriteFileAtomically(DiagnosticsPath(), DiagnosticsText);
+			// One row per diagnostic in fx.db (Plan/DreamSource 13.3), replacing the old diagnostics.json.
+			TArray<FDreamFXDatabase::FDiagnosticRow> Rows;
+			for (const FDiagnostic& Diagnostic : Result.Diagnostics.GetDiagnostics())
+			{
+				FDreamFXDatabase::FDiagnosticRow& Row = Rows.AddDefaulted_GetRef();
+				Row.File = Diagnostic.File;
+				const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> RowWriter =
+					TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Row.Json);
+				WriteDiagnosticObject(RowWriter, Diagnostic);
+				RowWriter->Close();
+			}
+			FDreamFXDatabase::WriteDiagnostics(FDreamFXPaths::GetFXDatabasePath(), Rows, FDateTime::UtcNow().ToIso8601());
 		}
 
 		/**

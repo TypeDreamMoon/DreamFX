@@ -24,15 +24,19 @@ the engine could not be resolved (the driver looks the project's `EngineAssociat
 
 ## 2. Where source lives
 
-Sources live under a `DFX/` directory, either the project's own or a plugin's:
+Sources live under a `DreamSource/FX/` directory, either the project's own or a plugin's:
 
 ```
-DevTest/DFX/                        Root=""  or  Root="Game"     -> /Game
-DevTest/Plugins/MoonToon/DFX/       Root="Plugin.MoonToon"       -> /MoonToon
+DevTest/DreamSource/FX/                     Root=""  or  Root="Game"     -> /Game
+DevTest/Plugins/MoonToon/DreamSource/FX/    Root="Plugin.MoonToon"       -> /MoonToon
 ```
+
+The project's directory is a setting (*Project Settings ▸ Dream Source ▸ FX*). A project or plugin
+that still has the old `DFX/` directory keeps working, with a deprecation warning; see
+[the DreamSource layout](project-layout.md#the-dreamsource-layout) for the rule and how to migrate.
 
 The `Root="..."` in a file's header says which content root its `Name="..."` is relative to. A file at
-`DFX/Effects/NS_Spark.dfs` declaring `Name="Effects/NS_Spark"` with `Root="Game"` builds
+`DreamSource/FX/Effects/NS_Spark.dfs` declaring `Name="Effects/NS_Spark"` with `Root="Game"` builds
 `/Game/Effects/NS_Spark`.
 
 Three extensions:
@@ -47,7 +51,7 @@ Three extensions:
 
 ## 3. Your first effect
 
-Create `DFX/Effects/NS_Hello.dfs`:
+Create `DreamSource/FX/Effects/NS_Hello.dfs`:
 
 ```cpp
 System(Name="Effects/NS_Hello", Root="Game")
@@ -109,7 +113,7 @@ System(Name="Effects/NS_Hello", Root="Game")
 Build it:
 
 ```bash
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Hello.dfs
 ```
 
 You should see `1 built, 0 up to date, 0 failed | 0 error(s)`, and the asset listed under
@@ -125,7 +129,7 @@ a hash of the source, and a matching hash means there is nothing to do. `-Force`
 Every diagnostic is a `DFXnnnn` with a file, line and column:
 
 ```
-DFX/Effects/NS_Hello.dfs(31,17): error DFX3003: Module 'GravityForce' has no input named 'Gravty'.
+DreamSource/FX/Effects/NS_Hello.dfs(31,17): error DFX3003: Module 'GravityForce' has no input named 'Gravty'.
 Did you mean 'Gravity'? Available inputs: Gravity, CoordinateSpace
 ```
 
@@ -144,7 +148,7 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 schema GravityForce
 
 ## 5. Iterating
 
-Save-and-rebuild is wired up: the editor watches every `DFX/` root and rebuilds a source when it is
+Save-and-rebuild is wired up: the editor watches every source root and rebuilds a source when it is
 saved. Open the generated asset in the Niagara editor and it refreshes on each rebuild — that is the
 live preview, and it costs nothing to set up.
 
@@ -173,9 +177,9 @@ a menu is an entry point, never a second implementation.
 
 Two of these are worth reading about before using them:
 
-- **Open DreamFX Workspace** writes `DFX/DreamFX.code-workspace` with one folder per source root and
-  opens it in VSCode. The file is rewritten in full every time, so keep per-user settings in
-  `DFX/.vscode/`.
+- **Open DreamFX Workspace** writes `DreamSource/FX/DreamFX.code-workspace` with one folder per source
+  root and opens it in VSCode. The file is rewritten in full every time, so keep per-user settings in
+  `DreamSource/FX/.vscode/`.
 - **Adopt** is not Export. Export writes a copy you can read *and edit*: saving it rebuilds a mirror
   at `/<mount>/Decompiled/<original directory>/<asset>`, never the asset it was read from. Adopt makes
   the text the only source of truth for that asset, and refuses if anything about the asset cannot be
