@@ -88,7 +88,7 @@ namespace UE::DreamFX::Editor
 		 * Derives the root from where the asset is mounted.
 		 *
 		 * Deliberately not "whichever root the user last used": an asset under `/MoonToon` adopted into
-		 * the project's `DFX/` would build back into `/Game` and quietly leave the original behind.
+		 * the project's source directory would build back into `/Game` and quietly leave the original behind.
 		 */
 		bool ResolveAssetRoot(const FString& PackagePath, FAssetRoot& OutRoot, FString& OutError)
 		{
@@ -101,8 +101,7 @@ namespace UE::DreamFX::Editor
 			// Only Adopt needs the directory, and only because it writes a real source file there.
 			if (OutRoot.RootToken == TEXT("Game"))
 			{
-				OutRoot.SourceRootDirectory = FPaths::ConvertRelativePathToFull(
-					FPaths::Combine(FPaths::ProjectDir(), TEXT("DFX")));
+				OutRoot.SourceRootDirectory = FDreamFXPaths::GetProjectSourceDirectory();
 				return true;
 			}
 
@@ -115,8 +114,7 @@ namespace UE::DreamFX::Editor
 				return false;
 			}
 
-			OutRoot.SourceRootDirectory = FPaths::ConvertRelativePathToFull(
-				FPaths::Combine(Plugin->GetBaseDir(), TEXT("DFX")));
+			OutRoot.SourceRootDirectory = FDreamFXPaths::GetPluginSourceDirectory(Plugin->GetBaseDir());
 			return true;
 		}
 

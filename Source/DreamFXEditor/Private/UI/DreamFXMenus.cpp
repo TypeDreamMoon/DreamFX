@@ -451,7 +451,7 @@ namespace UE::DreamFX::Editor
 				Section.AddMenuEntry(
 					TEXT("DreamFX.OpenWorkspace"),
 					LOCTEXT("OpenWorkspaceLabel", "Open DreamFX Workspace (VSCode)"),
-					LOCTEXT("OpenWorkspaceTooltip", "Rewrite DFX/DreamFX.code-workspace from the current source roots and open it in VSCode, or Notepad if VSCode is unavailable."),
+					LOCTEXT("OpenWorkspaceTooltip", "Rewrite DreamFX.code-workspace in the project's DreamFX source directory from the current source roots and open it in VSCode, or Notepad if VSCode is unavailable."),
 					Icon(TEXT("Icons.OpenInExternalEditor")),
 					FUIAction(FExecuteAction::CreateStatic(&FDreamFXCommands::OpenWorkspace)));
 			}

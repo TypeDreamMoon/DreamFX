@@ -30,16 +30,17 @@ public:
 	bool bOpenWorkspaceInNewWindow = true;
 
 	/**
-	 * Where *Export .dfs* writes, relative to the project directory.
+	 * Where *Export .dfs* writes, relative to the project directory. Empty means `Decompiled/` inside the project's
+	 * DreamFX source directory (Project Settings > Dream Source > FX); the old default `DFX/Decompiled` reads the same.
 	 *
-	 * Ordinary source, watched and built like the rest of `DFX/` (plan-v4 V1). What keeps an export
+	 * Ordinary source, watched and built like the rest of the source directory (plan-v4 V1). What keeps an export
 	 * from behaving like *Adopt* is not where it sits but what it names: its `Name=` points into the
 	 * `Decompiled/` content namespace, so a build writes a mirror and never the asset it was read
 	 * from. Files here that predate that rule are refused with DFX8013 rather than obeyed.
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Decompiler",
 		meta = (DisplayName = "Decompiled Output Directory"))
-	FString DecompiledOutputDirectory = TEXT("DFX/Decompiled");
+	FString DecompiledOutputDirectory;
 
 	/**
 	 * How many files may change at once before the watcher stops rebuilding them automatically.

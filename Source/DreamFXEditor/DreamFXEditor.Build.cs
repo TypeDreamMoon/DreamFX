@@ -153,6 +153,8 @@ public class DreamFXEditor : ModuleRules
 				"Projects",
 				"Slate",
 				"SlateCore",
+				// fx.db and .dreamfx/index.db: what tools outside the editor read (Plan/DreamSource, section 13).
+				"SQLiteCore",
 				"ToolMenus",
 				"UnrealEd"
 			});

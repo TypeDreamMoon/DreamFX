@@ -6,6 +6,7 @@
 #include "UI/DreamFXGeneratedAssetGuard.h"
 #include "UI/DreamFXMenus.h"
 #include "Workspace/DreamFXPullOnSave.h"
+#include "Workspace/DreamFXSourceMigration.h"
 #include "Workspace/DreamFXSourceWatcher.h"
 
 #include "Misc/CommandLine.h"
@@ -54,6 +55,9 @@ void FDreamFXEditorModule::StartupModule()
 		UE::DreamFX::Editor::FBridgeService::Register();
 		UE::DreamFX::Editor::FPullOnSave::Register();
 	}
+
+	// The log line in every process; the notice with its Migrate button only where somebody can click it.
+	UE::DreamFX::Editor::FDreamFXSourceMigration::Register(bInteractiveSurfaceEnabled);
 }
 
 void FDreamFXEditorModule::ShutdownModule()
@@ -61,6 +65,7 @@ void FDreamFXEditorModule::ShutdownModule()
 	// First, and whatever the interactive surface did: a cached module library roots a probe system,
 	// and it also listens for package saves. Neither may outlive the module.
 	UE::DreamFX::Editor::FModuleLibraryCache::Shutdown();
+	UE::DreamFX::Editor::FDreamFXSourceMigration::Unregister();
 
 	if (bInteractiveSurfaceEnabled)
 	{

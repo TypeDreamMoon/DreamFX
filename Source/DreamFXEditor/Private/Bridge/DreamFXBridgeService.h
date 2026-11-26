@@ -20,7 +20,9 @@ namespace UE::DreamFX::Editor
 	 *
 	 * Files, not a socket: no port to choose, no firewall prompt, no handshake, and a request written
 	 * while the editor is closed simply waits on disk instead of failing to connect. Everything lives
-	 * under `<Project>/Saved/DreamFX/Bridge/`, which is already outside version control.
+	 * under `<Project>/Intermediate/DreamSource/FX/Bridge/` (before the DreamSource layout,
+	 * `Saved/DreamFX/Bridge/`), which is already outside version control. The diagnostics of the last
+	 * response are also published to `Intermediate/DreamSource/fx.db` for tools that did not ask.
 	 */
 	class FBridgeService
 	{
@@ -34,7 +36,7 @@ namespace UE::DreamFX::Editor
 		/** Stops polling and marks the channel closed, so a client does not wait on a dead editor. */
 		static void Unregister();
 
-		/** `<Project>/Saved/DreamFX/Bridge`. */
+		/** `<Project>/Intermediate/DreamSource/FX/Bridge`. */
 		static FString GetBridgeDirectory();
 	};
 }
