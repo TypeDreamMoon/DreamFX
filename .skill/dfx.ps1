@@ -23,10 +23,10 @@
     and not a refusal.
 
 .EXAMPLE
-    ./dfx.ps1 build DFX/Samples/NS_Spark.dfs -Force
+    ./dfx.ps1 build DreamSource/FX/Samples/NS_Spark.dfs -Force
 
 .EXAMPLE
-    ./dfx.ps1 build DFX/Samples/NS_Spark.dfs -Incremental
+    ./dfx.ps1 build DreamSource/FX/Samples/NS_Spark.dfs -Incremental
     Write only what changed since the asset's last build. A local edit-loop flag; gates build in full.
 
 .EXAMPLE
@@ -40,23 +40,24 @@
 
 .EXAMPLE
     ./dfx.ps1 index
-    Export every module and dynamic input, with its input signature, to DFX/.dfx-index.json.
+    Export every module and dynamic input, with its input signature, to <FX source directory>/.dreamfx/index.db
+    (DreamSource/FX/, or the legacy DFX/ while that is the only one). -Out=<file> writes JSON instead.
     One boot: this is what an editor integration reads instead of calling `schema` per module.
 
 .EXAMPLE
     ./dfx.ps1 decompile-all -Path '/Game/FX+/Game/Explosions'
-    Export every Niagara system under either path into DFX/Decompiled/, in one editor boot.
+    Export every Niagara system under either path into DreamSource/FX/Decompiled/, in one editor boot.
 
 .EXAMPLE
     ./dfx.ps1 mirror-diff -Path /Game/FX
     Check each mirror against the asset it was exported from: same text, and it compiles.
 
 .EXAMPLE
-    ./dfx.ps1 pull DFX/Decompiled/Game/FX/NS_Spark.dfs
+    ./dfx.ps1 pull DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs
     Print which literals the asset's stored values disagree with -- a dry run, nothing written.
 
 .EXAMPLE
-    ./dfx.ps1 pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Asset /Game/FX/NS_Spark -Apply
+    ./dfx.ps1 pull DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs -Asset /Game/FX/NS_Spark -Apply
     Write the ORIGINAL's values into the export that names the mirror. -Asset is how the two are
     addressed at once: the export's Name= can only ever point at one of them, and a build must keep
     pointing at the mirror while pull reads the original the values were tuned in.
@@ -83,7 +84,7 @@ param(
     [Parameter(Position = 1)]
     [string]$Target,
 
-    # Process every source under every DFX root instead of one file.
+    # Process every source under every source root (DreamSource/FX/, or a legacy DFX/) instead of one file.
     [switch]$All,
 
     # Bypass the provenance-hash skip. Without it an unchanged source reports "up to date".
@@ -218,7 +219,7 @@ function Resolve-Uproject {
     }
 
     # Walk up from the target file first, then from the working directory: a source file under
-    # DFX/ sits inside the project, so this finds the right one even when the driver is invoked
+    # DreamSource/FX/ (or the legacy DFX/) sits inside the project, so this finds the right one even when the driver is invoked
     # from somewhere else entirely.
     $roots = @()
     if ($StartAt -and (Test-Path -LiteralPath $StartAt)) {
@@ -517,7 +518,7 @@ switch ($Command) {
         $arguments += if ($DynamicInputs) { '-ListDynamicInputs' } else { '-ListModules' }
     }
     'pull' {
-        if (-not $Target) { throw "pull needs a source file, e.g. DFX/Decompiled/Game/FX/NS_Spark.dfs" }
+        if (-not $Target) { throw "pull needs a source file, e.g. DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs" }
         $arguments += "-Pull=$((Resolve-Path -LiteralPath $Target).Path)"
         if ($Asset) { $arguments += "-Asset=$Asset" }
         if ($Apply) { $arguments += '-Apply' }

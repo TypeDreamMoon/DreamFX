@@ -24,11 +24,12 @@
           <!-- codes: DFXnnnn DFXnnnn ... -->              a table of those codes and their messages,
                                                           read from the diagnostics pages
 
-    DFX/CheatSheet/*.dfs, *.dfm
+    DreamSource/FX/CheatSheet/*.dfs, *.dfm
         Every fenced block of the expanded page whose first line names a source file,
-        `// DFX/CheatSheet/<name>.dfs` (or .dfm), is also written here, with Root="Game" turned into
+        `// DreamSource/FX/CheatSheet/<name>.dfs` (or .dfm; the old `// DFX/CheatSheet/` spelling is still
+        recognised), is also written here, with Root="Game" turned into
         Root="Plugin.DreamFX" so it builds into this plugin. The gate (.skill/ci.ps1) lints, builds and
-        verifies every source under DFX/, so an example on the cheat sheet that stops building fails it.
+        verifies every source under DreamSource/FX/, so an example on the cheat sheet that stops building fails it.
 
     Run it after changing the cheat sheet source, a page it quotes, or a diagnostic (after
     gen-diagnostics.ps1). -Check writes nothing and exits 1 when any of the three is out of date; CI runs
@@ -56,8 +57,10 @@ $siteRoot = 'https://fx.toolchain.64hz.cn/en/docs/'
 # Where the documentation site publishes each diagnostics page (docs-sync/config.json of the site
 # repository). The site's validator checks every `doc` link of the published JSON against its routes.
 $pageRoute = { param($pageName) 'diagnostics/' + [System.IO.Path]::GetFileNameWithoutExtension($pageName).ToLowerInvariant() }
-$fixtureHeader = '^//\s*(DFX/CheatSheet/\S+\.(?:dfs|dfm))\b'
-$fixtureDir = 'DFX/CheatSheet'
+# The page names a project's source by its place in the DreamSource layout; the legacy `DFX/` spelling is
+# still recognised so an older page does not silently stop producing fixtures.
+$fixtureHeader = '^//\s*((?:DreamSource/FX|DFX)/CheatSheet/\S+\.(?:dfs|dfm))\b'
+$fixtureDir = 'DreamSource/FX/CheatSheet'
 $fixtureExtension = '.df?'
 # The page shows a project's source (Root="Game"); the fixture builds into the plugin instead, and says
 # where it comes from.
