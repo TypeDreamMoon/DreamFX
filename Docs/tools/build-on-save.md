@@ -45,13 +45,13 @@ Skipping a build and incrementally applying a changed plan are separate operatio
 
 ```powershell
 # Build if the generated asset is out of date, using a full build.
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Hello.dfs
 # Opt in to incremental generation for a local edit loop.
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs -Incremental
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Hello.dfs -Incremental
 # Request a full rebuild even when provenance matches.
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs -Force
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Hello.dfs -Force
 # Check provenance without repairing the asset.
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 verify DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 verify DreamSource/FX/Effects/NS_Hello.dfs
 ```
 
 Close the editor before package-writing headless commands. See

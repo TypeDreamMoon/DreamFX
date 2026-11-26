@@ -24,7 +24,7 @@ second implementation: if *Rebuild DFX* works, `dfx build -All` works, and vice 
 | :-- | :-- | :-- | :-- |
 | `DreamFX.RebuildAll` | **Rebuild DFX** | `Icons.Refresh` | Queues every `.dfs` / `.dfe` / `.dfm` into the watcher's build queue, exactly as if each had been saved. One summary toast when the queue drains |
 | `DreamFX.VerifyAll` | **Verify DFX** | `Icons.Adjust` | Verifies every source against its generated asset. Writes nothing. One toast: clean, or a drift count pointing at the Output Log |
-| `DreamFX.OpenWorkspace` | **Open DreamFX Workspace (VSCode)** | `Icons.OpenInExternalEditor` | Rewrites `DFX/DreamFX.code-workspace` from the current source roots, then launches it |
+| `DreamFX.OpenWorkspace` | **Open DreamFX Workspace (VSCode)** | `Icons.OpenInExternalEditor` | Rewrites `DreamFX.code-workspace` in the project's source directory from the current source roots, then launches it |
 
 ## Level Editor toolbar
 
@@ -129,8 +129,8 @@ Decompiled exports are included, like any other source. See [Export vs Adopt](#e
 *Rebuild DFX* always rebuilds in full: it is the escape hatch from the [incremental
 build](#incremental-build-on-save) a save uses.
 
-The watcher also follows `.dfs` `Parent` chains and emitter `from` references outside the DFX
-roots. Only the DFX roots are watched recursively. The directory holding each root, the directory of
+The watcher also follows `.dfs` `Parent` chains and emitter `from` references outside the source
+roots. Only the source roots are watched recursively. The directory holding each root, the directory of
 each external reference and that directory's parent are watched shallowly — direct children only —
 so a root or dependency directory being renamed, removed or replaced is seen without receiving every
 write under the project (`Saved/`, `Intermediate/`, `DerivedDataCache/`). A missing reference is
@@ -140,7 +140,7 @@ dependency graph and the newly discovered sources; a watched directory that was 
 subscribed again. External sources trigger their in-root dependents; they do not acquire standalone
 build targets merely by being watched.
 
-A source's location is its DFX root plus its path inside that root. Moving or renaming a source
+A source's location is its source root plus its path inside that root. Moving or renaming a source
 without changing its contents makes an ordinary build regenerate the asset and update its
 provenance. The same tree checked out at another absolute path — a teammate's machine, CI, the test
 host — is the same location, so it is not rebuilt; commands that open or rebuild from the stamp
@@ -294,7 +294,7 @@ Both decompile. They differ in what happens next, and that difference is the who
 
 | | **Export .dfs** | **Adopt** |
 | :-- | :-- | :-- |
-| Writes to | `DecompiledOutputDirectory` (default `DFX/Decompiled`) | the real source root — `<Project>/DFX/…` or `<Plugin>/DFX/…` |
+| Writes to | `DecompiledOutputDirectory` (default `<source directory>/Decompiled`) | the real source root — `<Project>/DreamSource/FX/…` or `<Plugin>/DreamSource/FX/…` (a legacy `DFX/` while that is the one in use) |
 | `Name=` names | `Decompiled/<original directory>/<asset>` — a **mirror** | the original asset |
 | Picked up by the build | yes — saving one rebuilds its mirror | yes |
 | Modifies the asset | **never** | yes: rebuilds it from the new source and stamps provenance |
@@ -302,7 +302,7 @@ Both decompile. They differ in what happens next, and that difference is the who
 | Meaning | "let me read and play with this as text" | "from now on this text is the only truth" |
 
 What keeps the two apart is structural, not procedural: an export cannot name the asset it came from.
-`/Game/FX/NS_X` exports to `DFX/Decompiled/Game/FX/NS_X.dfs`, whose `Name=` is `Decompiled/FX/NS_X`,
+`/Game/FX/NS_X` exports to `DreamSource/FX/Decompiled/Game/FX/NS_X.dfs`, whose `Name=` is `Decompiled/FX/NS_X`,
 so a build writes `/Game/Decompiled/FX/NS_X` and the original is untouched however the file is edited.
 The whole decompiled tree is therefore ordinary source — watched, built on save, linted and CI'd.
 
@@ -316,8 +316,10 @@ launch a text editor.
 
 ### Adopt
 
-1. Work out the source path from the asset's mount point: `/Game/FX/NS_X` → `<Project>/DFX/FX/NS_X.dfs`,
-   `/MoonToon/FX/NS_X` → `<MoonToon>/DFX/FX/NS_X.dfs`.
+1. Work out the source path from the asset's mount point: `/Game/FX/NS_X` →
+   `<Project>/DreamSource/FX/FX/NS_X.dfs`, `/MoonToon/FX/NS_X` → `<MoonToon>/DreamSource/FX/FX/NS_X.dfs`.
+   The directory is the one [the layout rule](../getting-started/project-layout.md#which-directory-is-read)
+   picks, so a project or plugin still on `DFX/` adopts into its `DFX/`.
 2. **Refuse** if that destination already exists, including incomplete or invalid source, or another
    `.dfs` already declares the same target asset.
 3. Decompile. **Refuse** if anything is unrepresentable, listing what.
@@ -338,15 +340,16 @@ text is authoritative either way — and logs the first differing line.
 
 ### Open DreamFX Workspace (VSCode)
 
-Rewrites `DFX/DreamFX.code-workspace`, then launches it through VSCode → the OS default editor →
-Notepad. The file is **fully rewritten every time, never merged**: hand-added `launch` or `tasks`
-blocks are lost. Per-user configuration belongs in `DFX/.vscode/`.
+Rewrites `DreamFX.code-workspace` in the project's source directory (`DreamSource/FX/`), then
+launches it through VSCode → the OS default editor → Notepad. The file is **fully rewritten every
+time, never merged**: hand-added `launch` or `tasks` blocks are lost. Per-user configuration belongs
+in `DreamSource/FX/.vscode/`.
 
 ```json
 {
   "folders": [
     { "name": "DreamFX Source", "path": "." },
-    { "name": "Plugin: DreamFX", "path": "../Plugins/DreamFX/DFX" }
+    { "name": "Plugin: DreamFX", "path": "../../Plugins/DreamFX/DreamSource/FX" }
   ],
   "settings": {
     "files.associations": { "*.dfs": "dreamfxlang", "*.dfe": "dreamfxlang", "*.dfm": "dreamfxlang" }
@@ -399,7 +402,11 @@ Opening a **workspace** honours *Open Workspace In New Window*. Opening a **file
 | **Incremental Build on Save** (*Workspace*) | `true` | The watcher's save-triggered rebuilds write only what changed since the last build, and fall back to a full rebuild when they cannot. *Rebuild DFX*, *Rebuild from Source* and **Rebuild them now** always rebuild in full. See [Incremental builds](incremental-builds.md) |
 | **Write Back to Source on Asset Save** (*Workspace*) | `false` | Saving a generated system writes its stored values back into its `.dfs`, as *Write Back to Source* does. Never for DreamFX's own saves, autosaves, cooks, commandlets or while playing. See [Write Back to Source](#write-back-to-source) |
 | **Write Back Structural Edits** (*Workspace*) | `false` | Let a write-back add and remove statements as well as rewrite values; off means they are reported and the stack is left alone. Read by the command and by the save hook |
-| **Decompiled Output Directory** | `DFX/Decompiled` | Where *Export .dfs* / *Export .dfe* write, relative to the project directory. Ordinary source: discovered, watched and built. Files here must name an asset in the `Decompiled/` namespace (DFX8013) |
+| **Decompiled Output Directory** | empty | Where *Export .dfs* / *Export .dfe* write, relative to the project directory. Empty means `Decompiled/` inside the project's source directory (`DreamSource/FX/Decompiled`); the old default `DFX/Decompiled` is read the same way. Ordinary source: discovered, watched and built. Files here must name an asset in the `Decompiled/` namespace (DFX8013) |
+
+Where the sources themselves live is a separate page: *Project Settings ▸ Dream Source ▸ FX ▸ Source
+Directory*, stored in `Config/DefaultDreamSource.ini`, default `DreamSource/FX`. It takes effect after
+an editor restart. See [the DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout).
 
 ## Scripting the same commands
 
@@ -433,9 +440,48 @@ Parsed as a bare command-line parameter, so `-NoDreamFXEditor` is the only accep
 | Every menu, toolbar and context-menu entry on this page | The `-run=DreamFX` commandlet, which never uses any of it |
 | The source watcher and save-to-rebuild | The parser, generator, decompiler and settings object |
 | The generated-asset guard | Assets already generated and saved on disk |
+| The [bridge](#the-bridge) | The deprecation warning for a legacy `DFX/` in the Output Log |
+| The [DreamSource migration notice](../getting-started/project-layout.md#the-migration-notice) | |
 
 A commandlet run reaches the same state by a different route: `IsRunningCommandlet()` returns true
-and the module registers nothing.
+and the module registers none of the above; like `-NoDreamFXEditor`, it only logs the legacy `DFX/`
+warning.
+
+## The bridge
+
+A drop-folder channel between an outside tool — the [VSCode extension](vscode.md), dream-mcp — and
+the running editor. A request is a JSON file; the editor answers with another. A build sent this way
+is saved by the editor itself, so there is no second process writing the same packages, and it costs
+no engine boot. The bridge runs in an interactive editor only: not under `-NoDreamFXEditor`, not in a
+commandlet.
+
+| Path | Holds |
+| :-- | :-- |
+| `Intermediate/DreamSource/FX/Bridge/Requests/<id>.json` | requests a client wrote; one written while the editor is closed waits on disk |
+| `Intermediate/DreamSource/FX/Bridge/Responses/<id>.json` | the editor's answer: `protocol`, `requestId`, `ok`, `durationMs`, `message`, `outputPath` when there is one, `diagnostics`. Answers left by an earlier session are deleted when the editor starts |
+| `Intermediate/DreamSource/FX/Bridge/status.json` | the heartbeat: `protocol`, `pid`, `project`, `projectDir`, `engineDir`, `pluginVersion`, `busy`, `busyAction`, `lastResult`, `heartbeatUtc` |
+| `Intermediate/DreamSource/fx.db` | the diagnostics of the last response, for a tool that did not send the request |
+
+Protocol version `1`. The actions are `ping`, `build`, `verify`, `decompile`, `adopt`, `openAsset`,
+`revealSource`, `refreshIndex` and `pull` ([pull](pull.md#4e-editor-entry-point-the-bridge-pull-action)).
+`refreshIndex` writes the [module index](#the-module-index) without probing inputs.
+
+Before the [DreamSource layout](../getting-started/project-layout.md#old-and-new-paths) the folder
+was `Saved/DreamFX/Bridge/`, and the last diagnostics were `diagnostics.json` inside it. The files and
+the protocol are otherwise unchanged; *Migrate* deletes the old folder.
+
+`fx.db` is a SQLite database. After every response the editor replaces its `diagnostics` table in one
+transaction:
+
+```sql
+meta(key, value)             -- schema = '1', producer = 'DreamFX@<version>', revision,
+                             -- diagnostics_revision, diagnostics_updated_utc
+diagnostics(seq, file, json) -- one row per diagnostic, seq from 0 in the response's order;
+                             -- json = {"file", "line", "column", "severity", "code", "message"}
+```
+
+It survives editor restarts, as `diagnostics.json` did. It is rebuilt data: when its schema is not the
+one this build writes, the editor drops its tables and starts it over.
 
 ## The module index
 
@@ -443,9 +489,10 @@ and the module registers nothing.
 pwsh -File .skill/dfx.ps1 index
 ```
 
-Writes `DFX/.dfx-index.json`: every module and dynamic input the search paths expose, with its
-declared stacks, category, description and **input signature**. The editor extension reads that file
-for completion and hover — it cannot ask the engine, because every `dfx` call boots it and nothing
+Writes `.dreamfx/index.db` in the project's source directory (`DreamSource/FX/.dreamfx/index.db`, or
+`DFX/.dreamfx/index.db` while the project is still on `DFX/`): every module and dynamic input the
+search paths expose, with its declared stacks, category, description and **input signature**. The
+editor extension reads that database for completion and hover — it cannot ask the engine, because every `dfx` call boots it and nothing
 that happens while someone is typing may cost tens of seconds.
 
 Two halves with very different costs. The stacks and metadata come from the asset's usage bitmask,
@@ -466,7 +513,7 @@ completion list with no enum-shaped inputs in it would be worse than none. Measu
 
 | Flag | |
 | :-- | :-- |
-| `-Out <path>` | Write somewhere other than `DFX/.dfx-index.json` |
+| `-Out <path>` | Write a JSON file instead of the database, with its `.inflight` / `.quarantine` files beside it |
 | `-NoInputs` | Skip the probe. Fast, and enough to answer "what exists" |
 | `-Retry` | Clear the quarantine and try every module again — for after an engine upgrade |
 
@@ -475,9 +522,14 @@ a different engine is a different module set, and enabling a content plugin adds
 Nothing compares them yet — that needs a live editor to compare against — so rebuilding is a command
 rather than something guessed at.
 
+The database's tables, why it is never dropped on a schema mismatch, and how an old
+`.dfx-index.json` is imported into it: [VSCode and the module index](vscode.md#what-is-in-indexdb).
+
 ## See also
 
 - [Getting started](../getting-started/quickstart.md) — the editor-side workflow in order
+- [Layout and naming](../getting-started/project-layout.md#the-dreamsource-layout) — where sources,
+  the bridge and the databases live, and migrating from `DFX/`
 - [Language reference](../language/README.md) — what the exported text means
 - [Incremental builds](incremental-builds.md) — what a save writes, and when it falls back to a full rebuild
 - [pull](pull.md) — the write-back behind *Write Back to Source*: what it may touch and what it refuses

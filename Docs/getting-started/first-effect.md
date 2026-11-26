@@ -8,7 +8,7 @@ Fifteen minutes, no editor required.
 
 ## Write the source
 
-Create `Effects/NS_Hello.dfs` under the project's `DFX/`:
+Create `Effects/NS_Hello.dfs` under the project's `DreamSource/FX/` ([where sources live](project-layout.md#the-dreamsource-layout); a project still on the old `DFX/` uses that):
 
 ```cpp
 System(Name="Effects/NS_Hello", Root="Game")
@@ -74,7 +74,7 @@ The header's `Root="Game"` says which content root `Name="..."` is relative to, 
 ## Build it
 
 ```bash
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Hello.dfs
 ```
 
 You should see `1 built, 0 up to date, 0 failed | 0 error(s)`, and the asset listed under "Assets
@@ -98,7 +98,7 @@ ask first.
 Every diagnostic is a `DFXnnnn` with a file, line and column:
 
 ```text
-DFX/Effects/NS_Hello.dfs(31,17): error DFX3003: Module 'GravityForce' has no input named 'Gravty'.
+DreamSource/FX/Effects/NS_Hello.dfs(31,17): error DFX3003: Module 'GravityForce' has no input named 'Gravty'.
 Did you mean 'Gravity'? Available inputs: Gravity, CoordinateSpace
 ```
 
@@ -151,5 +151,5 @@ pwsh -File Plugins/DreamFX/.skill/dfx.ps1 schema GravityForce
   }
   ```
 
-  - **[Layout and naming](project-layout.md)** — `DFX/` roots, how `Root` and `Name` resolve, module search paths.
+  - **[Layout and naming](project-layout.md)** — source roots and the DreamSource layout, how `Root` and `Name` resolve, module search paths.
   - **[The `.dfs` reference](../language/dfs.md)** — Settings, Properties, the six stacks, renderers, `from`, `Defaults`.

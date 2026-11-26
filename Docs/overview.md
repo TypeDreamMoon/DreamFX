@@ -88,7 +88,7 @@ System(Name="Effects/NS_Hello", Root="Game")
 ```
 
 ```bash
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Hello.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Hello.dfs
 ```
 
 That writes `/Game/Effects/NS_Hello` with no editor involved. With the editor open, saving the source

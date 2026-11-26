@@ -8,7 +8,7 @@ whole point.
 
 | | **Export .dfs** | **Adopt** |
 | :-- | :-- | :-- |
-| Writes to | `DecompiledOutputDirectory` (default `DFX/Decompiled`) | the real source root — `<Project>/DFX/…` or `<Plugin>/DFX/…` |
+| Writes to | `DecompiledOutputDirectory` (default `<source directory>/Decompiled`) | the real source root — `<Project>/DreamSource/FX/…` or `<Plugin>/DreamSource/FX/…` (a legacy `DFX/` while that is the one in use) |
 | `Name=` names | `Decompiled/<original directory>/<asset>` — a **mirror** | the original asset |
 | Picked up by the build | yes — saving one rebuilds its mirror | yes |
 | Modifies the asset | **never** | yes: rebuilds it from the new source and stamps provenance |
@@ -21,7 +21,7 @@ An export **cannot name** the asset it came from:
 
 ```
 /Game/FX/NS_X
-   └─ export ─> DFX/Decompiled/Game/FX/NS_X.dfs
+   └─ export ─> DreamSource/FX/Decompiled/Game/FX/NS_X.dfs
                 Name="Decompiled/FX/NS_X"
                    └─ build ─> /Game/Decompiled/FX/NS_X      (the original is untouched)
 ```
@@ -43,7 +43,10 @@ one asset — and the toast links to the source the mirror was built from.
 ([DFX8010](../diagnostics/DFX8xxx.md#dfx8010)).
 
 ### Work out the source path from the mount point
-`/Game/FX/NS_X` → `<Project>/DFX/FX/NS_X.dfs`; `/MoonToon/FX/NS_X` → `<MoonToon>/DFX/FX/NS_X.dfs`.
+`/Game/FX/NS_X` → `<Project>/DreamSource/FX/FX/NS_X.dfs`; `/MoonToon/FX/NS_X` →
+`<MoonToon>/DreamSource/FX/FX/NS_X.dfs`. The directory is whichever
+[the layout rule](../getting-started/project-layout.md#which-directory-is-read) picks, so a project or
+plugin still on `DFX/` adopts into its `DFX/`.
 
 ### Check nothing else already declares this asset
 If something does → **refuse** ([DFX8011](../diagnostics/DFX8xxx.md#dfx8011)). Two sources would
@@ -88,7 +91,7 @@ than an expected loss.
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion
 
 # write it to a file
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion -Out DFX/Decompiled/NS_Explosion.dfs
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile /Game/VFX/NS_Explosion -Out DreamSource/FX/Decompiled/NS_Explosion.dfs
 
 # a whole tree
 pwsh -File Plugins/DreamFX/.skill/dfx.ps1 decompile-all -Path=/Game/VFX

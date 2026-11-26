@@ -25,7 +25,7 @@ should start from [AGENTS.md](https://github.com/TypeDreamMoon/DreamFX/blob/main
 | `Tests/Corpus/` | Fixtures for the automation suites: `Parse`, `Generate`, `RoundTrip`, `WriteBack`, `Support`. `*.bad.*` files are invalid on purpose; they are test cases, not examples |
 | `Tests/Tools/` | Driver and L3 regressions that run without the engine |
 | `Tools/TestHost/` | `New-DreamFXTestHost.ps1` and the template of a minimal test project |
-| `DFX/` | The plugin's own samples, emitters and modules |
+| `DreamSource/FX/` | The plugin's own samples, emitters and modules (`DFX/` before the [DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout)) |
 | `Docs/` | This manual in English; `Docs/zh-CN/` is the Chinese translation |
 | `Content/` | Empty in the repository; builds write generated assets here, and they are gitignored |
 
@@ -72,7 +72,9 @@ It stops at the first failure and ends with `ci: OK` when everything passed. The
 1. `diagnostics`: the generated diagnostic pages are current (`gen-diagnostics.ps1 -Check`).
 2. `driver regressions`: `Tests/Tools/Test-Driver.ps1`.
 3. `lint -All`, then `build -All -Force`, then `verify -All`.
-4. `DreamFX automation`: every `DreamFX` automation suite, the corpus included.
+4. `DreamFX automation`: every `DreamFX` automation suite, the corpus included, and with it
+   `DreamFX.DreamSource.{Database,IndexImport,WorkspaceRebase,Layout}` for the
+   [DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout).
 
 What each step catches, and the switches, are in [ci.ps1 and gates](../tools/ci.md).
 Two checks need no engine at all:

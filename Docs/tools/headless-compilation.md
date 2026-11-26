@@ -33,7 +33,7 @@ answer, not one that depends on what the asset held before. `-Incremental` opts 
 [incremental build](incremental-builds.md) the editor uses on save:
 
 ```powershell
-pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Samples/NS_Spark.dfs -Incremental
+pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Samples/NS_Spark.dfs -Incremental
 UnrealEditor-Cmd.exe <Project>.uproject -run=DreamFX -File=<file> -Incremental
 ```
 
@@ -56,3 +56,15 @@ library per process, so those probes are made once per run rather than once per 
 
 Do not use `-Incremental` in a gate. `verify` and `ci.ps1` do not need it, and a gate that builds
 should build in full.
+
+## Sources and output
+
+`-All` reads the same source roots the editor does: the project's source directory
+(`DreamSource/FX/`, set in `Config/DefaultDreamSource.ini`) and every enabled plugin's
+`DreamSource/FX/`, with a legacy `DFX/` read where it is the only one. Each commandlet run resolves
+them afresh and logs a `LogDreamFX: Warning` once for every deprecated `DFX/` it reads; see
+[the DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout).
+
+A commandlet prints its diagnostics to the console and log. It does not write
+`Intermediate/DreamSource/fx.db`: that database holds the last response of the running editor's
+[bridge](editor-integration.md#the-bridge).

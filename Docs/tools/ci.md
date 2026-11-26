@@ -74,7 +74,7 @@ pwsh -File Plugins/DreamFX/.skill/gen-knowledge.ps1 -Check
 
 Two more files are generated from those pages and from the cheat sheet's source,
 `.skill/cheatsheet/cheatsheet.src.md`: `Docs/diagnostics/codes.json`, every code as data for tools and
-agents, and `Docs/cheatsheet.md` with its example `DFX/CheatSheet/NS_CheatSheetSparks.dfs`, which the
+agents, and `Docs/cheatsheet.md` with its example `DreamSource/FX/CheatSheet/NS_CheatSheetSparks.dfs`, which the
 `lint`, `build` and `verify` steps then build like any other source. `-Check` fails when either is out of
 date. Both checks need no engine; the repository's own CI runs them on every pull request.
 
@@ -91,6 +91,14 @@ steps:
 What it needs first: a Windows machine, a resolvable engine (`UE_ENGINE_ROOT` or a registered
 `EngineAssociation`), the same content plugins the authoring project enables, and **no editor open on
 the project**.
+
+The gate reads sources where the editor does: `DreamSource/FX/` (or what `Config/DefaultDreamSource.ini`
+names) and every plugin's `DreamSource/FX/`. A checkout still on the deprecated `DFX/` builds as
+before, with a `LogDreamFX: Warning` saying so; it is a log line, not a diagnostic. Diagnostics go to
+the console and the log; `Intermediate/DreamSource/fx.db` is written only by a running editor's
+[bridge](editor-integration.md#the-bridge), and `.dreamfx/index.db` by `dfx.ps1 index` (or the
+editor), not by the gate. Keep `.dreamfx/` out of version control. See
+[the DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout).
 
 ## Deeper checks
 

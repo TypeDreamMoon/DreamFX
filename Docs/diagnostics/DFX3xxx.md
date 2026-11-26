@@ -433,7 +433,7 @@ A DynamicInput cannot return a data interface; its Output must be a value type.
 
 **Cause.** The `from` path did not resolve to a `.dfe` on disk.
 
-**Fix.** Paths resolve relative to the referencing file first, then against every DFX root. The extension is optional.
+**Fix.** Paths resolve relative to the referencing file first, then against every source root. A leading `DFX/` or `DreamSource/FX/` is dropped first, so a path written before the [DreamSource layout](../getting-started/project-layout.md#the-dreamsource-layout) still resolves. The extension is optional.
 
 ## DFX3041
 

@@ -23,10 +23,11 @@ Commands below run from the game project root; the plugin sits at `Plugins/Dream
    - List modules: `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 list`
    - List dynamic inputs: `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 list -DynamicInputs`
    - Read one module's real inputs, once per module you call: `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 schema GravityForce`
-3. Write the source under the project's `DFX/` folder, for example `DFX/Effects/NS_Spark.dfs`.
+3. Write the source under the project's `DreamSource/FX/` folder, for example `DreamSource/FX/Effects/NS_Spark.dfs`.
+   (A project still on the deprecated `DFX/` folder keeps using it; the folder is set in *Project Settings ▸ Dream Source ▸ FX*.)
    `Name=` and `Root=` in the header decide the asset path (see `Plugins/DreamFX/Docs/getting-started/project-layout.md`).
-4. Build it (editor closed): `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DFX/Effects/NS_Spark.dfs -Force`
-   For a quick check with no asset access first: `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 lint DFX/Effects/NS_Spark.dfs`
+4. Build it (editor closed): `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 build DreamSource/FX/Effects/NS_Spark.dfs -Force`
+   For a quick check with no asset access first: `pwsh -File Plugins/DreamFX/.skill/dfx.ps1 lint DreamSource/FX/Effects/NS_Spark.dfs`
 5. Read the diagnostics. Each has a code `DFXnnnn`, a line and a column. Look the code up in
    `Plugins/DreamFX/Docs/diagnostics/codes.json` (or `README.md` beside it). Fix, and repeat until the run
    ends with `dfx: OK (exit 0)`.
@@ -38,7 +39,7 @@ Four skills ship in `Plugins/DreamFX/.skill/`. Each is a plain `SKILL.md`; any a
 | Skill | Use it when |
 | --- | --- |
 | `dream-fx-create` | writing a new effect from a description, then building it |
-| `dream-fx-verify` | building or checking one file or the whole `DFX/` tree headlessly |
+| `dream-fx-verify` | building or checking one file or every source root headlessly |
 | `dream-fx-diagnose` | a build failed with a `DFXnnnn` code and you need the cause and fix |
 | `dream-fx-decompile` | exporting an existing Niagara system to `.dfs` |
 
@@ -70,7 +71,7 @@ Other agents: open the `SKILL.md` files directly.
 | `Tests/Corpus/` | tests | fixtures for the automation suites; `*.bad.*` files are invalid on purpose, not examples |
 | `Tests/Tools/` | tests | driver and L3 regressions that need no engine |
 | `Tools/TestHost/` | tools | creates a minimal test project with this repository as a worktree |
-| `DFX/` | sources | the plugin's own samples, emitters and modules |
+| `DreamSource/FX/` | sources | the plugin's own samples, emitters and modules (`DFX/` before the DreamSource layout) |
 | `Docs/` | docs | English manual; `Docs/zh-CN/` is the translation |
 
 ### Build
@@ -100,7 +101,7 @@ Checks that need no engine: `pwsh -NoProfile -File Tests/Tools/Test-Driver.ps1` 
   `pwsh -NoProfile -File .skill/gen-diagnostics.ps1` and commit the result. Write only the Cause and Fix
   text, never between the `generated:begin` / `generated:end` markers. Then run
   `pwsh -NoProfile -File .skill/gen-knowledge.ps1`: it writes `Docs/diagnostics/codes.json`, and
-  `Docs/cheatsheet.md` with its built example `DFX/CheatSheet/` from `.skill/cheatsheet/`. CI runs both with `-Check`.
+  `Docs/cheatsheet.md` with its built example `DreamSource/FX/CheatSheet/` from `.skill/cheatsheet/`. CI runs both with `-Check`.
 - If the emitted asset shape changes, bump the generator version in `FProvenance::GetGeneratorVersion`
   (`Source/DreamFXEditor/Private/Generation/DreamFXProvenance.cpp`) and say so in `CHANGELOG.md`.
 - Released engine: Unreal Engine 5.8, source build and installed build, from one source tree. Do not split
@@ -116,6 +117,7 @@ Checks that need no engine: `pwsh -NoProfile -File Tests/Tools/Test-Driver.ps1` 
 - Contributing overview: `Docs/contributing/index.md` and `CONTRIBUTING.md`
 - CI gate: `Docs/tools/ci.md`; test host: `Tools/TestHost/README.md`
 - Headless command line: `Docs/tools/headless-compilation.md`; skills: `Docs/tools/skills.md`
+- Source layout (`DreamSource/FX/`, the legacy `DFX/`, the bridge and the two SQLite databases): `Docs/getting-started/project-layout.md`
 - Language reference: `Docs/language/README.md`; diagnostics: `Docs/diagnostics/overview.md`
 - Engines and backends: `Docs/generation/engines.md`
 - Documentation site: <https://fx.toolchain.64hz.cn>
@@ -124,6 +126,6 @@ Checks that need no engine: `pwsh -NoProfile -File Tests/Tools/Test-Driver.ps1` 
 
 - Don't run `build -All` or `ci.ps1` in a user's project while its editor is open.
 - Don't hand-edit generated diagnostic sections or generated `.uasset` files.
-- Don't commit build products: `Content/Samples/`, `Content/Modules/`, `Content/Corpus/`, `DFX/.dfx-index.json`.
+- Don't commit build products: `Content/Samples/`, `Content/Modules/`, `Content/Corpus/`, `DreamSource/FX/.dreamfx/` (the module index).
 - Don't use `-Incremental`, `-NoShaderCompile` or `-PrecompiledShadersOnly` in a gate.
 - Don't open a pull request without the `ci: OK` line from the gate.

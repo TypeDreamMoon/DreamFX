@@ -24,19 +24,19 @@ $dfx = '<ProjectDir>\Plugins\DreamFX\.skill\dfx.ps1'
 $eng = '<EngineDir>'
 
 # Dry run: report proposed line edits without writing any source bytes (the default).
-pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Engine $eng
+pwsh -File $dfx pull DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs -Engine $eng
 
 # Apply: back up the source before writing values.
-pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Apply -Engine $eng
+pwsh -File $dfx pull DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs -Apply -Engine $eng
 
 # Read another asset: exported source targets a mirror, but the tuned values are in the original.
-pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Asset /Game/FX/NS_Spark -Apply -Engine $eng
+pwsh -File $dfx pull DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs -Asset /Game/FX/NS_Spark -Apply -Engine $eng
 
 # Structural edits: add/remove lines only when correspondence is unambiguous (section 4d).
-pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -Structure -Apply -Engine $eng
+pwsh -File $dfx pull DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs -Structure -Apply -Engine $eng
 
 # Ignore the baseline and compare all declared values (section 4c; also used when no baseline exists).
-pwsh -File $dfx pull DFX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Engine $eng
+pwsh -File $dfx pull DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs -NoBaseline -Apply -Engine $eng
 ```
 
 | Argument | Meaning |
@@ -57,10 +57,10 @@ override. The source's `Name=` still determines what `build` writes; `-Asset` on
 
 | Content | Location |
 |---|---|
-| Source before writing, one backup per file | `Saved/DreamFX/Pull/<source path relative to project root>`, e.g. `Saved/DreamFX/Pull/DFX/Decompiled/Game/FX/NS_Spark.dfs` |
+| Source before writing, one backup per file | `Saved/DreamFX/Pull/<source path relative to project root>`, e.g. `Saved/DreamFX/Pull/DreamSource/FX/Decompiled/Game/FX/NS_Spark.dfs` |
 | Report for this run, including dry runs | The same path with extension `.report.txt` |
 
-Backups and reports stay in `Saved/`, **outside `DFX/`**. Inputs stored in the asset but undeclared
+Backups and reports stay in `Saved/`, **outside the source directory**. Inputs stored in the asset but undeclared
 in the text are reported **one by one, without truncation**. Real assets can have dozens:
 `破空灰尘` has 94. These names appear only in this report, and each represents an input that a
 rebuild must recover from its module default. Truncation would hide that risk.
@@ -262,7 +262,7 @@ correspondence at all.” `DFX7112` reports each **applied** structural edit.
 Command-line `pull` starts a headless editor and reads assets **from disk**. The VS Code extension
 has a different situation: the editor is already running, values tuned in Niagara may be unsaved,
 and the text buffer may be newer than the file on disk. The bridge's `pull` action
-(`Saved/DreamFX/Bridge/`; see [editor integration](editor-integration.md)) handles this case through
+(`Intermediate/DreamSource/FX/Bridge/`; see [editor integration](editor-integration.md#the-bridge)) handles this case through
 the same implementation, `FPuller::PullBuffer`.
 
 The request uses the same `protocol` as other actions:
